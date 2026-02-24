@@ -562,6 +562,37 @@ function LeafVE:ResetAllBadges()
   end
 end
 
+-- Hard-wipes ALL Leaf Point data (daily/weekly/season/all-time) locally.
+-- Called by the admin UI button and by the guild broadcast handler.
+function LeafVE:HardResetLeafPoints_Local()
+  EnsureDB()
+  LeafVE_DB.global       = {}
+  LeafVE_DB.alltime      = {}
+  LeafVE_DB.season       = {}
+  LeafVE_DB.weeklyRecap  = {}
+  LeafVE_DB.pointHistory = {}
+  LeafVE_DB.lboard       = { alltime = {}, weekly = {}, updatedAt = {} }
+  -- Refresh all visible panels (handles me, leaderWeek, leaderLife, etc.)
+  if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
+  end
+  Print("|cFFFF4444All Leaf Points have been wiped (daily/weekly/season/all-time).|r")
+end
+
+-- Hard-wipes the achievement leaderboard cache locally.
+-- Called by the admin UI button and by the guild broadcast handler.
+function LeafVE:HardResetAchievementLeaderboard_Local()
+  EnsureDB()
+  LeafVE_GlobalDB.achievementCache = {}
+  -- Refresh the achievement leaderboard panel if it is open
+  if LeafVE.UI and LeafVE.UI.panels then
+    if LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
+      LeafVE.UI:RefreshAchievementsLeaderboard()
+    end
+  end
+  Print("|cFFFF4444Achievement leaderboard cache has been wiped.|r")
+end
+
 function LeafVE:GetHistory(playerName, limit)
   EnsureDB() playerName = ShortName(playerName) if not playerName then return {} end
   local history = LeafVE_DB.pointHistory[playerName] or {} local sorted = {}
@@ -1912,6 +1943,26 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
       end
       self.shoutSyncBuffer[sender] = nil
       self:MergeShoutoutHistory(table.concat(parts, ","))
+    end
+    return
+
+  -- Handle hard reset of all Leaf Points (admin broadcast)
+  elseif string.sub(message, 1, 25) == "LVE_ADMIN_RESET_LEAF_ALL:" then
+    -- Validate sender is an admin rank before applying the reset
+    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
+    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
+    if ADMIN_RANKS[senderRank] then
+      LeafVE:HardResetLeafPoints_Local()
+    end
+    return
+
+  -- Handle hard reset of achievement leaderboard (admin broadcast)
+  elseif string.sub(message, 1, 28) == "LVE_ADMIN_RESET_ACHIEVE_ALL:" then
+    -- Validate sender is an admin rank before applying the reset
+    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
+    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
+    if ADMIN_RANKS[senderRank] then
+      LeafVE:HardResetAchievementLeaderboard_Local()
     end
     return
 
@@ -5207,6 +5258,140 @@ local function BuildAdminPanel(panel)
     LeafVE:ResetAllBadges()
   end)
 
+  yBase = yBase - 38
+
+  -- Divider above Danger Zone
+  local divDanger = panel:CreateTexture(nil, "ARTWORK")
+  divDanger:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  divDanger:SetWidth(430)
+  divDanger:SetHeight(1)
+  divDanger:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  divDanger:SetVertexColor(0.8, 0.1, 0.1, 0.6)
+  yBase = yBase - 18
+
+  -- Section: Danger Zone
+  local dangerSection = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  dangerSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  dangerSection:SetText("|cFFFF4444Danger Zone|r")
+  yBase = yBase - 28
+
+  -- "Reset All Leaf Points" button
+  local resetLeafBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  resetLeafBtn:SetWidth(200)
+  resetLeafBtn:SetHeight(22)
+  resetLeafBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  resetLeafBtn:SetText("|cFFFF4444Reset All Leaf Points|r")
+  SkinButtonAccent(resetLeafBtn)
+  resetLeafBtn:SetScript("OnClick", function()
+    -- Confirmation popup
+    if not LeafVE._confirmResetLeafFrame then
+      local cf = CreateFrame("Frame", "LeafVE_ConfirmResetLeaf", UIParent)
+      cf:SetWidth(380)
+      cf:SetHeight(120)
+      cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+      cf:SetFrameStrata("DIALOG")
+      cf:EnableMouse(true)
+      cf:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = {left = 4, right = 4, top = 4, bottom = 4}
+      })
+      cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+      cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+      local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+      warningText:SetWidth(340)
+      warningText:SetJustifyH("CENTER")
+      warningText:SetText("|cFFFF4444This will wipe ALL Leaf Points\n(daily/weekly/season/all-time) for the\nentire guild and clear everyone's saved data.|r")
+
+      local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      confirmBtn:SetWidth(120)
+      confirmBtn:SetHeight(22)
+      confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+      confirmBtn:SetText("Confirm Reset")
+      confirmBtn:SetScript("OnClick", function()
+        LeafVE:HardResetLeafPoints_Local()
+        if InGuild() then
+          SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..time(), "GUILD")
+        end
+        Print("|cFFFF4444Broadcast: All Leaf Points reset for all guild members.|r")
+        cf:Hide()
+      end)
+
+      local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      cancelBtn:SetWidth(80)
+      cancelBtn:SetHeight(22)
+      cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+      cancelBtn:SetText("Cancel")
+      cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+      cf:Hide()
+      LeafVE._confirmResetLeafFrame = cf
+    end
+    LeafVE._confirmResetLeafFrame:Show()
+  end)
+  yBase = yBase - 34
+
+  -- "Reset ALL Achievement Leaderboard Data" button
+  local resetAchLbBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  resetAchLbBtn:SetWidth(280)
+  resetAchLbBtn:SetHeight(22)
+  resetAchLbBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  resetAchLbBtn:SetText("|cFFFF4444Reset ALL Achievement Leaderboard Data|r")
+  SkinButtonAccent(resetAchLbBtn)
+  resetAchLbBtn:SetScript("OnClick", function()
+    -- Confirmation popup
+    if not LeafVE._confirmResetAchFrame then
+      local cf = CreateFrame("Frame", "LeafVE_ConfirmResetAch", UIParent)
+      cf:SetWidth(380)
+      cf:SetHeight(120)
+      cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+      cf:SetFrameStrata("DIALOG")
+      cf:EnableMouse(true)
+      cf:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = {left = 4, right = 4, top = 4, bottom = 4}
+      })
+      cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+      cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+      local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+      warningText:SetWidth(340)
+      warningText:SetJustifyH("CENTER")
+      warningText:SetText("|cFFFF4444This will wipe the achievement leaderboard\ncache for all guild members.\nIndividual completion flags are NOT deleted.|r")
+
+      local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      confirmBtn:SetWidth(120)
+      confirmBtn:SetHeight(22)
+      confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+      confirmBtn:SetText("Confirm Reset")
+      confirmBtn:SetScript("OnClick", function()
+        LeafVE:HardResetAchievementLeaderboard_Local()
+        if InGuild() then
+          SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_ACHIEVE_ALL:"..time(), "GUILD")
+        end
+        Print("|cFFFF4444Broadcast: Achievement leaderboard cache reset for all guild members.|r")
+        cf:Hide()
+      end)
+
+      local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      cancelBtn:SetWidth(80)
+      cancelBtn:SetHeight(22)
+      cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+      cancelBtn:SetText("Cancel")
+      cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+      cf:Hide()
+      LeafVE._confirmResetAchFrame = cf
+    end
+    LeafVE._confirmResetAchFrame:Show()
+  end)
+
   panel.adminSubFrame = subFrame
   -- Set the scroll child height and update scrollbar range
   subFrame:SetHeight(math.abs(yBase) + 50)
@@ -6609,6 +6794,7 @@ local notificationTimer = 0
 local attendanceTimer = 0
 local badgeSyncTimer = 0
 local proximityTimer = 0
+local achLeaderTimer = 0
 
 ef:SetScript("OnEvent", function()
   if event == "ADDON_LOADED" and arg1 == LeafVE.name then
@@ -6711,7 +6897,8 @@ updateFrame:SetScript("OnUpdate", function()
   notificationTimer = notificationTimer + arg1
   attendanceTimer = attendanceTimer + arg1
   badgeSyncTimer = badgeSyncTimer + arg1
-  
+  achLeaderTimer = achLeaderTimer + arg1
+
   if groupCheckTimer >= 30 then
     groupCheckTimer = 0
     LeafVE:OnGroupUpdate()
@@ -6733,6 +6920,24 @@ updateFrame:SetScript("OnUpdate", function()
     if InGuild() then
       LeafVE:BroadcastBadges()
       LeafVE:BroadcastLeaderboardData()
+    end
+  end
+
+  -- Achievement leaderboard auto-refresh every 5 minutes
+  if achLeaderTimer >= 300 then
+    achLeaderTimer = 0
+    -- Request a leaderboard resync from the guild (respects cooldown)
+    if InGuild() then
+      local now = Now()
+      if (now - LeafVE.lastResyncRequestAt) >= LBOARD_RESYNC_COOLDOWN then
+        LeafVE.lastResyncRequestAt = now
+        LeafVE:SendResyncRequest()
+      end
+    end
+    -- Refresh the achievement leaderboard panel if it is currently open
+    if LeafVE.UI and LeafVE.UI.panels and
+       LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
+      LeafVE.UI:RefreshAchievementsLeaderboard()
     end
   end
 
