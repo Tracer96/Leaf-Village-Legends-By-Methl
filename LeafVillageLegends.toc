@@ -1,0 +1,10 @@
+## Interface: 11200
+## Title: Leaf Village Legends
+## Notes: Track guild contributions and leaderboards
+## Author: YourName
+## Version: 7.8
+## SavedVariables: LeafVE_GlobalDB
+## SavedVariablesPerCharacter: LeafVE_DB
+## OptionalDeps: 
+
+LeafVillageLegends.lua
