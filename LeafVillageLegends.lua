@@ -584,6 +584,9 @@ end
 function LeafVE:HardResetAchievementLeaderboard_Local()
   EnsureDB()
   LeafVE_GlobalDB.achievementCache = {}
+  if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
+    LeafVE_AchTest_DB.achievements = {}
+  end
   -- Refresh the achievement leaderboard panel if it is open
   if LeafVE.UI and LeafVE.UI.panels then
     if LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
@@ -4981,6 +4984,8 @@ local function BuildAdminPanel(panel)
   scrollFrame:SetPoint("TOPLEFT",     panel, "TOPLEFT",     0, -68)
   scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -20, 10)
   scrollFrame:EnableMouseWheel(true)
+
+  local scrollBar  -- forward-declared so the OnMouseWheel closure below can reference it
   scrollFrame:SetScript("OnMouseWheel", function()
     local cur = scrollFrame:GetVerticalScroll()
     local max = scrollFrame:GetVerticalScrollRange()
@@ -4988,9 +4993,10 @@ local function BuildAdminPanel(panel)
     if new < 0 then new = 0 end
     if new > max then new = max end
     scrollFrame:SetVerticalScroll(new)
+    scrollBar:SetValue(new)
   end)
 
-  local scrollBar = CreateFrame("Slider", nil, panel)
+  scrollBar = CreateFrame("Slider", nil, panel)
   scrollBar:SetPoint("TOPRIGHT",    panel, "TOPRIGHT",    -4, -68)
   scrollBar:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -4, 10)
   scrollBar:SetWidth(14)
@@ -6113,12 +6119,8 @@ function LeafVE.UI:RefreshAchievementsLeaderboard()
     local name = guildInfo.name
     local achPoints = 0
 
-    if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements and LeafVE_AchTest_DB.achievements[name] then
-      for achId, achData in pairs(LeafVE_AchTest_DB.achievements[name]) do
-        if type(achData) == "table" and achData.points then
-          achPoints = achPoints + achData.points
-        end
-      end
+    if LeafVE_AchTest and LeafVE_AchTest.API and LeafVE_AchTest.API.GetPlayerPoints then
+      achPoints = LeafVE_AchTest.API.GetPlayerPoints(name) or 0
     end
 
     if achPoints > 0 then
