@@ -40,9 +40,8 @@ local INSTANCE_MAX_DAILY = 20
 local QUEST_POINTS = 1
 local QUEST_MAX_DAILY = 10
 local AREA_TRIGGER_THRESHOLD = 0.03  -- ~3% of map width, ~60-90 yards
-local PROXIMITY_TICK_POINTS = 1
-local PROXIMITY_TICK_INTERVAL = 900   -- 15 minutes in seconds
-local PROXIMITY_COMBAT_WINDOW = 600   -- combat counts as active for 10 min after last event
+local PROXIMITY_TICK_POINTS = 5
+local PROXIMITY_TICK_INTERVAL = 600   -- 10 minutes in seconds
 local PROXIMITY_NEAR_THRESHOLD = 0.05 -- max map-coordinate distance (0-1 scale) to count as "near"
 
 -- Guild ranks that can access the Admin tab
@@ -390,6 +389,7 @@ local function EnsureDB()
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
   if not LeafVE_DB.areaTriggersHit then LeafVE_DB.areaTriggersHit = {} end
   if not LeafVE_DB.proximityTracking then LeafVE_DB.proximityTracking = {} end
+  if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
   if not LeafVE_DB.lboard.alltime then LeafVE_DB.lboard.alltime = {} end
@@ -714,16 +714,17 @@ function LeafVE:CheckBadgeMilestones(playerName)
   end
   
   -- === GROUP CONTENT ===
-  if alltime.G >= 1 then 
+  local groupCount = LeafVE_DB.groupSessions[playerName] or 0
+  if groupCount >= 1 then 
     self:CheckAndAwardBadge(playerName, "first_group") 
   end
-  if alltime.G >= 10 then 
+  if groupCount >= 10 then 
     self:CheckAndAwardBadge(playerName, "group_10") 
   end
-  if alltime.G >= 50 then 
+  if groupCount >= 50 then 
     self:CheckAndAwardBadge(playerName, "group_50") 
   end
-  if alltime.G >= 100 then 
+  if groupCount >= 100 then 
     self:CheckAndAwardBadge(playerName, "group_100") 
   end
   
@@ -997,9 +998,10 @@ function LeafVE:OnGroupUpdate()
   end
   local playerName = ShortName(UnitName("player"))
   if playerName then
-    local points = numGuildies * 3 + 5
+    local points = 10
     self:AddPoints(playerName, "G", points)
     self:AddToHistory(playerName, "G", points, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
+    LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
     LeafVE_DB.groupCooldowns[groupHash] = Now()
     Print(string.format("Group points awarded! +%d G for grouping with %d guildies", points, numGuildies))
   end
@@ -1286,43 +1288,21 @@ function LeafVE:TickProximityPoints(dt)
     end
   end
 
-  -- Check if there is at least one nearby guildie in the current group
+  -- Skip proximity tick if player is in a party/raid with guildies (they earn group points instead)
+  local groupGuildies = self:GetGroupGuildies()
+  if table.getn(groupGuildies) > 0 then
+    self.nearGuildieAccum = 0
+    return
+  end
+
+  -- Check if there is at least one nearby guildie (non-grouped) in the same zone
   local hasNearGuildie = false
-  local numRaid = GetNumRaidMembers()
-  local numParty = GetNumPartyMembers()
-  if numRaid > 0 or numParty > 0 then
-    local myGuild = GetGuildInfo("player")
-    local px, py = GetPlayerMapPosition("player")
-    if px and py and px ~= 0 then
-      local total = numRaid > 0 and numRaid or numParty
-      local unitPrefix = numRaid > 0 and "raid" or "party"
-      for i = 1, total do
-        local unit = unitPrefix..i
-        if UnitExists(unit) then
-          local unitName = ShortName(UnitName(unit))
-          local unitGuild = GetGuildInfo(unit)
-          local isGuildie = (myGuild and unitGuild and unitGuild == myGuild) or self:IsKnownGuildie(unitName)
-          if isGuildie then
-            local ux, uy = GetPlayerMapPosition(unit)
-            if ux and uy and ux ~= 0 then
-              local dx, dy = px - ux, py - uy
-              if math.sqrt(dx*dx + dy*dy) <= PROXIMITY_NEAR_THRESHOLD then
-                hasNearGuildie = true
-                break
-              end
-            else
-              -- Position unavailable; assume same zone = nearby
-              hasNearGuildie = true
-              break
-            end
-          end
-        end
-      end
-    else
-      -- Player position unavailable; fall back to any guildie in group
-      local guildies = self:GetGroupGuildies()
-      if table.getn(guildies) > 0 then
+  local myZone = GetRealZoneText()
+  if myZone and myZone ~= "" and LeafVE_DB and LeafVE_DB.persistentRoster then
+    for name, data in pairs(LeafVE_DB.persistentRoster) do
+      if data and data.online and data.zone and data.zone == myZone then
         hasNearGuildie = true
+        break
       end
     end
   end
@@ -1331,10 +1311,6 @@ function LeafVE:TickProximityPoints(dt)
     self.nearGuildieAccum = 0
     return
   end
-
-  -- Require at least one combat event within the recent window
-  local recentCombat = self.lastCombatAt and (Now() - self.lastCombatAt) < PROXIMITY_COMBAT_WINDOW
-  if not recentCombat then return end
 
   -- Accumulate time and award a tick when interval is reached
   self.nearGuildieAccum = self.nearGuildieAccum + dt
@@ -1349,7 +1325,7 @@ function LeafVE:TickProximityPoints(dt)
     if not me then return end
     EnsureDB()
     self:AddPoints(me, "G", proxPts)
-    self:AddToHistory(me, "G", proxPts, "Guild proximity + combat tick")
+    self:AddToHistory(me, "G", proxPts, "Guild proximity tick")
     if not LeafVE_DB.proximityTracking[me] then
       LeafVE_DB.proximityTracking[me] = {ticks = 0}
     end
@@ -1966,6 +1942,42 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
     if ADMIN_RANKS[senderRank] then
       LeafVE:HardResetAchievementLeaderboard_Local()
+    end
+    return
+
+  -- Handle admin config broadcast
+  elseif string.sub(message, 1, 16) == "LVE_ADMIN_CONFIG:" then
+    -- Validate sender is an admin rank before applying settings
+    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
+    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
+    if ADMIN_RANKS[senderRank] then
+      EnsureDB()
+      local configData = string.sub(message, 17)
+      local startPos = 1
+      while startPos <= string.len(configData) do
+        local commaPos = string.find(configData, ",", startPos)
+        local pair
+        if commaPos then
+          pair = string.sub(configData, startPos, commaPos - 1)
+          startPos = commaPos + 1
+        else
+          pair = string.sub(configData, startPos)
+          startPos = string.len(configData) + 1
+        end
+        local eqPos = string.find(pair, "=")
+        if eqPos then
+          local key = string.sub(pair, 1, eqPos - 1)
+          local val = tonumber(string.sub(pair, eqPos + 1))
+          if key and val ~= nil then
+            if key == "enableAreaTrigger" then
+              LeafVE_DB.options[key] = (val == 1)
+            else
+              LeafVE_DB.options[key] = val
+            end
+          end
+        end
+      end
+      Print("Guild settings updated by "..sender)
     end
     return
 
@@ -5183,6 +5195,36 @@ local function BuildAdminPanel(panel)
   table.insert(syncCallbacks, sync11)
   yBase = yBase - gap
 
+  -- Save & Broadcast Settings button
+  local saveBroadcastBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  saveBroadcastBtn:SetWidth(200)
+  saveBroadcastBtn:SetHeight(22)
+  saveBroadcastBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 10)
+  saveBroadcastBtn:SetText("Save & Broadcast Settings")
+  SkinButtonAccent(saveBroadcastBtn)
+  saveBroadcastBtn:SetScript("OnClick", function()
+    local opts = LeafVE_DB.options
+    local enableAreaTriggerVal = (opts.enableAreaTrigger ~= false) and 1 or 0
+    local serialized = string.format(
+      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,proximityTickPoints=%d,proximityTickInterval=%d,groupMinTime=%d,groupCooldown=%d,enableAreaTrigger=%d",
+      opts.bossPoints or INSTANCE_BOSS_POINTS,
+      opts.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS,
+      opts.questPoints or QUEST_POINTS,
+      opts.questMaxDaily or QUEST_MAX_DAILY,
+      opts.instanceMaxDaily or INSTANCE_MAX_DAILY,
+      opts.shoutoutPoints or 10,
+      opts.shoutoutMaxDaily or SHOUTOUT_MAX_PER_DAY,
+      opts.proximityTickPoints or PROXIMITY_TICK_POINTS,
+      opts.proximityTickInterval or PROXIMITY_TICK_INTERVAL,
+      opts.groupMinTime or GROUP_MIN_TIME,
+      opts.groupCooldown or GROUP_COOLDOWN,
+      enableAreaTriggerVal
+    )
+    SendAddonMessage("LeafVE", "LVE_ADMIN_CONFIG:"..serialized, "GUILD")
+    Print("Admin settings saved and broadcast to guild!")
+  end)
+  yBase = yBase - 44
+
   -- Reset to defaults button
   local resetBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
   resetBtn:SetWidth(140)
@@ -5539,9 +5581,9 @@ local function BuildWelcomePanel(panel)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
   yOffset = yOffset - 4
 
-  AddLine("|cFFFFD700Group Time|r  (+variable LP)", 10)
-  AddLine("Spend time in a party or raid with guildmates. The more allies at", 20)
-  AddLine("your side, the greater your reward.", 20)
+  AddLine("|cFFFFD700Group Time|r  (+10 LP flat)", 10)
+  AddLine("Spend time in a party or raid with guildmates. Earn a flat 10 LP", 20)
+  AddLine("per group session regardless of the number of allies.", 20)
   yOffset = yOffset - 4
 
   AddLine("|cFFFFD700Shoutouts|r  (+10 LP each)", 10)
@@ -5561,9 +5603,9 @@ local function BuildWelcomePanel(panel)
   AddLine(string.format("up to %d quests per day by default. Every mission matters!", QUEST_MAX_DAILY), 20)
   yOffset = yOffset - 4
 
-  AddLine("|cFFFFD700Guild Proximity + Combat|r  (+1 LP per 15 min)", 10)
-  AddLine("Roam or fight beside a guildmate for 15 minutes while in active", 20)
-  AddLine("combat. Pure city-idling does not count; a true shinobi stays sharp!", 20)
+  AddLine("|cFFFFD700Guild Proximity|r  (+5 LP per 10 min)", 10)
+  AddLine("Roam beside a guildmate (not in your party/raid) for 10 minutes.", 20)
+  AddLine("No combat required — just being in the same zone counts!", 20)
   yOffset = yOffset - 6
   AddDivider()
 
