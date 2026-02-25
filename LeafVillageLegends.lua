@@ -6807,7 +6807,7 @@ function LeafVE.UI:Refresh()
 
     -- Refresh Season Rewards display
     if self.panels.me.seasonRewards then
-      local COIN = "|TInterface\\Icons\\INV_Misc_Coin_01:12|t"
+      local COIN = "g"
       local r1 = LeafVE_DB.options.seasonReward1 or SEASON_REWARD_1
       local r2 = LeafVE_DB.options.seasonReward2 or SEASON_REWARD_2
       local r3 = LeafVE_DB.options.seasonReward3 or SEASON_REWARD_3
