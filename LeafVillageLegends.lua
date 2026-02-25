@@ -1092,8 +1092,10 @@ function LeafVE:GetCompletedQuestTitle()
     local title, _, _, isHeader = GetQuestLogTitle(i)
     if title and not isHeader then current[title] = true end
   end
-  for title in pairs(self.questLogCache) do
-    if not current[title] then return title end
+  for title, info in pairs(self.questLogCache) do
+    if not current[title] and info.isComplete and info.isComplete ~= 0 then
+      return title
+    end
   end
   return nil
 end
@@ -1239,6 +1241,14 @@ function LeafVE:OnQuestTurnedIn()
   local me = ShortName(UnitName("player"))
   if not me then return end
   if not InGuild() then return end
+
+  -- Only award quest LP when grouped with at least one guildie
+  local guildies = self:GetGroupGuildies()
+  if table.getn(guildies) == 0 then
+    self:CacheQuestLog()
+    return
+  end
+
   EnsureDB()
   local today = DayKey()
 
@@ -7074,6 +7084,20 @@ ef:SetScript("OnEvent", function()
   end
 
   if event == "QUEST_LOG_UPDATE" then
+    -- On Vanilla 1.12, QUEST_TURNED_IN may not fire. Detect quest turn-ins by
+    -- diffing the old cache against the current log before refreshing the cache.
+    local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
+    local current = {}
+    for i = 1, numEntries do
+      local title, _, _, isHeader = GetQuestLogTitle(i)
+      if title and not isHeader then current[title] = true end
+    end
+    for title, info in pairs(LeafVE.questLogCache) do
+      if not current[title] and info.isComplete and info.isComplete ~= 0 then
+        LeafVE:OnQuestTurnedIn()
+        break
+      end
+    end
     -- Keep the quest log cache fresh so we can diff on QUEST_TURNED_IN
     LeafVE:CacheQuestLog()
     return
