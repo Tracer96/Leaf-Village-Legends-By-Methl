@@ -2221,9 +2221,22 @@ local ACHIEVEMENT_ICONS = {
 }
 
 local function GetAchievementIcon(achId)
-  if not achId then return "Interface\\Icons\\INV_Misc_QuestionMark" end
+  if not achId then return LEAF_FALLBACK end
+  
+  -- Check achievement addon metadata first
+  if LeafVE_AchTest and LeafVE_AchTest.GetAchievementMeta then
+    local meta = LeafVE_AchTest.GetAchievementMeta(achId)
+    if meta and meta.icon then
+      return meta.icon
+    end
+  end
   
   local lowerAchId = string.lower(achId)
+  
+  -- Check the full ACHIEVEMENT_ICONS table
+  if ACHIEVEMENT_ICONS[lowerAchId] then
+    return ACHIEVEMENT_ICONS[lowerAchId]
+  end
   
   local iconMap = {
     lvl_10 = "Interface\\Icons\\INV_Sword_04",
@@ -2247,7 +2260,7 @@ local function GetAchievementIcon(achId)
     return "Interface\\Icons\\INV_Misc_Coin_01"
   end
   
-  return "Interface\\Icons\\INV_Misc_QuestionMark"
+  return LEAF_FALLBACK
 end
 
 local function TabButton(parent, text, name)
@@ -3100,6 +3113,12 @@ function LeafVE.UI:ShowPlayerCard(playerName)
   
   for i = 1, maxRecent do
     local ach = recentAch[i]
+    local meta = nil
+    if LeafVE_AchTest and LeafVE_AchTest.GetAchievementMeta then
+      meta = LeafVE_AchTest.GetAchievementMeta(ach.id)
+    end
+    local displayName = (meta and meta.name) or ach.name
+    local displayIcon = (meta and meta.icon) or ach.icon
     local entry = self.cardRecentAchEntries[i]
     
     if not entry then
@@ -3130,12 +3149,12 @@ function LeafVE.UI:ShowPlayerCard(playerName)
     
     entry:SetPoint("TOPLEFT", self.cardRecentAchFrame, "TOPLEFT", 0, -yOffset)
     
-    entry.icon:SetTexture(ach.icon)
+    entry.icon:SetTexture(displayIcon)
     if not entry.icon:GetTexture() then
-      entry.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+      entry.icon:SetTexture(LEAF_FALLBACK)
     end
     
-    entry.nameText:SetText(ach.name)
+    entry.nameText:SetText(displayName)
     
     entry.pointsText:SetText("|cFFFFD700"..ach.points.."|r")
     
@@ -3189,10 +3208,18 @@ function LeafVE.UI:ShowAchievementPopup(achId, achData)
   
   -- Format achievement name
   local displayName = achId
-  displayName = string.gsub(displayName, "_", " ")
-  displayName = string.gsub(displayName, "(%a)([%w_']*)", function(first, rest)
-    return string.upper(first)..string.lower(rest)
-  end)
+  local meta = nil
+  if LeafVE_AchTest and LeafVE_AchTest.GetAchievementMeta then
+    meta = LeafVE_AchTest.GetAchievementMeta(achId)
+  end
+  if meta and meta.name then
+    displayName = meta.name
+  else
+    displayName = string.gsub(displayName, "_", " ")
+    displayName = string.gsub(displayName, "(%a)([%w_']*)", function(first, rest)
+      return string.upper(first)..string.lower(rest)
+    end)
+  end
   
   -- Set popup content
   self.achPopup.icon:SetTexture(GetAchievementIcon(achId))
@@ -3294,18 +3321,30 @@ function LeafVE.UI:RefreshAchievementPopup(playerName)
     
     for achId, achData in pairs(playerAchievements) do
       if type(achData) == "table" and achData.points and achData.timestamp then
-        -- Format achievement name
-        local displayName = achId
-        displayName = string.gsub(displayName, "_", " ")
-        displayName = string.gsub(displayName, "(%a)([%w_']*)", function(first, rest)
-          return string.upper(first)..string.lower(rest)
-        end)
+        -- Get proper name, icon, and description from achievement addon metadata
+        local meta = nil
+        if LeafVE_AchTest and LeafVE_AchTest.GetAchievementMeta then
+          meta = LeafVE_AchTest.GetAchievementMeta(achId)
+        end
+        local displayName = nil
+        if meta and meta.name then
+          displayName = meta.name
+        else
+          -- Fallback: convert ID to title case
+          displayName = achId
+          displayName = string.gsub(displayName, "_", " ")
+          displayName = string.gsub(displayName, "(%a)([%w_']*)", function(first, rest)
+            return string.upper(first)..string.lower(rest)
+          end)
+        end
+        local displayIcon = (meta and meta.icon) or GetAchievementIcon(achId)
+        local displayDesc = (meta and meta.desc) or ("Completed on "..date("%m/%d/%Y", achData.timestamp))
         
         table.insert(achievements, {
           id = achId,
           name = displayName,
-          desc = "Completed on "..date("%m/%d/%Y", achData.timestamp),
-          icon = GetAchievementIcon(achId),
+          desc = displayDesc,
+          icon = displayIcon,
           points = achData.points,
           completed = true,
           timestamp = achData.timestamp
@@ -3453,7 +3492,7 @@ function LeafVE.UI:RefreshAchievementPopup(playerName)
 
       entry.icon:SetTexture(ach.icon)
       if not entry.icon:GetTexture() then
-        entry.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        entry.icon:SetTexture(LEAF_FALLBACK)
       end
 
       entry.icon:SetVertexColor(1, 1, 1, 1)
