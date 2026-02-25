@@ -208,6 +208,7 @@ LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on Q
 LeafVE.questAreaTrigMap    = {}   -- triggerId -> {questIds={}, x, y, mapId}  (built from pfDB)
 LeafVE.pfDbLoaded          = false
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
+LeafVE.pendingQuestTurnIn  = nil  -- quest title captured from QUEST_COMPLETE, cleared on QUEST_FINISHED
 
 local function SetSize(f, w, h)
   if not f then return end
@@ -1267,8 +1268,8 @@ function LeafVE:OnQuestTurnedIn()
   EnsureDB()
   local today = DayKey()
 
-  -- Identify which quest was just completed by diffing the cached quest log
-  local questTitle = self:GetCompletedQuestTitle()
+  -- Identify which quest was just completed from the pending turn-in capture
+  local questTitle = LeafVE.pendingQuestTurnIn
 
   -- Prevent awarding LP for the same quest title more than once per character
   -- (only when we could actually identify the quest; unknown quests fall through to daily cap)
@@ -7009,6 +7010,8 @@ ef:RegisterEvent("PARTY_MEMBERS_CHANGED")
 ef:RegisterEvent("RAID_ROSTER_UPDATE")
 ef:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 ef:RegisterEvent("QUEST_LOG_UPDATE")
+ef:RegisterEvent("QUEST_COMPLETE")
+ef:RegisterEvent("QUEST_FINISHED")
 ef:RegisterEvent("PLAYER_REGEN_DISABLED")
 ef:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
 
@@ -7093,26 +7096,24 @@ ef:SetScript("OnEvent", function()
   end
 
   if event == "QUEST_LOG_UPDATE" then
-    -- Detect turn-ins BEFORE refreshing the cache.
-    -- QUEST_LOG_UPDATE fires reliably after the quest is removed from the log.
-    -- Diff the cache against the current log; a quest with isComplete ~= 0 was turned in.
-    -- (Abandoned quests have isComplete == 0 so they won't trigger LP awards.)
-    local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
-    local current = {}
-    for i = 1, numEntries do
-      local title, _, _, isHeader = GetQuestLogTitle(i)
-      if title and not isHeader then current[title] = true end
-    end
-    for title, data in pairs(LeafVE.questLogCache) do
-      if not current[title] then
-        if data and data.isComplete and data.isComplete ~= 0 then
-          LeafVE:OnQuestTurnedIn()
-          break
-        end
-      end
-    end
-    -- Always refresh the cache after checking
+    -- Keep the cache fresh; turn-in detection is handled by QUEST_COMPLETE + QUEST_FINISHED.
     LeafVE:CacheQuestLog()
+    return
+  end
+
+  if event == "QUEST_COMPLETE" then
+    -- Dialog opened: player is about to turn in a quest. Capture the title now.
+    LeafVE.pendingQuestTurnIn = GetTitleText and GetTitleText() or nil
+    return
+  end
+
+  if event == "QUEST_FINISHED" then
+    -- Dialog closed. If we captured a title from QUEST_COMPLETE, this is a real turn-in.
+    if LeafVE.pendingQuestTurnIn and LeafVE.pendingQuestTurnIn ~= "" then
+      LeafVE:OnQuestTurnedIn()
+    end
+    -- Always clear; covers both successful turn-ins and dialog cancellations.
+    LeafVE.pendingQuestTurnIn = nil
     return
   end
 
