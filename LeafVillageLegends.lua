@@ -54,6 +54,8 @@ local PVP_RANK_ICONS = {
   [1] = "Interface\\PvPRankBadges\\PvPRank14",
   [2] = "Interface\\PvPRankBadges\\PvPRank13",
   [3] = "Interface\\PvPRankBadges\\PvPRank12",
+  [4] = "Interface\\PvPRankBadges\\PvPRank11",
+  [5] = "Interface\\PvPRankBadges\\PvPRank10",
 }
 
 local CLASS_ICONS = {
@@ -2225,8 +2227,9 @@ function LeafVE.UI:BuildPlayerCard(parent)
   })
   portraitContainer:SetBackdropColor(0.1, 0.1, 0.15, 0.9)
   portraitContainer:SetBackdropBorderColor(THEME.leaf[1], THEME.leaf[2], THEME.leaf[3], 0.8)
+  self.cardPortraitContainer = portraitContainer
 
-  -- Faction-coloured solid background: single full-area texture (red=Horde, blue=Alliance)
+  -- Faction-coloured gradient background: single full-area texture (red=Horde, blue=Alliance)
   local modelBG = portraitContainer:CreateTexture(nil, "BACKGROUND")
   modelBG:SetAllPoints(portraitContainer)
   modelBG:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
@@ -2934,16 +2937,20 @@ function LeafVE.UI:ShowPlayerCard(playerName)
     if self.cardPortraitTypeText then
       self.cardPortraitTypeText:SetText("|cFF00FF00Live|r")
     end
-    -- Apply faction colour: red for Horde, blue for Alliance.
+    -- Apply faction gradient background (red=Horde, blue=Alliance) with gold border.
     if self.cardModelBG then
       local faction = UnitFactionGroup(unitToken)
-      local bg = faction and FACTION_BACKGROUNDS[faction]
-      if bg then
-        self.cardModelBG:SetVertexColor(bg[1], bg[2], bg[3], 0.9)
+      if faction == "Horde" then
+        self.cardModelBG:SetGradientAlpha("VERTICAL", 0.30, 0.02, 0.02, 1, 0.70, 0.08, 0.08, 1)
+      elseif faction == "Alliance" then
+        self.cardModelBG:SetGradientAlpha("VERTICAL", 0.02, 0.12, 0.35, 1, 0.08, 0.30, 0.75, 1)
       else
-        self.cardModelBG:SetVertexColor(0.1, 0.1, 0.15, 0.9)
+        self.cardModelBG:SetGradientAlpha("VERTICAL", 0.06, 0.06, 0.08, 1, 0.12, 0.12, 0.16, 1)
       end
       self.cardModelBG:Show()
+    end
+    if self.cardPortraitContainer then
+      self.cardPortraitContainer:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
     end
   else
     self.cardModel:Hide()
@@ -3537,6 +3544,35 @@ local function BuildMyPanel(panel)
   weekCountdown:SetJustifyH("LEFT")
   weekCountdown:SetText("Loading...")
   panel.weekCountdown = weekCountdown
+
+  -- Current Weekly Standings (top 5)
+  local weekStandingsLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  weekStandingsLabel:SetPoint("TOPLEFT", weekCountdown, "BOTTOMLEFT", 0, -15)
+  weekStandingsLabel:SetText("|cFF2DD35CCurrent Weekly Standings|r")
+
+  local weekTopEntries = {}
+  local prevTopAnchor = weekStandingsLabel
+  for i = 1, 5 do
+    local entry = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    entry:SetPoint("TOPLEFT", prevTopAnchor, "BOTTOMLEFT", 0, -4)
+    entry:SetWidth(maxWidth)
+    entry:SetJustifyH("LEFT")
+    entry:SetText("Loading...")
+    weekTopEntries[i] = entry
+    prevTopAnchor = entry
+  end
+  panel.weekTopEntries = weekTopEntries
+
+  -- Season Rewards
+  local weekRewardsLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  weekRewardsLabel:SetPoint("TOPLEFT", prevTopAnchor, "BOTTOMLEFT", 0, -12)
+  weekRewardsLabel:SetText("|cFF2DD35CSeason Rewards|r")
+
+  local weekRewards = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  weekRewards:SetPoint("TOPLEFT", weekRewardsLabel, "BOTTOMLEFT", 0, -4)
+  weekRewards:SetWidth(maxWidth)
+  weekRewards:SetJustifyH("LEFT")
+  weekRewards:SetText("|cFFFFD7001st: 10g  |  2nd: 5g  |  3rd: 3g  |  4th: 2g  |  5th: 1g|r")
   
 local legend = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   legend:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 12)
@@ -4181,7 +4217,7 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
       
       local rankColor = {1, 1, 1}
       
-      if i <= 3 and PVP_RANK_ICONS[i] then
+      if i <= 5 and PVP_RANK_ICONS[i] then
         frame.rankIcon:SetTexture(PVP_RANK_ICONS[i])
         frame.rankIcon:Show()
         frame.rank:Hide()
@@ -4192,7 +4228,6 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
         frame.rank:SetTextColor(rankColor[1], rankColor[2], rankColor[3])
       end
       
-      local class = string.upper(leader.class or "UNKNOWN")
       local classColor = CLASS_COLORS[class] or {1, 1, 1}
       frame.nameText:SetText(leader.name)
       frame.nameText:SetTextColor(classColor[1], classColor[2], classColor[3])
@@ -6227,8 +6262,8 @@ function LeafVE.UI:RefreshAchievementsLeaderboard()
 
       frame:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 5, yOffset)
 
-      -- Show PVP rank icons for top 3, numbers for rest
-      if i <= 3 and PVP_RANK_ICONS[i] then
+      -- Show PVP rank icons for top 5, numbers for rest
+      if i <= 5 and PVP_RANK_ICONS[i] then
         frame.rankIcon:SetTexture(PVP_RANK_ICONS[i])
         frame.rankIcon:Show()
         frame.rank:Hide()
@@ -6711,6 +6746,57 @@ function LeafVE.UI:Refresh()
       self.panels.me.weekCountdown:SetText("|cFFFF0000Resetting now!|r")
     end
    end
+
+    -- Populate current weekly top 5 standings
+    if self.panels.me.weekTopEntries then
+      local wk = WeekKey()
+      local syncedWeek = LeafVE_DB.lboard.weekly[wk]
+      local localWeek = (AggForThisWeek())
+
+      local weekLeaders = {}
+      local memberSet = {}
+      if LeafVE_DB.persistentRoster then
+        for lowerName, info in pairs(LeafVE_DB.persistentRoster) do
+          memberSet[lowerName] = info
+        end
+      end
+      for lowerName, info in pairs(LeafVE.guildRosterCache) do
+        memberSet[lowerName] = info
+      end
+      for _, guildInfo in pairs(memberSet) do
+        local name = guildInfo.name
+        local localPts = localWeek[name]
+        local syncedPts = syncedWeek and syncedWeek[name]
+        local pts
+        if localPts and syncedPts then
+          local lTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
+          local sTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
+          pts = lTotal >= sTotal and localPts or syncedPts
+        elseif localPts then
+          pts = localPts
+        else
+          pts = syncedPts or {L = 0, G = 0, S = 0}
+        end
+        local total = (pts.L or 0) + (pts.G or 0) + (pts.S or 0)
+        if total > 0 then
+          table.insert(weekLeaders, {name = name, total = total})
+        end
+      end
+      table.sort(weekLeaders, function(a, b)
+        if a.total == b.total then return Lower(a.name) < Lower(b.name) end
+        return a.total > b.total
+      end)
+      local rankLabels = {"|cFFFFD7001st|r", "|cFFC0C0C02nd|r", "|cFFCD7F323rd|r", "|cFFFFFFFF4th|r", "|cFFFFFFFF5th|r"}
+      for i = 1, 5 do
+        if self.panels.me.weekTopEntries[i] then
+          if weekLeaders[i] then
+            self.panels.me.weekTopEntries[i]:SetText(string.format("%s %s - |cFFFFD700%d pts|r", rankLabels[i], weekLeaders[i].name, weekLeaders[i].total))
+          else
+            self.panels.me.weekTopEntries[i]:SetText(string.format("%s |cFF888888------|r", rankLabels[i]))
+          end
+        end
+      end
+    end
 
   elseif self.activeTab == "shoutouts" and self.panels.shoutouts then
     self.panels.shoutouts:Show()
