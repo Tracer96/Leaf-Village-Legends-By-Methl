@@ -44,6 +44,12 @@ local PROXIMITY_TICK_POINTS = 5
 local PROXIMITY_TICK_INTERVAL = 600   -- 10 minutes in seconds
 local PROXIMITY_NEAR_THRESHOLD = 0.05 -- max map-coordinate distance (0-1 scale) to count as "near"
 
+local SEASON_REWARD_1 = 10
+local SEASON_REWARD_2 = 5
+local SEASON_REWARD_3 = 3
+local SEASON_REWARD_4 = 2
+local SEASON_REWARD_5 = 1
+
 -- Guild ranks that can access the Admin tab
 local ADMIN_RANKS = { anbu = true, sannin = true, hokage = true }
 
@@ -422,6 +428,11 @@ local function EnsureDB()
   if LeafVE_DB.options.questPoints == nil then LeafVE_DB.options.questPoints = QUEST_POINTS end
   if LeafVE_DB.options.questMaxDaily == nil then LeafVE_DB.options.questMaxDaily = QUEST_MAX_DAILY end
   if LeafVE_DB.options.instanceMaxDaily == nil then LeafVE_DB.options.instanceMaxDaily = INSTANCE_MAX_DAILY end
+  if LeafVE_DB.options.seasonReward1 == nil then LeafVE_DB.options.seasonReward1 = SEASON_REWARD_1 end
+  if LeafVE_DB.options.seasonReward2 == nil then LeafVE_DB.options.seasonReward2 = SEASON_REWARD_2 end
+  if LeafVE_DB.options.seasonReward3 == nil then LeafVE_DB.options.seasonReward3 = SEASON_REWARD_3 end
+  if LeafVE_DB.options.seasonReward4 == nil then LeafVE_DB.options.seasonReward4 = SEASON_REWARD_4 end
+  if LeafVE_DB.options.seasonReward5 == nil then LeafVE_DB.options.seasonReward5 = SEASON_REWARD_5 end
   if not LeafVE_GlobalDB then LeafVE_GlobalDB = {} end
   if not LeafVE_GlobalDB.playerNotes then LeafVE_GlobalDB.playerNotes = {} end
   if not LeafVE_GlobalDB.achievementCache then LeafVE_GlobalDB.achievementCache = {} end
@@ -3540,6 +3551,18 @@ local function BuildMyPanel(panel)
   alltimeLeader:SetJustifyH("LEFT")
   alltimeLeader:SetText("Loading...")
   panel.alltimeLeader = alltimeLeader
+
+  -- Season Rewards (beneath All-Time Leader)
+  local seasonRewardsLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  seasonRewardsLabel:SetPoint("TOPLEFT", alltimeLeader, "BOTTOMLEFT", 0, -15)
+  seasonRewardsLabel:SetText("|cFF2DD35CSeason Rewards|r")
+
+  local seasonRewards = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  seasonRewards:SetPoint("TOPLEFT", seasonRewardsLabel, "BOTTOMLEFT", 0, -4)
+  seasonRewards:SetWidth(maxWidth)
+  seasonRewards:SetJustifyH("LEFT")
+  seasonRewards:SetText("")
+  panel.seasonRewards = seasonRewards
   
   -- Week Countdown (styled like other stats) - MOVE TO RIGHT SIDE
   local weekCountdownLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -3571,17 +3594,6 @@ local function BuildMyPanel(panel)
   end
   panel.weekTopEntries = weekTopEntries
 
-  -- Season Rewards
-  local weekRewardsLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  weekRewardsLabel:SetPoint("TOPLEFT", prevTopAnchor, "BOTTOMLEFT", 0, -12)
-  weekRewardsLabel:SetText("|cFF2DD35CSeason Rewards|r")
-
-  local weekRewards = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  weekRewards:SetPoint("TOPLEFT", weekRewardsLabel, "BOTTOMLEFT", 0, -4)
-  weekRewards:SetWidth(maxWidth)
-  weekRewards:SetJustifyH("LEFT")
-  weekRewards:SetText("|cFFFFD7001st: 10g  |  2nd: 5g  |  3rd: 3g  |  4th: 2g  |  5th: 1g|r")
-  
 local legend = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   legend:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 12)
   legend:SetWidth(maxWidth)
@@ -5218,6 +5230,51 @@ local function BuildAdminPanel(panel)
   table.insert(syncCallbacks, sync11)
   yBase = yBase - gap
 
+  -- Divider
+  local divSR = panel:CreateTexture(nil, "ARTWORK")
+  divSR:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  divSR:SetWidth(430)
+  divSR:SetHeight(1)
+  divSR:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  divSR:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
+  yBase = yBase - 18
+
+  -- Section: Season Rewards
+  local srSection = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  srSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  srSection:SetText("|cFF2DD35CSeason Rewards (gold)|r")
+  yBase = yBase - 28
+
+  local _, _, sync12 = MakeNumberStepper(subFrame, "1st Place Gold", yBase,
+    function() return LeafVE_DB.options.seasonReward1 or SEASON_REWARD_1 end,
+    function(v) LeafVE_DB.options.seasonReward1 = v end, 0, 9999)
+  table.insert(syncCallbacks, sync12)
+  yBase = yBase - gap
+
+  local _, _, sync13 = MakeNumberStepper(subFrame, "2nd Place Gold", yBase,
+    function() return LeafVE_DB.options.seasonReward2 or SEASON_REWARD_2 end,
+    function(v) LeafVE_DB.options.seasonReward2 = v end, 0, 9999)
+  table.insert(syncCallbacks, sync13)
+  yBase = yBase - gap
+
+  local _, _, sync14 = MakeNumberStepper(subFrame, "3rd Place Gold", yBase,
+    function() return LeafVE_DB.options.seasonReward3 or SEASON_REWARD_3 end,
+    function(v) LeafVE_DB.options.seasonReward3 = v end, 0, 9999)
+  table.insert(syncCallbacks, sync14)
+  yBase = yBase - gap
+
+  local _, _, sync15 = MakeNumberStepper(subFrame, "4th Place Gold", yBase,
+    function() return LeafVE_DB.options.seasonReward4 or SEASON_REWARD_4 end,
+    function(v) LeafVE_DB.options.seasonReward4 = v end, 0, 9999)
+  table.insert(syncCallbacks, sync15)
+  yBase = yBase - gap
+
+  local _, _, sync16 = MakeNumberStepper(subFrame, "5th Place Gold", yBase,
+    function() return LeafVE_DB.options.seasonReward5 or SEASON_REWARD_5 end,
+    function(v) LeafVE_DB.options.seasonReward5 = v end, 0, 9999)
+  table.insert(syncCallbacks, sync16)
+  yBase = yBase - gap
+
   -- Save & Broadcast Settings button
   local saveBroadcastBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
   saveBroadcastBtn:SetWidth(200)
@@ -5229,7 +5286,7 @@ local function BuildAdminPanel(panel)
     local opts = LeafVE_DB.options
     local enableAreaTriggerVal = (opts.enableAreaTrigger ~= false) and 1 or 0
     local serialized = string.format(
-      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,proximityTickPoints=%d,proximityTickInterval=%d,groupMinTime=%d,groupCooldown=%d,enableAreaTrigger=%d",
+      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,proximityTickPoints=%d,proximityTickInterval=%d,groupMinTime=%d,groupCooldown=%d,enableAreaTrigger=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
       opts.bossPoints or INSTANCE_BOSS_POINTS,
       opts.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS,
       opts.questPoints or QUEST_POINTS,
@@ -5241,7 +5298,12 @@ local function BuildAdminPanel(panel)
       opts.proximityTickInterval or PROXIMITY_TICK_INTERVAL,
       opts.groupMinTime or GROUP_MIN_TIME,
       opts.groupCooldown or GROUP_COOLDOWN,
-      enableAreaTriggerVal
+      enableAreaTriggerVal,
+      opts.seasonReward1 or SEASON_REWARD_1,
+      opts.seasonReward2 or SEASON_REWARD_2,
+      opts.seasonReward3 or SEASON_REWARD_3,
+      opts.seasonReward4 or SEASON_REWARD_4,
+      opts.seasonReward5 or SEASON_REWARD_5
     )
     SendAddonMessage("LeafVE", "LVE_ADMIN_CONFIG:"..serialized, "GUILD")
     Print("Admin settings saved and broadcast to guild!")
@@ -5268,6 +5330,11 @@ local function BuildAdminPanel(panel)
     LeafVE_DB.options.proximityTickInterval     = PROXIMITY_TICK_INTERVAL
     LeafVE_DB.options.groupMinTime              = GROUP_MIN_TIME
     LeafVE_DB.options.groupCooldown             = GROUP_COOLDOWN
+    LeafVE_DB.options.seasonReward1             = SEASON_REWARD_1
+    LeafVE_DB.options.seasonReward2             = SEASON_REWARD_2
+    LeafVE_DB.options.seasonReward3             = SEASON_REWARD_3
+    LeafVE_DB.options.seasonReward4             = SEASON_REWARD_4
+    LeafVE_DB.options.seasonReward5             = SEASON_REWARD_5
     -- Re-sync all stepper displays to show the reset values
     for _, syncFn in ipairs(syncCallbacks) do syncFn() end
     -- Re-sync the area trigger toggle button text
@@ -6737,7 +6804,21 @@ function LeafVE.UI:Refresh()
       self.panels.me.alltimeLeader:SetText("|cFF888888No data available|r")
     end
    end
-  
+
+    -- Refresh Season Rewards display
+    if self.panels.me.seasonRewards then
+      local COIN = "|TInterface\\Icons\\INV_Misc_Coin_01:12|t"
+      local r1 = LeafVE_DB.options.seasonReward1 or SEASON_REWARD_1
+      local r2 = LeafVE_DB.options.seasonReward2 or SEASON_REWARD_2
+      local r3 = LeafVE_DB.options.seasonReward3 or SEASON_REWARD_3
+      local r4 = LeafVE_DB.options.seasonReward4 or SEASON_REWARD_4
+      local r5 = LeafVE_DB.options.seasonReward5 or SEASON_REWARD_5
+      self.panels.me.seasonRewards:SetText(string.format(
+        "|cFFFFD7001st: %d%s   3rd: %d%s\n2nd: %d%s   4th: %d%s\n5th: %d%s|r",
+        r1, COIN, r3, COIN, r2, COIN, r4, COIN, r5, COIN
+      ))
+    end
+
     -- Calculate Week Countdown
     if self.panels.me.weekCountdown then
       local weekStart = WeekStartTS(Now())
