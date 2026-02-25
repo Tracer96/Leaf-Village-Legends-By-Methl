@@ -55,6 +55,7 @@ local ADMIN_RANKS = { anbu = true, sannin = true, hokage = true }
 
 local LEAF_EMBLEM = "Interface\\Icons\\Spell_Nature_ResistNature"
 local LEAF_FALLBACK = "Interface\\Icons\\Spell_Nature_ResistNature"
+local QUEST_ICON = "Interface\\Icons\\INV_Misc_Book_09"
 
 local PVP_RANK_ICONS = {
   [1] = "Interface\\PvPRankBadges\\PvPRank14",
@@ -209,6 +210,7 @@ LeafVE.questAreaTrigMap    = {}   -- triggerId -> {questIds={}, x, y, mapId}  (b
 LeafVE.pfDbLoaded          = false
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
 LeafVE.pendingQuestTurnIn  = nil  -- quest title captured from QUEST_COMPLETE, cleared on QUEST_FINISHED
+LeafVE.suppressNextPointNotification = false  -- set before AddPoints to suppress the generic toast for quest turn-ins
 
 local function SetSize(f, w, h)
   if not f then return end
@@ -839,7 +841,13 @@ function LeafVE:AddPoints(playerName, pointType, amount)
   if me and Lower(playerName) == Lower(me) then
     local typeNames = {L = "Login", G = "Group", S = "Shoutout"}
     if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
-      self:ShowNotification("Points Earned!", string.format("+%d %s Point%s", amount, typeNames[pointType] or "?", amount > 1 and "s" or ""), LEAF_EMBLEM, THEME.leaf)
+      if LeafVE.suppressNextPointNotification then
+        LeafVE.suppressNextPointNotification = false
+      else
+        self:ShowNotification("Points Earned!", string.format("+%d %s Point%s", amount, typeNames[pointType] or "?", amount > 1 and "s" or ""), LEAF_EMBLEM, THEME.leaf)
+      end
+    else
+      LeafVE.suppressNextPointNotification = false
     end
   end
   self:CheckBadgeMilestones(playerName)
@@ -1300,11 +1308,15 @@ function LeafVE:OnQuestTurnedIn()
   if questTitle and LeafVE_DB.questCompletions[me] then
     LeafVE_DB.questCompletions[me][questTitle] = Now()
   end
+  LeafVE.suppressNextPointNotification = true
   self:AddPoints(me, "G", questPts)
   local displayTitle = questTitle or "Quest"
   local histMsg = "Quest completion"
   if questTitle then histMsg = "Quest: "..questTitle end
   self:AddToHistory(me, "G", questPts, histMsg)
+  if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
+    self:ShowNotification("Quest Complete!", string.format("[%s] +%d LP", displayTitle, questPts), QUEST_ICON, THEME.gold)
+  end
   Print(string.format("Quest complete! [%s] +%d G (%d/%s today)", displayTitle, questPts, LeafVE_DB.questTracking[me][today], questCap == 0 and "unlimited" or tostring(questCap)))
   -- Update the cached log to reflect the turn-in
   self:CacheQuestLog()
