@@ -51,9 +51,9 @@ local LEAF_EMBLEM = "Interface\\Icons\\Spell_Nature_ResistNature"
 local LEAF_FALLBACK = "Interface\\Icons\\Spell_Nature_ResistNature"
 
 local PVP_RANK_ICONS = {
-  [1] = "Interface\\Icons\\INV_Crown_01",
-  [2] = "Interface\\Icons\\INV_Crown_02",
-  [3] = "Interface\\Icons\\INV_Misc_Coin_01",
+  [1] = "Interface\\PvPRankBadges\\PvPRank14",
+  [2] = "Interface\\PvPRankBadges\\PvPRank13",
+  [3] = "Interface\\PvPRankBadges\\PvPRank12",
 }
 
 local CLASS_ICONS = {
@@ -134,10 +134,11 @@ BADGES = {
   {id = "shoutout_received_50",    name = "Guild Celebrity", desc = "Receive 50 shoutouts",        icon = "Interface\\Icons\\INV_Crown_02",                     category = "Recognition", quality = BADGE_QUALITY.RARE},
   
   -- Point Milestones (AUTO-TRACKED)
-  {id = "total_25",   name = "Getting Started", desc = "Earn 25 total points",   icon = "Interface\\Icons\\INV_Misc_Coin_01",        category = "Milestones", quality = BADGE_QUALITY.COMMON},
-  {id = "total_100",  name = "Contributor",     desc = "Earn 100 total points",  icon = "Interface\\Icons\\INV_Misc_Coin_05",        category = "Milestones", quality = BADGE_QUALITY.UNCOMMON},
-  {id = "total_500",  name = "Core Member",     desc = "Earn 500 total points",  icon = "Interface\\Icons\\INV_Jewelry_Talisman_07", category = "Milestones", quality = BADGE_QUALITY.RARE},
-  {id = "total_1000", name = "Guild Legend",    desc = "Earn 1000 total points", icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Red", category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_500",   name = "Core Member",    desc = "Earn 500 total points",   icon = "Interface\\Icons\\INV_Jewelry_Talisman_07",  category = "Milestones", quality = BADGE_QUALITY.RARE},
+  {id = "total_1000",  name = "Guild Legend",   desc = "Earn 1000 total points",  icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Red",  category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_2000",  name = "Elite Shinobi",  desc = "Earn 2000 total points",  icon = "Interface\\Icons\\INV_Jewelry_Talisman_09",  category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_5000",  name = "Kage Candidate", desc = "Earn 5000 total points",  icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Black", category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_10000", name = "Leaf Village Legend", desc = "Earn 10000 total points", icon = "Interface\\Icons\\INV_Crown_02",        category = "Milestones", quality = BADGE_QUALITY.LEGENDARY},
   
   -- Attendance (AUTO-TRACKED if in raids)
   {id = "attendance_10", name = "Raider",       desc = "Attend 10 raids", icon = "Interface\\Icons\\Spell_Fire_Immolation",      category = "Raids", quality = BADGE_QUALITY.UNCOMMON},
@@ -390,10 +391,11 @@ local function EnsureDB()
   if not LeafVE_DB.areaTriggersHit then LeafVE_DB.areaTriggersHit = {} end
   if not LeafVE_DB.proximityTracking then LeafVE_DB.proximityTracking = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
-  if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, updatedAt = {} } end
+  if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
   if not LeafVE_DB.lboard.alltime then LeafVE_DB.lboard.alltime = {} end
   if not LeafVE_DB.lboard.weekly then LeafVE_DB.lboard.weekly = {} end
+  if not LeafVE_DB.lboard.season then LeafVE_DB.lboard.season = {} end
   if not LeafVE_DB.lboard.updatedAt then LeafVE_DB.lboard.updatedAt = {} end
   -- Migrate: older code stored updatedAt[name] as a plain timestamp number; now it must be a table
   for k, v in pairs(LeafVE_DB.lboard.updatedAt) do
@@ -571,7 +573,7 @@ function LeafVE:HardResetLeafPoints_Local()
   LeafVE_DB.season       = {}
   LeafVE_DB.weeklyRecap  = {}
   LeafVE_DB.pointHistory = {}
-  LeafVE_DB.lboard       = { alltime = {}, weekly = {}, updatedAt = {} }
+  LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
   -- Refresh all visible panels (handles me, leaderWeek, leaderLife, etc.)
   if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.Refresh then
     LeafVE.UI:Refresh()
@@ -728,39 +730,21 @@ function LeafVE:CheckBadgeMilestones(playerName)
     self:CheckAndAwardBadge(playerName, "group_100") 
   end
   
-  -- === SHOUTOUTS ===
-  -- Count shoutouts received
-  local shoutsReceived = 0
-  for giver, shoutouts in pairs(LeafVE_DB.shoutouts) do
-    for target, timestamp in pairs(shoutouts) do
-      if Lower(target) == Lower(playerName) then
-        shoutsReceived = shoutsReceived + 1
-      end
-    end
-  end
-  
-  if shoutsReceived >= 1 then 
-    self:CheckAndAwardBadge(playerName, "first_shoutout_received") 
-  end
-  if shoutsReceived >= 10 then 
-    self:CheckAndAwardBadge(playerName, "shoutout_received_10") 
-  end
-  if shoutsReceived >= 50 then 
-    self:CheckAndAwardBadge(playerName, "shoutout_received_50") 
-  end
-  
   -- === POINT MILESTONES ===
-  if totalPoints >= 25 then 
-    self:CheckAndAwardBadge(playerName, "total_25") 
-  end
-  if totalPoints >= 100 then 
-    self:CheckAndAwardBadge(playerName, "total_100") 
-  end
   if totalPoints >= 500 then 
     self:CheckAndAwardBadge(playerName, "total_500") 
   end
   if totalPoints >= 1000 then 
     self:CheckAndAwardBadge(playerName, "total_1000") 
+  end
+  if totalPoints >= 2000 then 
+    self:CheckAndAwardBadge(playerName, "total_2000") 
+  end
+  if totalPoints >= 5000 then 
+    self:CheckAndAwardBadge(playerName, "total_5000") 
+  end
+  if totalPoints >= 10000 then 
+    self:CheckAndAwardBadge(playerName, "total_10000") 
   end
   
   -- === RAID ATTENDANCE ===
@@ -1387,22 +1371,6 @@ function LeafVE:GiveShoutout(targetName, reason)
   self:AddPoints(giverName, "S", shoutPts)
   self:AddToHistory(giverName, "S", shoutPts, "Gave shoutout to "..targetName..(reason and (": "..reason) or ""))
   self:CheckAndAwardBadge(giverName, "first_shoutout_given")
-  self:CheckAndAwardBadge(targetName, "first_shoutout_received")
-  
-  local receivedCount = 0
-  for giver, _ in pairs(LeafVE_DB.shoutouts) do
-    for target, _ in pairs(LeafVE_DB.shoutouts[giver]) do
-      if Lower(target) == Lower(targetName) then 
-        receivedCount = receivedCount + 1 
-      end
-    end
-  end
-  
-  if receivedCount >= 10 then 
-    self:CheckAndAwardBadge(targetName, "shoutout_received_10") 
-  end
-  
-  self:CheckBadgeMilestones(targetName)
   
   if InGuild() then
     reason = reason and Trim(reason) or ""
@@ -1818,6 +1786,18 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
               local shoutPtsIncoming = (LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
               self:AddPoints(targetName, "S", shoutPtsIncoming)
               self:AddPoints(msgGiver, "S", shoutPtsIncoming)
+            end
+            -- If we are the shoutout recipient, award received badges on our machine
+            if me and Lower(me) == Lower(targetName) then
+              self:CheckAndAwardBadge(targetName, "first_shoutout_received")
+              local rcvCount = 0
+              for g, _ in pairs(LeafVE_DB.shoutouts) do
+                for t, _ in pairs(LeafVE_DB.shoutouts[g]) do
+                  if Lower(t) == Lower(targetName) then rcvCount = rcvCount + 1 end
+                end
+              end
+              if rcvCount >= 10 then self:CheckAndAwardBadge(targetName, "shoutout_received_10") end
+              if rcvCount >= 50 then self:CheckAndAwardBadge(targetName, "shoutout_received_50") end
             end
           end
         end
