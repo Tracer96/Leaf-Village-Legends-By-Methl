@@ -1251,6 +1251,9 @@ function LeafVE:OnQuestTurnedIn()
     self:CacheQuestLog()
     return
   end
+  -- Set the timestamp immediately as an early lock so back-to-back calls within
+  -- the same frame are blocked before any async work or points are awarded.
+  self.lastQuestTurnInTime = Now()
 
   -- Only award quest LP when grouped with at least one guildie
   local guildies = self:GetGroupGuildies()
@@ -1294,7 +1297,6 @@ function LeafVE:OnQuestTurnedIn()
   if questTitle and LeafVE_DB.questCompletions[me] then
     LeafVE_DB.questCompletions[me][questTitle] = Now()
   end
-  self.lastQuestTurnInTime = Now()
   self:AddPoints(me, "G", questPts)
   local displayTitle = questTitle or "Quest"
   local histMsg = "Quest completion"
@@ -7096,31 +7098,46 @@ ef:SetScript("OnEvent", function()
   end
 
   if event == "QUEST_FINISHED" then
-    -- QUEST_FINISHED fires in 1.12 when the quest turn-in dialog closes.
-    -- This is the primary trigger for quest LP on vanilla clients.
-    LeafVE:OnQuestTurnedIn()
-    return
-  end
-
-  if event == "QUEST_LOG_UPDATE" then
-    -- Fallback: detect quest turn-ins by diffing the old cache against the current log.
-    -- This fires when a quest disappears from the log after a turn-in. We do not require
-    -- isComplete ~= 0 in the cache because the quest may have been cached before
-    -- the player finished its objectives.
+    -- QUEST_FINISHED fires in 1.12 when ANY quest dialog closes, including the accept
+    -- dialog. Only call OnQuestTurnedIn() if a quest actually disappeared from the log
+    -- (i.e. was turned in), not when a new quest was added (accepted).
     local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
     local current = {}
     for i = 1, numEntries do
       local title, _, _, isHeader = GetQuestLogTitle(i)
       if title and not isHeader then current[title] = true end
     end
+    local questDisappeared = false
     for title, _ in pairs(LeafVE.questLogCache) do
+      if not current[title] then
+        questDisappeared = true
+        break
+      end
+    end
+    if questDisappeared then
+      LeafVE:OnQuestTurnedIn()
+    end
+    return
+  end
+
+  if event == "QUEST_LOG_UPDATE" then
+    -- Fallback: detect quest turn-ins by diffing the old cache against the current log.
+    -- Capture and refresh the cache immediately so that any re-entrant calls in the same
+    -- frame diff against a fresh snapshot rather than a stale one.
+    local oldCache = LeafVE.questLogCache
+    LeafVE:CacheQuestLog()
+    local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
+    local current = {}
+    for i = 1, numEntries do
+      local title, _, _, isHeader = GetQuestLogTitle(i)
+      if title and not isHeader then current[title] = true end
+    end
+    for title, _ in pairs(oldCache) do
       if not current[title] then
         LeafVE:OnQuestTurnedIn()
         break
       end
     end
-    -- Keep the quest log cache fresh so we can diff on QUEST_TURNED_IN
-    LeafVE:CacheQuestLog()
     return
   end
 
