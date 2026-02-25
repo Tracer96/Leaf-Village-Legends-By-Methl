@@ -208,7 +208,6 @@ LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on Q
 LeafVE.questAreaTrigMap    = {}   -- triggerId -> {questIds={}, x, y, mapId}  (built from pfDB)
 LeafVE.pfDbLoaded          = false
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
-LeafVE.questDialogClosedAt = 0    -- timestamp of last QUEST_FINISHED event (set on turn-in dialog close)
 
 local function SetSize(f, w, h)
   if not f then return end
@@ -1248,8 +1247,8 @@ function LeafVE:OnQuestTurnedIn()
   if not me then return end
   if not InGuild() then return end
 
-  -- Guard against double-awarding when both QUEST_FINISHED and QUEST_LOG_UPDATE
-  -- detect the same turn-in within a short window (e.g. ~3 seconds).
+  -- Guard against double-awarding if QUEST_LOG_UPDATE fires multiple times
+  -- for the same turn-in within a short window (e.g. ~3 seconds).
   if Now() - (self.lastQuestTurnInTime or 0) < 3 then
     self:CacheQuestLog()
     return
@@ -7009,7 +7008,6 @@ ef:RegisterEvent("GUILD_ROSTER_UPDATE")
 ef:RegisterEvent("PARTY_MEMBERS_CHANGED")
 ef:RegisterEvent("RAID_ROSTER_UPDATE")
 ef:RegisterEvent("ZONE_CHANGED_NEW_AREA")
-ef:RegisterEvent("QUEST_FINISHED")
 ef:RegisterEvent("QUEST_LOG_UPDATE")
 ef:RegisterEvent("PLAYER_REGEN_DISABLED")
 ef:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
@@ -7094,33 +7092,22 @@ ef:SetScript("OnEvent", function()
     return
   end
 
-  if event == "QUEST_FINISHED" then
-    -- QUEST_FINISHED fires when the player clicks "Complete Quest" on the NPC dialog.
-    -- Abandoning a quest does NOT fire QUEST_FINISHED, so this flag distinguishes turn-ins.
-    LeafVE.questDialogClosedAt = Now()
-    return
-  end
-
   if event == "QUEST_LOG_UPDATE" then
     -- Detect turn-ins BEFORE refreshing the cache.
     -- QUEST_LOG_UPDATE fires reliably after the quest is removed from the log.
-    local now = Now()
-    -- Only check for turn-ins if QUEST_FINISHED fired recently (within 2 seconds).
-    -- This distinguishes turn-ins from abandons (abandons don't fire QUEST_FINISHED).
-    if (now - (LeafVE.questDialogClosedAt or 0)) <= 2 then
-      local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
-      local current = {}
-      for i = 1, numEntries do
-        local title, _, _, isHeader = GetQuestLogTitle(i)
-        if title and not isHeader then current[title] = true end
-      end
-      for title, data in pairs(LeafVE.questLogCache) do
-        if not current[title] then
-          if data and data.isComplete and data.isComplete ~= 0 then
-            LeafVE.questDialogClosedAt = 0  -- consume the flag
-            LeafVE:OnQuestTurnedIn()
-            break
-          end
+    -- Diff the cache against the current log; a quest with isComplete ~= 0 was turned in.
+    -- (Abandoned quests have isComplete == 0 so they won't trigger LP awards.)
+    local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
+    local current = {}
+    for i = 1, numEntries do
+      local title, _, _, isHeader = GetQuestLogTitle(i)
+      if title and not isHeader then current[title] = true end
+    end
+    for title, data in pairs(LeafVE.questLogCache) do
+      if not current[title] then
+        if data and data.isComplete and data.isComplete ~= 0 then
+          LeafVE:OnQuestTurnedIn()
+          break
         end
       end
     end
