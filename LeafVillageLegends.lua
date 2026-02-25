@@ -489,7 +489,11 @@ function LeafVE:AwardBadge(playerName, badgeId)
     local badgeQuality = badge.quality or BADGE_QUALITY.COMMON
     local qr, qg, qb = GetBadgeQualityColor(badgeQuality)
     local badgeLink = "|cFF"..RGBToHex(qr, qg, qb).."|Hleafve_badge:"..badge.id.."|h["..badge.name.."]|h|r"
-    SendChatMessage("has earned a "..badgeLink.." badge for contributing to the guild.", "GUILD")
+    local titleStr = ""
+    if LeafVE_AchTest_DB and LeafVE_AchTest_DB[playerName] and LeafVE_AchTest_DB[playerName].equippedTitle and LeafVE_AchTest_DB[playerName].equippedTitle ~= "" then
+      titleStr = "|cFFFF8000[" .. LeafVE_AchTest_DB[playerName].equippedTitle .. "]|r"
+    end
+    SendChatMessage(titleStr.."[LeafVE Note] received "..badgeLink.." for contributing to the guild!", "GUILD")
   end
 
   -- Broadcast badges immediately after awarding
@@ -675,7 +679,11 @@ function LeafVE:CheckAndAwardBadge(playerName, badgeId)
       Print("|cFF"..RGBToHex(qr, qg, qb).."["..qualityLabel.."] Badge Earned:|r "..badge.name.." - "..badge.desc)
       if InGuild() then
         local badgeLink = "|cFF"..RGBToHex(qr, qg, qb).."|Hleafve_badge:"..badge.id.."|h["..badge.name.."]|h|r"
-        SendChatMessage("has earned a "..badgeLink.." badge for contributing to the guild.", "GUILD")
+        local titleStr = ""
+        if LeafVE_AchTest_DB and LeafVE_AchTest_DB[playerName] and LeafVE_AchTest_DB[playerName].equippedTitle and LeafVE_AchTest_DB[playerName].equippedTitle ~= "" then
+          titleStr = "|cFFFF8000[" .. LeafVE_AchTest_DB[playerName].equippedTitle .. "]|r"
+        end
+        SendChatMessage(titleStr.."[LeafVE Note] received "..badgeLink.." for contributing to the guild!", "GUILD")
       end
       self:BroadcastBadges()
       if LeafVE.UI.cardCurrentPlayer == playerName then
