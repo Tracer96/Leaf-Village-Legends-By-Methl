@@ -1946,13 +1946,13 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     return
 
   -- Handle admin config broadcast
-  elseif string.sub(message, 1, 16) == "LVE_ADMIN_CONFIG:" then
+  elseif string.sub(message, 1, 17) == "LVE_ADMIN_CONFIG:" then
     -- Validate sender is an admin rank before applying settings
     local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
     local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
     if ADMIN_RANKS[senderRank] then
       EnsureDB()
-      local configData = string.sub(message, 17)
+      local configData = string.sub(message, 18)
       local startPos = 1
       while startPos <= string.len(configData) do
         local commaPos = string.find(configData, ",", startPos)
