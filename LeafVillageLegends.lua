@@ -1088,16 +1088,18 @@ function LeafVE:GetCompletedQuestTitle()
   end
   -- Second pass: if the quest is already gone (QUEST_LOG_UPDATE fired first),
   -- find it by diffing the cached log against what is currently in the log.
-  -- Do not require isComplete ~= 0 here: the cache may have recorded isComplete = 0
-  -- if the quest log was not refreshed between accepting and completing the quest.
+  -- Only count as a turn-in if it was marked complete before disappearing.
+  -- Abandoned quests have isComplete = 0 and should not award points.
   local current = {}
   for i = 1, numEntries do
     local title, _, _, isHeader = GetQuestLogTitle(i)
     if title and not isHeader then current[title] = true end
   end
-  for title, _ in pairs(self.questLogCache) do
+  for title, data in pairs(self.questLogCache) do
     if not current[title] then
-      return title
+      if data and data.isComplete and data.isComplete ~= 0 then
+        return title
+      end
     end
   end
   return nil
@@ -7121,23 +7123,10 @@ ef:SetScript("OnEvent", function()
   end
 
   if event == "QUEST_LOG_UPDATE" then
-    -- Fallback: detect quest turn-ins by diffing the old cache against the current log.
-    -- Capture and refresh the cache immediately so that any re-entrant calls in the same
-    -- frame diff against a fresh snapshot rather than a stale one.
-    local oldCache = LeafVE.questLogCache
+    -- Only refresh the quest log cache here — do NOT call OnQuestTurnedIn().
+    -- QUEST_LOG_UPDATE fires for ALL quest log changes including abandons,
+    -- accepts, and objective updates, not just turn-ins.
     LeafVE:CacheQuestLog()
-    local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
-    local current = {}
-    for i = 1, numEntries do
-      local title, _, _, isHeader = GetQuestLogTitle(i)
-      if title and not isHeader then current[title] = true end
-    end
-    for title, _ in pairs(oldCache) do
-      if not current[title] then
-        LeafVE:OnQuestTurnedIn()
-        break
-      end
-    end
     return
   end
 
