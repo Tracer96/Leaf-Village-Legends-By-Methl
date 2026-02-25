@@ -204,9 +204,10 @@ LeafVE.lastCombatAt = 0
 LeafVE.nearGuildieAccum = 0
 LeafVE.proximityTickTimer = 0
 -- Quest tracking via pfDB
-LeafVE.questLogCache    = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
-LeafVE.questAreaTrigMap = {}   -- triggerId -> {questIds={}, x, y, mapId}  (built from pfDB)
-LeafVE.pfDbLoaded       = false
+LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
+LeafVE.questAreaTrigMap    = {}   -- triggerId -> {questIds={}, x, y, mapId}  (built from pfDB)
+LeafVE.pfDbLoaded          = false
+LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
 
 local function SetSize(f, w, h)
   if not f then return end
@@ -1087,13 +1088,15 @@ function LeafVE:GetCompletedQuestTitle()
   end
   -- Second pass: if the quest is already gone (QUEST_LOG_UPDATE fired first),
   -- find it by diffing the cached log against what is currently in the log.
+  -- Do not require isComplete ~= 0 here: the cache may have recorded isComplete = 0
+  -- if the quest log was not refreshed between accepting and completing the quest.
   local current = {}
   for i = 1, numEntries do
     local title, _, _, isHeader = GetQuestLogTitle(i)
     if title and not isHeader then current[title] = true end
   end
-  for title, info in pairs(self.questLogCache) do
-    if not current[title] and info.isComplete and info.isComplete ~= 0 then
+  for title, _ in pairs(self.questLogCache) do
+    if not current[title] then
       return title
     end
   end
@@ -1242,6 +1245,13 @@ function LeafVE:OnQuestTurnedIn()
   if not me then return end
   if not InGuild() then return end
 
+  -- Guard against double-awarding when both QUEST_FINISHED and QUEST_LOG_UPDATE
+  -- detect the same turn-in within a short window (e.g. ~3 seconds).
+  if Now() - (self.lastQuestTurnInTime or 0) < 3 then
+    self:CacheQuestLog()
+    return
+  end
+
   -- Only award quest LP when grouped with at least one guildie
   local guildies = self:GetGroupGuildies()
   if table.getn(guildies) == 0 then
@@ -1284,6 +1294,7 @@ function LeafVE:OnQuestTurnedIn()
   if questTitle and LeafVE_DB.questCompletions[me] then
     LeafVE_DB.questCompletions[me][questTitle] = Now()
   end
+  self.lastQuestTurnInTime = Now()
   self:AddPoints(me, "G", questPts)
   local displayTitle = questTitle or "Quest"
   local histMsg = "Quest completion"
@@ -6994,6 +7005,7 @@ ef:RegisterEvent("PARTY_MEMBERS_CHANGED")
 ef:RegisterEvent("RAID_ROSTER_UPDATE")
 ef:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 ef:RegisterEvent("QUEST_TURNED_IN")
+ef:RegisterEvent("QUEST_FINISHED")
 ef:RegisterEvent("QUEST_LOG_UPDATE")
 ef:RegisterEvent("PLAYER_REGEN_DISABLED")
 ef:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
@@ -7083,17 +7095,26 @@ ef:SetScript("OnEvent", function()
     return
   end
 
+  if event == "QUEST_FINISHED" then
+    -- QUEST_FINISHED fires in 1.12 when the quest turn-in dialog closes.
+    -- This is the primary trigger for quest LP on vanilla clients.
+    LeafVE:OnQuestTurnedIn()
+    return
+  end
+
   if event == "QUEST_LOG_UPDATE" then
-    -- On Vanilla 1.12, QUEST_TURNED_IN may not fire. Detect quest turn-ins by
-    -- diffing the old cache against the current log before refreshing the cache.
+    -- Fallback: detect quest turn-ins by diffing the old cache against the current log.
+    -- This fires when a quest disappears from the log after a turn-in. We do not require
+    -- isComplete ~= 0 in the cache because the quest may have been cached before
+    -- the player finished its objectives.
     local numEntries = GetNumQuestLogEntries and GetNumQuestLogEntries() or 0
     local current = {}
     for i = 1, numEntries do
       local title, _, _, isHeader = GetQuestLogTitle(i)
       if title and not isHeader then current[title] = true end
     end
-    for title, info in pairs(LeafVE.questLogCache) do
-      if not current[title] and info.isComplete and info.isComplete ~= 0 then
+    for title, _ in pairs(LeafVE.questLogCache) do
+      if not current[title] then
         LeafVE:OnQuestTurnedIn()
         break
       end
