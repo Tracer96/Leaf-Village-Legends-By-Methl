@@ -1021,7 +1021,7 @@ function LeafVE:GetGroupGuildies()
       local unitGuild = GetGuildInfo(unit)
       local isGuildie = (myGuild and unitGuild and unitGuild == myGuild)
         or self:IsKnownGuildie(name)
-      if name and isGuildie then table.insert(guildies, name) end
+      if name and isGuildie and UnitIsConnected(unit) then table.insert(guildies, name) end
     end
   end
   return guildies
@@ -1050,12 +1050,13 @@ function LeafVE:OnGroupUpdate()
   local playerName = ShortName(UnitName("player"))
   if playerName then
     local effectiveName = GetEffectiveName()
-    local points = (LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS
+    local pointsPerGuildie = (LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS
+    local points = pointsPerGuildie * numGuildies
     self:AddPoints(effectiveName, "G", points)
     self:AddToHistory(effectiveName, "G", points, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
     LeafVE_DB.groupSessions[effectiveName] = (LeafVE_DB.groupSessions[effectiveName] or 0) + 1
     LeafVE_DB.groupCooldowns[groupHash] = Now()
-    Print(string.format("Group points awarded! +%d G for grouping with %d guildies", points, numGuildies))
+    Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", points, pointsPerGuildie, numGuildies))
   end
   self.currentGroupStart = Now()
 end
@@ -6250,9 +6251,9 @@ local function BuildWelcomePanel(panel)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
   yOffset = yOffset - 4
 
-  AddLine("|cFFFFD700Group Time|r  (+10 LP flat)", 10)
-  AddLine("Spend time in a party or raid with guildmates. Earn a flat 10 LP", 20)
-  AddLine("per group session regardless of the number of allies.", 20)
+  AddLine(string.format("|cFFFFD700Group Time|r  (+%d LP per online guildie)", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 10)
+  AddLine(string.format("Spend time in a party or raid with online guildmates. Earn %d LP", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 20)
+  AddLine("per online guildie per session. Offline members do not count.", 20)
   yOffset = yOffset - 4
 
   AddLine("|cFFFFD700Shoutouts|r  (+10 LP each)", 10)
