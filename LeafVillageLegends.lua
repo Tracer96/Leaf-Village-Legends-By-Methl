@@ -827,6 +827,61 @@ function LeafVE:CheckBadgeMilestones(playerName)
   end
 end
 
+function LeafVE:GetBadgeProgress(playerName, badgeId)
+  EnsureDB()
+  local name = ShortName(playerName)
+  if not name then return nil, nil end
+
+  local alltime = LeafVE_DB.alltime[name] or {L=0, G=0, S=0}
+  local totalPoints = (alltime.L or 0) + (alltime.G or 0) + (alltime.S or 0)
+
+  if badgeId == "total_logins_100" then
+    return alltime.L or 0, 100
+  elseif badgeId == "login_streak_7" then
+    local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
+    return streak, 7
+  elseif badgeId == "login_streak_30" then
+    local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
+    return streak, 30
+  elseif badgeId == "group_10" then
+    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 10
+  elseif badgeId == "group_50" then
+    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 50
+  elseif badgeId == "group_100" then
+    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 100
+  elseif badgeId == "shoutout_received_10" or badgeId == "shoutout_received_50" then
+    local count = 0
+    for _, targets in pairs(LeafVE_DB.shoutouts or {}) do
+      for t, _ in pairs(targets) do
+        if Lower(t) == Lower(name) then count = count + 1 end
+      end
+    end
+    return count, (badgeId == "shoutout_received_10") and 10 or 50
+  elseif badgeId == "total_500" then
+    return totalPoints, 500
+  elseif badgeId == "total_1000" then
+    return totalPoints, 1000
+  elseif badgeId == "total_2000" then
+    return totalPoints, 2000
+  elseif badgeId == "total_5000" then
+    return totalPoints, 5000
+  elseif badgeId == "total_10000" then
+    return totalPoints, 10000
+  elseif badgeId == "attendance_10" then
+    return table.getn(LeafVE_DB.attendance[name] or {}), 10
+  elseif badgeId == "attendance_50" then
+    return table.getn(LeafVE_DB.attendance[name] or {}), 50
+  elseif badgeId == "guild_age_30" or badgeId == "guild_age_90" or badgeId == "guild_age_365" then
+    if LeafVE_DB.guildJoinDate and LeafVE_DB.guildJoinDate[name] then
+      local days = math.floor((Now() - LeafVE_DB.guildJoinDate[name]) / SECONDS_PER_DAY)
+      if badgeId == "guild_age_30" then return days, 30 end
+      if badgeId == "guild_age_90" then return days, 90 end
+      return days, 365
+    end
+  end
+  return nil, nil
+end
+
 function LeafVE:GetPlayerBadges(playerName)
   EnsureDB() playerName = ShortName(playerName) if not playerName then return {} end
   local playerBadges = LeafVE_DB.badges[playerName] or {} local badges = {}
@@ -2811,6 +2866,8 @@ icon.badgeDesc = badgeData.description
 icon.badgeQuality = badgeData.quality
 icon.badgeEarned = badgeData.earned
 icon.badgeEarnedDate = badgeData.earnedDate
+icon.badgeId = badgeData.id
+icon.badgePlayerName = shortName
 
 -- Tooltip
 icon:SetScript("OnEnter", function()
@@ -2830,6 +2887,10 @@ icon:SetScript("OnEnter", function()
     GameTooltip:AddLine("|cFF888888"..GetBadgeQualityLabel(this.badgeQuality).."|r", 1, 1, 1)
     GameTooltip:AddLine(this.badgeDesc, 0.7, 0.7, 0.7, true)
     GameTooltip:AddLine(" ", 1, 1, 1)
+    local cur, tgt = LeafVE:GetBadgeProgress(this.badgePlayerName, this.badgeId)
+    if cur and tgt then
+      GameTooltip:AddLine("Progress: "..cur.." / "..tgt, 1, 0.82, 0)
+    end
     GameTooltip:AddLine("Not yet earned", 0.8, 0.4, 0.4)
   end
   GameTooltip:Show()
@@ -3006,6 +3067,10 @@ function LeafVE.UI:UpdateCardRecentBadges(playerName)
           GameTooltip:AddLine("|cFF888888"..GetBadgeQualityLabel(badge.quality or BADGE_QUALITY.COMMON).."|r", 1, 1, 1)
           GameTooltip:AddLine(badge.desc, 0.7, 0.7, 0.7, true)
           GameTooltip:AddLine(" ", 1, 1, 1)
+          local cur, tgt = LeafVE:GetBadgeProgress(shortName, badge.id)
+          if cur and tgt then
+            GameTooltip:AddLine("Progress: "..cur.." / "..tgt, 1, 0.82, 0)
+          end
           GameTooltip:AddLine("Not yet earned", 0.8, 0.4, 0.4)
         end
         GameTooltip:Show()
@@ -6755,6 +6820,8 @@ function LeafVE.UI:RefreshBadges()
       frame.badgeDesc = badge.desc
       frame.badgeQuality = badge.quality
       frame.earnedAt = badge.earnedAt
+      frame.badgeId = badge.id
+      frame.badgePlayerName = me
       
       -- TOOLTIP
       frame:SetScript("OnEnter", function()
@@ -6769,6 +6836,10 @@ function LeafVE.UI:RefreshBadges()
           GameTooltip:AddLine("Earned: "..date("%m/%d/%Y", this.earnedAt), 0.5, 0.8, 0.5)
         else
           GameTooltip:AddLine(" ", 1, 1, 1)
+          local cur, tgt = LeafVE:GetBadgeProgress(this.badgePlayerName, this.badgeId)
+          if cur and tgt then
+            GameTooltip:AddLine("Progress: "..cur.." / "..tgt, 1, 0.82, 0)
+          end
           GameTooltip:AddLine("Not yet earned", 0.6, 0.6, 0.6)
         end
         GameTooltip:Show()
