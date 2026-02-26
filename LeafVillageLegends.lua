@@ -6109,7 +6109,7 @@ function LeafVE.UI:RefreshAlts()
   if panel.altsUpdateScroll then panel.altsUpdateScroll() end
 end
 
-
+local function BuildWelcomePanel(panel)
   -- Header
   local headerBG = panel:CreateTexture(nil, "BACKGROUND")
   headerBG:SetPoint("TOP", panel, "TOP", -15, -10)
