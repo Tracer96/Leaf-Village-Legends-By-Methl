@@ -2872,7 +2872,7 @@ end)
   
   local attribution = quoteBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   attribution:SetPoint("BOTTOM", quoteBox, "BOTTOM", 0, 15)
-  attribution:SetText("|cFFAAAAFF- Kakashi Hatake|r")
+  attribution:SetText("|cFF2DD35C- Kakashi Hatake|r")
 
   -- Leaf Village Emblem with BIG BRIGHT GLOW
 local leafGlow = c:CreateTexture(nil, "BACKGROUND")
@@ -6620,7 +6620,7 @@ local function BuildWelcomePanel(panel)
   AddSection("Final Words", "Interface\\Icons\\Spell_Holy_BlessingOfStrength")
   AddLine("\"In the ninja world, those who break the rules are scum,")
   AddLine("but those who abandon their comrades are worse than scum.\"")
-  AddLine("|cFF888888- Kakashi Hatake|r")
+  AddLine("|cFF2DD35C- Kakashi Hatake|r")
   yOffset = yOffset - 4
   AddLine("Now run dungeons, shout out your homies, and climb to the top")
   AddLine("of the leaderboard. The Will of Fire burns in every guildmate!")
