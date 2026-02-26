@@ -890,6 +890,8 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
   elseif badgeId == "login_streak_30" then
     local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
     return streak, 30
+  elseif badgeId == "first_group" then
+    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 1
   elseif badgeId == "group_10" then
     return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 10
   elseif badgeId == "group_50" then
@@ -997,6 +999,20 @@ function LeafVE:CheckDailyLogin()
   if not LeafVE_DB.loginTracking[effectiveName] then LeafVE_DB.loginTracking[effectiveName] = {} end
   if LeafVE_DB.loginTracking[effectiveName][today] then return end
   local loginPts = (LeafVE_DB.options and LeafVE_DB.options.loginPoints) or 20
+  -- Update login streak
+  if not LeafVE_DB.loginStreaks[effectiveName] then
+    LeafVE_DB.loginStreaks[effectiveName] = {current = 0, lastLogin = nil}
+  end
+  local streakData = LeafVE_DB.loginStreaks[effectiveName]
+  local yesterday = DayKeyFromTS(Now() - SECONDS_PER_DAY)
+  if streakData.lastLogin == yesterday then
+    -- Consecutive day - increment streak
+    streakData.current = (streakData.current or 0) + 1
+  elseif streakData.lastLogin ~= today then
+    -- Missed a day (or first ever login) - reset streak to 1
+    streakData.current = 1
+  end
+  streakData.lastLogin = today
   self:AddPoints(effectiveName, "L", loginPts)
   self:AddToHistory(effectiveName, "L", loginPts, "Daily login")
   LeafVE_DB.loginTracking[effectiveName][today] = true
@@ -1159,6 +1175,7 @@ function LeafVE:OnGroupUpdate()
     self:AddPoints(effectiveName, "G", points)
     self:AddToHistory(effectiveName, "G", points, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
     LeafVE_DB.groupSessions[effectiveName] = (LeafVE_DB.groupSessions[effectiveName] or 0) + 1
+    self:CheckBadgeMilestones(effectiveName)
     LeafVE_DB.groupCooldowns[groupHash] = Now()
     Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", points, pointsPerGuildie, numGuildies))
   end
