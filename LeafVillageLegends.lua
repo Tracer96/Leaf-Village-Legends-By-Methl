@@ -40,9 +40,6 @@ local INSTANCE_MAX_DAILY = 20
 local QUEST_POINTS = 1
 local QUEST_MAX_DAILY = 10
 local AREA_TRIGGER_THRESHOLD = 0.03  -- ~3% of map width, ~60-90 yards
-local PROXIMITY_TICK_POINTS = 5
-local PROXIMITY_TICK_INTERVAL = 600   -- 10 minutes in seconds
-local PROXIMITY_NEAR_THRESHOLD = 0.05 -- max map-coordinate distance (0-1 scale) to count as "near"
 local GROUP_POINTS = 10               -- points awarded per guild group tick
 
 local SEASON_REWARD_1 = 10
@@ -203,8 +200,6 @@ LeafVE.instanceZone = nil
 LeafVE.instanceHasGuildie = false
 LeafVE.instanceBossesKilledThisRun = 0
 LeafVE.lastCombatAt = 0
-LeafVE.nearGuildieAccum = 0
-LeafVE.proximityTickTimer = 0
 -- Quest tracking via pfDB
 LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
 LeafVE.questAreaTrigMap    = {}   -- triggerId -> {questIds={}, x, y, mapId}  (built from pfDB)
@@ -402,7 +397,6 @@ local function EnsureDB()
   if not LeafVE_DB.questTracking then LeafVE_DB.questTracking = {} end
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
   if not LeafVE_DB.areaTriggersHit then LeafVE_DB.areaTriggersHit = {} end
-  if not LeafVE_DB.proximityTracking then LeafVE_DB.proximityTracking = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
@@ -584,6 +578,29 @@ function LeafVE:ResetBadges(playerName)
     return
   end
   LeafVE_DB.badges[playerName] = {}
+  -- Clear all progress-tracking data for this player so badges cannot immediately re-earn
+  LeafVE_DB.alltime[playerName] = nil
+  LeafVE_DB.season[playerName] = nil
+  LeafVE_DB.loginStreaks[playerName] = nil
+  LeafVE_DB.loginTracking[playerName] = nil
+  LeafVE_DB.groupSessions[playerName] = nil
+  LeafVE_DB.attendance[playerName] = nil
+  LeafVE_DB.pointHistory[playerName] = nil
+  LeafVE_DB.instanceTracking[playerName] = nil
+  LeafVE_DB.questTracking[playerName] = nil
+  LeafVE_DB.questCompletions[playerName] = nil
+  LeafVE_DB.areaTriggersHit[playerName] = nil
+  LeafVE_DB.lboard.alltime[playerName] = nil
+  for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
+    if type(wkData) == "table" then wkData[playerName] = nil end
+  end
+  for day, dayData in pairs(LeafVE_DB.global) do
+    if type(dayData) == "table" then dayData[playerName] = nil end
+  end
+  for _, targets in pairs(LeafVE_DB.shoutouts) do
+    if type(targets) == "table" then targets[playerName] = nil end
+  end
+  LeafVE_DB.shoutouts[playerName] = nil
   Print("All badges reset for "..playerName..".")
   if InGuild() then
     SendAddonMessage("LeafVE", "BADGESRESET:"..playerName, "GUILD")
@@ -592,23 +609,37 @@ function LeafVE:ResetBadges(playerName)
   if me and playerName == me then
     self:BroadcastBadges()
   end
-  if LeafVE.UI.cardCurrentPlayer == playerName then
-    LeafVE.UI:UpdateCardRecentBadges(playerName)
-  end
-  if LeafVE.UI.panels and LeafVE.UI.panels.badges and LeafVE.UI.panels.badges:IsVisible() then
-    LeafVE.UI:RefreshBadges()
+  if LeafVE.UI and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
   end
 end
 
 function LeafVE:ResetAllBadges()
   EnsureDB()
   LeafVE_DB.badges = {}
+  -- Clear all progress-tracking tables so badges cannot immediately re-earn
+  LeafVE_DB.alltime      = {}
+  LeafVE_DB.season       = {}
+  LeafVE_DB.global       = {}
+  LeafVE_DB.loginStreaks  = {}
+  LeafVE_DB.loginTracking = {}
+  LeafVE_DB.groupSessions = {}
+  LeafVE_DB.groupCooldowns = {}
+  LeafVE_DB.shoutouts    = {}
+  LeafVE_DB.attendance   = {}
+  LeafVE_DB.pointHistory = {}
+  LeafVE_DB.weeklyRecap  = {}
+  LeafVE_DB.instanceTracking = {}
+  LeafVE_DB.questTracking = {}
+  LeafVE_DB.questCompletions = {}
+  LeafVE_DB.areaTriggersHit = {}
+  LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
   Print("All badges reset for all players.")
   if InGuild() then
     SendAddonMessage("LeafVE", "BADGESRESETALL", "GUILD")
   end
-  if LeafVE.UI.panels and LeafVE.UI.panels.badges and LeafVE.UI.panels.badges:IsVisible() then
-    LeafVE.UI:RefreshBadges()
+  if LeafVE.UI and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
   end
 end
 
@@ -1118,7 +1149,7 @@ function LeafVE:OnGroupUpdate()
 end
 
 -------------------------------------------------
--- INSTANCE / BOSS / QUEST / PROXIMITY TRACKING
+-- INSTANCE / BOSS / QUEST TRACKING
 -------------------------------------------------
 
 -------------------------------------------------
@@ -1424,65 +1455,6 @@ function LeafVE:OnQuestTurnedIn()
   Print(string.format("Quest complete! [%s] +%d G (%d/%s today)", displayTitle, questPts, LeafVE_DB.questTracking[effectiveName][today], questCap == 0 and "unlimited" or tostring(questCap)))
   -- Update the cached log to reflect the turn-in
   self:CacheQuestLog()
-end
-
-function LeafVE:TickProximityPoints(dt)
-  -- Refresh guild-mate presence flag while inside an instance
-  if self.instanceJoinedAt and not self.instanceHasGuildie then
-    local guildies = self:GetGroupGuildies()
-    if table.getn(guildies) > 0 then
-      self.instanceHasGuildie = true
-    end
-  end
-
-  -- Skip proximity tick if player is in a party/raid with guildies (they earn group points instead)
-  local groupGuildies = self:GetGroupGuildies()
-  if table.getn(groupGuildies) > 0 then
-    self.nearGuildieAccum = 0
-    return
-  end
-
-  -- Check if there is at least one nearby guildie (non-grouped) in the same zone
-  local hasNearGuildie = false
-  local myZone = GetRealZoneText()
-  if myZone and myZone ~= "" and LeafVE_DB and LeafVE_DB.persistentRoster then
-    for name, data in pairs(LeafVE_DB.persistentRoster) do
-      if data and data.online and data.zone and data.zone == myZone then
-        hasNearGuildie = true
-        break
-      end
-    end
-  end
-
-  if not hasNearGuildie then
-    self.nearGuildieAccum = 0
-    return
-  end
-
-  -- Accumulate time and award a tick when interval is reached
-  self.nearGuildieAccum = self.nearGuildieAccum + dt
-  self.proximityTickTimer = self.proximityTickTimer + dt
-
-  local proxInterval = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.proximityTickInterval) or PROXIMITY_TICK_INTERVAL
-  local proxPts      = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.proximityTickPoints)    or PROXIMITY_TICK_POINTS
-
-  if self.proximityTickTimer >= proxInterval then
-    self.proximityTickTimer = 0
-    local me = ShortName(UnitName("player"))
-    if not me then return end
-    EnsureDB()
-    local effectiveName = GetEffectiveName()
-    self:AddPoints(effectiveName, "G", proxPts)
-    self:AddToHistory(effectiveName, "G", proxPts, "Guild proximity tick")
-    if not LeafVE_DB.proximityTracking[effectiveName] then
-      LeafVE_DB.proximityTracking[effectiveName] = {ticks = 0}
-    end
-    LeafVE_DB.proximityTracking[effectiveName].ticks = (LeafVE_DB.proximityTracking[effectiveName].ticks or 0) + 1
-    Print(string.format("Proximity tick! +%d G for %d min active with guildmates", proxPts, math.floor(proxInterval / 60)))
-  end
-
-  -- Also check for quest area trigger proximity (pfDB integration)
-  self:CheckAreaTriggerQuest()
 end
 
 function LeafVE:GiveShoutout(targetName, reason)
@@ -1844,11 +1816,30 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     if targetPlayer then
       EnsureDB()
       LeafVE_DB.badges[targetPlayer] = {}
-      if LeafVE.UI and LeafVE.UI.cardCurrentPlayer == targetPlayer then
-        LeafVE.UI:UpdateCardRecentBadges(targetPlayer)
+      LeafVE_DB.alltime[targetPlayer] = nil
+      LeafVE_DB.season[targetPlayer] = nil
+      LeafVE_DB.loginStreaks[targetPlayer] = nil
+      LeafVE_DB.loginTracking[targetPlayer] = nil
+      LeafVE_DB.groupSessions[targetPlayer] = nil
+      LeafVE_DB.attendance[targetPlayer] = nil
+      LeafVE_DB.pointHistory[targetPlayer] = nil
+      LeafVE_DB.instanceTracking[targetPlayer] = nil
+      LeafVE_DB.questTracking[targetPlayer] = nil
+      LeafVE_DB.questCompletions[targetPlayer] = nil
+      LeafVE_DB.areaTriggersHit[targetPlayer] = nil
+      LeafVE_DB.lboard.alltime[targetPlayer] = nil
+      for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
+        if type(wkData) == "table" then wkData[targetPlayer] = nil end
       end
-      if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.badges and LeafVE.UI.panels.badges:IsVisible() then
-        LeafVE.UI:RefreshBadges()
+      for day, dayData in pairs(LeafVE_DB.global) do
+        if type(dayData) == "table" then dayData[targetPlayer] = nil end
+      end
+      for _, targets in pairs(LeafVE_DB.shoutouts) do
+        if type(targets) == "table" then targets[targetPlayer] = nil end
+      end
+      LeafVE_DB.shoutouts[targetPlayer] = nil
+      if LeafVE.UI and LeafVE.UI.Refresh then
+        LeafVE.UI:Refresh()
       end
     end
     return
@@ -1858,8 +1849,24 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   if message == "BADGESRESETALL" then
     EnsureDB()
     LeafVE_DB.badges = {}
-    if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.badges and LeafVE.UI.panels.badges:IsVisible() then
-      LeafVE.UI:RefreshBadges()
+    LeafVE_DB.alltime      = {}
+    LeafVE_DB.season       = {}
+    LeafVE_DB.global       = {}
+    LeafVE_DB.loginStreaks  = {}
+    LeafVE_DB.loginTracking = {}
+    LeafVE_DB.groupSessions = {}
+    LeafVE_DB.groupCooldowns = {}
+    LeafVE_DB.shoutouts    = {}
+    LeafVE_DB.attendance   = {}
+    LeafVE_DB.pointHistory = {}
+    LeafVE_DB.weeklyRecap  = {}
+    LeafVE_DB.instanceTracking = {}
+    LeafVE_DB.questTracking = {}
+    LeafVE_DB.questCompletions = {}
+    LeafVE_DB.areaTriggersHit = {}
+    LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+    if LeafVE.UI and LeafVE.UI.Refresh then
+      LeafVE.UI:Refresh()
     end
     return
   end
@@ -4442,6 +4449,26 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
         bg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
         bg:SetVertexColor(0.1, 0.1, 0.1, 0.3)
         frame.bg = bg
+
+        frame:EnableMouse(true)
+        frame:SetScript("OnEnter", function()
+          this.bg:SetVertexColor(0.25, 0.25, 0.15, 0.7)
+        end)
+        frame:SetScript("OnLeave", function()
+          this.bg:SetVertexColor(0.1, 0.1, 0.1, 0.3)
+        end)
+        frame:SetScript("OnMouseUp", function()
+          if this.playerName then
+            if LeafVE.UI.allBadgesFrame and LeafVE.UI.allBadgesFrame:IsVisible() then
+              LeafVE.UI.allBadgesFrame:Hide()
+            end
+            if LeafVE.UI.achPopup and LeafVE.UI.achPopup:IsVisible() then
+              LeafVE.UI.achPopup:Hide()
+            end
+            LeafVE.UI.inspectedPlayer = this.playerName
+            LeafVE.UI:ShowPlayerCard(this.playerName)
+          end
+        end)
         
         table.insert(panel.leaderEntries, frame)
       end
@@ -4464,6 +4491,7 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
       local classColor = CLASS_COLORS[class] or {1, 1, 1}
       frame.nameText:SetText(leader.name)
       frame.nameText:SetTextColor(classColor[1], classColor[2], classColor[3])
+      frame.playerName = leader.name
       
       frame.pointsText:SetText(string.format("|cFFFFD700%d pts|r  (L:%d G:%d S:%d)", leader.total, leader.L, leader.G, leader.S))
       
@@ -5390,33 +5418,6 @@ local function BuildAdminPanel(panel)
   yBase = yBase - gap
 
   -- Divider
-  local divProx = subFrame:CreateTexture(nil, "ARTWORK")
-  divProx:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  divProx:SetWidth(430)
-  divProx:SetHeight(1)
-  divProx:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  divProx:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
-  yBase = yBase - 18
-
-  -- Section: Proximity Settings
-  local proxSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  proxSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  proxSection:SetText("|cFF2DD35CProximity Settings|r")
-  yBase = yBase - 28
-
-  local _, _, sync8 = MakeNumberStepper(subFrame, "Proximity Tick Points", yBase,
-    function() return LeafVE_DB.options.proximityTickPoints or PROXIMITY_TICK_POINTS end,
-    function(v) LeafVE_DB.options.proximityTickPoints = v end, 1, 50)
-  table.insert(syncCallbacks, sync8)
-  yBase = yBase - gap
-
-  local _, _, sync9 = MakeNumberStepper(subFrame, "Proximity Interval (min)", yBase,
-    function() return math.floor((LeafVE_DB.options.proximityTickInterval or PROXIMITY_TICK_INTERVAL) / 60) end,
-    function(v) LeafVE_DB.options.proximityTickInterval = v * 60 end, 1, 60)
-  table.insert(syncCallbacks, sync9)
-  yBase = yBase - gap
-
-  -- Divider
   local divGrp = subFrame:CreateTexture(nil, "ARTWORK")
   divGrp:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
   divGrp:SetWidth(430)
@@ -5505,7 +5506,7 @@ local function BuildAdminPanel(panel)
     local opts = LeafVE_DB.options
     local enableAreaTriggerVal = (opts.enableAreaTrigger ~= false) and 1 or 0
     local serialized = string.format(
-      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,proximityTickPoints=%d,proximityTickInterval=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,enableAreaTrigger=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
+      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,enableAreaTrigger=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
       opts.bossPoints or INSTANCE_BOSS_POINTS,
       opts.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS,
       opts.questPoints or QUEST_POINTS,
@@ -5513,8 +5514,6 @@ local function BuildAdminPanel(panel)
       opts.instanceMaxDaily or INSTANCE_MAX_DAILY,
       opts.shoutoutPoints or 10,
       opts.shoutoutMaxDaily or SHOUTOUT_MAX_PER_DAY,
-      opts.proximityTickPoints or PROXIMITY_TICK_POINTS,
-      opts.proximityTickInterval or PROXIMITY_TICK_INTERVAL,
       opts.groupMinTime or GROUP_MIN_TIME,
       opts.groupCooldown or GROUP_COOLDOWN,
       opts.groupPoints or GROUP_POINTS,
@@ -5546,8 +5545,6 @@ local function BuildAdminPanel(panel)
     LeafVE_DB.options.instanceMaxDaily          = INSTANCE_MAX_DAILY
     LeafVE_DB.options.shoutoutPoints            = 10
     LeafVE_DB.options.shoutoutMaxDaily          = SHOUTOUT_MAX_PER_DAY
-    LeafVE_DB.options.proximityTickPoints       = PROXIMITY_TICK_POINTS
-    LeafVE_DB.options.proximityTickInterval     = PROXIMITY_TICK_INTERVAL
     LeafVE_DB.options.groupMinTime              = GROUP_MIN_TIME
     LeafVE_DB.options.groupCooldown             = GROUP_COOLDOWN
     LeafVE_DB.options.groupPoints               = GROUP_POINTS
@@ -6322,26 +6319,27 @@ local function BuildWelcomePanel(panel)
   AddLine("per online guildie per session. Offline members do not count.", 20)
   yOffset = yOffset - 4
 
-  AddLine("|cFFFFD700Shoutouts|r  (+10 LP each)", 10)
+  local soPoints = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
+  local soMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  AddLine(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPoints), 10)
   AddLine("Recognise a fellow shinobi's greatness! Both the giver and receiver", 20)
-  AddLine("earn 10 LP. Use |cFF00CCFF/so PlayerName [reason]|r. You have", 20)
-  AddLine(string.format("%d shoutouts per day, so spend them wisely!", SHOUTOUT_MAX_PER_DAY), 20)
+  AddLine(string.format("earn %d LP. Use |cFF00CCFF/so PlayerName [reason]|r. You have", soPoints), 20)
+  AddLine(string.format("%d shoutouts per day, so spend them wisely!", soMax), 20)
   yOffset = yOffset - 4
 
-  AddLine(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss, defaults)", INSTANCE_COMPLETION_POINTS, INSTANCE_BOSS_POINTS), 10)
+  local instPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
+  local bossPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.bossPoints) or INSTANCE_BOSS_POINTS
+  AddLine(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss)", instPts, bossPts), 10)
   AddLine("Complete dungeons, raids, or battlegrounds with a guildmate. Earn", 20)
-  AddLine(string.format("%d LP on completion plus %d LP for every named boss slain.", INSTANCE_COMPLETION_POINTS, INSTANCE_BOSS_POINTS), 20)
+  AddLine(string.format("%d LP on completion plus %d LP for every named boss slain.", instPts, bossPts), 20)
   AddLine("|cFF888888(Point values are configurable by guild officers.)|r", 20)
   yOffset = yOffset - 4
 
-  AddLine(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day, defaults)", QUEST_POINTS, QUEST_MAX_DAILY), 10)
-  AddLine(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", QUEST_POINTS), 20)
-  AddLine(string.format("up to %d quests per day by default. Every mission matters!", QUEST_MAX_DAILY), 20)
-  yOffset = yOffset - 4
-
-  AddLine("|cFFFFD700Guild Proximity|r  (+5 LP per 10 min)", 10)
-  AddLine("Roam beside a guildmate (not in your party/raid) for 10 minutes.", 20)
-  AddLine("No combat required — just being in the same zone counts!", 20)
+  local questPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
+  local questMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
+  AddLine(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day)", questPts, questMax), 10)
+  AddLine(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", questPts), 20)
+  AddLine(string.format("up to %d quests per day. Every mission matters!", questMax), 20)
   yOffset = yOffset - 6
   AddDivider()
 
@@ -6987,6 +6985,26 @@ function LeafVE.UI:RefreshAchievementsLeaderboard()
         bg:SetVertexColor(0.1, 0.1, 0.1, 0.3)
         frame.bg = bg
 
+        frame:EnableMouse(true)
+        frame:SetScript("OnEnter", function()
+          this.bg:SetVertexColor(0.25, 0.25, 0.15, 0.7)
+        end)
+        frame:SetScript("OnLeave", function()
+          this.bg:SetVertexColor(0.1, 0.1, 0.1, 0.3)
+        end)
+        frame:SetScript("OnMouseUp", function()
+          if this.playerName then
+            if LeafVE.UI.allBadgesFrame and LeafVE.UI.allBadgesFrame:IsVisible() then
+              LeafVE.UI.allBadgesFrame:Hide()
+            end
+            if LeafVE.UI.achPopup and LeafVE.UI.achPopup:IsVisible() then
+              LeafVE.UI.achPopup:Hide()
+            end
+            LeafVE.UI.inspectedPlayer = this.playerName
+            LeafVE.UI:ShowPlayerCard(this.playerName)
+          end
+        end)
+
         table.insert(panel.achEntries, frame)
       end
 
@@ -7008,6 +7026,7 @@ function LeafVE.UI:RefreshAchievementsLeaderboard()
       local classColor = CLASS_COLORS[class] or {1, 1, 1}
       frame.nameText:SetText(leader.name)
       frame.nameText:SetTextColor(classColor[1], classColor[2], classColor[3])
+      frame.playerName = leader.name
 
       frame.pointsText:SetText("|cFFFFD700"..leader.points.." achievement pts|r")
 
@@ -7666,7 +7685,7 @@ local groupCheckTimer = 0
 local notificationTimer = 0
 local attendanceTimer = 0
 local badgeSyncTimer = 0
-local proximityTimer = 0
+local areaCheckTimer = 0
 local achLeaderTimer = 0
 
 ef:SetScript("OnEvent", function()
@@ -7835,12 +7854,11 @@ updateFrame:SetScript("OnUpdate", function()
     end
   end
 
-  -- Proximity + combat tick (checked every second to keep overhead low)
-  proximityTimer = proximityTimer + arg1
-  if proximityTimer >= 1 then
-    local dt = proximityTimer
-    proximityTimer = 0
-    LeafVE:TickProximityPoints(dt)
+  -- Area trigger quest check (pfDB integration, runs every second)
+  areaCheckTimer = areaCheckTimer + arg1
+  if areaCheckTimer >= 1 then
+    areaCheckTimer = 0
+    LeafVE:CheckAreaTriggerQuest()
   end
 end)
 
