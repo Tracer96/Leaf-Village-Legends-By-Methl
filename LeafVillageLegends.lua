@@ -6653,7 +6653,7 @@ function LeafVE:CreateMinimapButton()
   local border = btn:CreateTexture(nil, "OVERLAY")
   border:SetWidth(52)
   border:SetHeight(52)
-  border:SetPoint("CENTER", btn, "CENTER", 0, 0)
+  border:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, 0)
   border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
 
   local function UpdatePos()
