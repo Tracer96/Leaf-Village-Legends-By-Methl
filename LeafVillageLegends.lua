@@ -27,6 +27,7 @@ local SECONDS_PER_DAY = 86400
 local SECONDS_PER_HOUR = 3600
 local GROUP_MIN_TIME = 300
 local GROUP_COOLDOWN = 900
+local GROUP_POINT_INTERVAL = 900
 local GUILD_ROSTER_CACHE_DURATION = 30
 local SHOUTOUT_MAX_PER_DAY = 2
 local LBOARD_RESYNC_COOLDOWN = 30  -- seconds between outgoing LBOARDREQ messages
@@ -201,6 +202,7 @@ LeafVE.instanceJoinedAt = nil
 LeafVE.instanceZone = nil
 LeafVE.instanceHasGuildie = false
 LeafVE.instanceBossesKilledThisRun = 0
+LeafVE.lastGroupAwardTick = nil
 LeafVE.lastCombatAt = 0
 -- Quest tracking via pfDB
 LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
@@ -429,6 +431,7 @@ local function EnsureDB()
   if LeafVE_DB.options.questPoints == nil then LeafVE_DB.options.questPoints = QUEST_POINTS end
   if LeafVE_DB.options.questMaxDaily == nil then LeafVE_DB.options.questMaxDaily = QUEST_MAX_DAILY end
   if LeafVE_DB.options.instanceMaxDaily == nil then LeafVE_DB.options.instanceMaxDaily = INSTANCE_MAX_DAILY end
+  if LeafVE_DB.options.groupPointInterval == nil then LeafVE_DB.options.groupPointInterval = GROUP_POINT_INTERVAL end
   if LeafVE_DB.options.seasonReward1 == nil then LeafVE_DB.options.seasonReward1 = SEASON_REWARD_1 end
   if LeafVE_DB.options.seasonReward2 == nil then LeafVE_DB.options.seasonReward2 = SEASON_REWARD_2 end
   if LeafVE_DB.options.seasonReward3 == nil then LeafVE_DB.options.seasonReward3 = SEASON_REWARD_3 end
@@ -1151,35 +1154,31 @@ function LeafVE:GetGroupHash(members) table.sort(members) return table.concat(me
 
 function LeafVE:OnGroupUpdate()
   local guildies = self:GetGroupGuildies() local numGuildies = table.getn(guildies)
-  if numGuildies == 0 then self.currentGroupStart = nil self.currentGroupMembers = {} return end
+  if numGuildies == 0 then self.currentGroupStart = nil self.currentGroupMembers = {} self.lastGroupAwardTick = nil return end
   local groupHash = self:GetGroupHash(guildies)
   if not self.currentGroupStart or groupHash ~= self:GetGroupHash(self.currentGroupMembers) then
-    self.currentGroupStart = Now() self.currentGroupMembers = guildies
+    self.currentGroupStart = Now() self.currentGroupMembers = guildies self.lastGroupAwardTick = nil
     Print("Quest leaf points are now active! (grouped with: "..table.concat(guildies, ", ")..")")
     return
   end
-  local timeInGroup = Now() - self.currentGroupStart
-  local groupMinTime = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupMinTime) or GROUP_MIN_TIME
-  if timeInGroup < groupMinTime then return end
   EnsureDB()
-  local groupCooldown = (LeafVE_DB.options and LeafVE_DB.options.groupCooldown) or GROUP_COOLDOWN
-  if LeafVE_DB.groupCooldowns[groupHash] then
-    local timeSinceLastCredit = Now() - LeafVE_DB.groupCooldowns[groupHash]
-    if timeSinceLastCredit < groupCooldown then return end
+  local groupInterval = (LeafVE_DB.options and LeafVE_DB.options.groupPointInterval) or GROUP_POINT_INTERVAL
+  local currentTick = math.floor(Now() / groupInterval)
+  local lastAwardedTick = self.lastGroupAwardTick or -1
+  if currentTick > lastAwardedTick and self.currentGroupStart and (Now() - self.currentGroupStart) >= groupInterval then
+    local playerName = ShortName(UnitName("player"))
+    if playerName then
+      local effectiveName = GetEffectiveName()
+      local pointsPerGuildie = (LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS
+      local points = pointsPerGuildie * numGuildies
+      self:AddPoints(effectiveName, "G", points)
+      self:AddToHistory(effectiveName, "G", points, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
+      LeafVE_DB.groupSessions[effectiveName] = (LeafVE_DB.groupSessions[effectiveName] or 0) + 1
+      self:CheckBadgeMilestones(effectiveName)
+      self.lastGroupAwardTick = currentTick
+      Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", points, pointsPerGuildie, numGuildies))
+    end
   end
-  local playerName = ShortName(UnitName("player"))
-  if playerName then
-    local effectiveName = GetEffectiveName()
-    local pointsPerGuildie = (LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS
-    local points = pointsPerGuildie * numGuildies
-    self:AddPoints(effectiveName, "G", points)
-    self:AddToHistory(effectiveName, "G", points, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
-    LeafVE_DB.groupSessions[effectiveName] = (LeafVE_DB.groupSessions[effectiveName] or 0) + 1
-    self:CheckBadgeMilestones(effectiveName)
-    LeafVE_DB.groupCooldowns[groupHash] = Now()
-    Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", points, pointsPerGuildie, numGuildies))
-  end
-  self.currentGroupStart = Now()
 end
 
 -------------------------------------------------
@@ -2215,6 +2214,9 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         end
       end
       Print("Guild settings updated by "..sender)
+      if LeafVE.UI and LeafVE.UI.Refresh then
+        LeafVE.UI:Refresh()
+      end
     end
     return
 
@@ -5591,6 +5593,12 @@ local function BuildAdminPanel(panel)
   table.insert(syncCallbacks, sync11)
   yBase = yBase - gap
 
+  local _, _, syncGPI = MakeNumberStepper(subFrame, "Group Point Interval (min)", yBase,
+    function() return math.floor((LeafVE_DB.options.groupPointInterval or GROUP_POINT_INTERVAL) / 60) end,
+    function(v) LeafVE_DB.options.groupPointInterval = v * 60 end, 1, 60)
+  table.insert(syncCallbacks, syncGPI)
+  yBase = yBase - gap
+
   local _, _, syncGP = MakeNumberStepper(subFrame, "Group Points (per guildie)", yBase,
     function() return LeafVE_DB.options.groupPoints or GROUP_POINTS end,
     function(v) LeafVE_DB.options.groupPoints = v end, 1, 100)
@@ -5653,7 +5661,7 @@ local function BuildAdminPanel(panel)
     local opts = LeafVE_DB.options
     local enableAreaTriggerVal = (opts.enableAreaTrigger ~= false) and 1 or 0
     local serialized = string.format(
-      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,enableAreaTrigger=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
+      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,groupPointInterval=%d,enableAreaTrigger=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
       opts.bossPoints or INSTANCE_BOSS_POINTS,
       opts.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS,
       opts.questPoints or QUEST_POINTS,
@@ -5664,6 +5672,7 @@ local function BuildAdminPanel(panel)
       opts.groupMinTime or GROUP_MIN_TIME,
       opts.groupCooldown or GROUP_COOLDOWN,
       opts.groupPoints or GROUP_POINTS,
+      opts.groupPointInterval or GROUP_POINT_INTERVAL,
       enableAreaTriggerVal,
       opts.seasonReward1 or SEASON_REWARD_1,
       opts.seasonReward2 or SEASON_REWARD_2,
@@ -5695,6 +5704,7 @@ local function BuildAdminPanel(panel)
     LeafVE_DB.options.groupMinTime              = GROUP_MIN_TIME
     LeafVE_DB.options.groupCooldown             = GROUP_COOLDOWN
     LeafVE_DB.options.groupPoints               = GROUP_POINTS
+    LeafVE_DB.options.groupPointInterval        = GROUP_POINT_INTERVAL
     LeafVE_DB.options.seasonReward1             = SEASON_REWARD_1
     LeafVE_DB.options.seasonReward2             = SEASON_REWARD_2
     LeafVE_DB.options.seasonReward3             = SEASON_REWARD_3
