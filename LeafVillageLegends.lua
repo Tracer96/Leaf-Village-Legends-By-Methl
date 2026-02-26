@@ -194,6 +194,8 @@ LeafVE.maxErrors = 50
 LeafVE.lastResyncRequestAt = 0
 LeafVE.lastResyncRespondAt = 0
 LeafVE.lastShoutSyncRespondAt = 0
+LeafVE.lastBadgeSyncRespondAt = 0
+LeafVE.lastAchSyncRespondAt = 0
 LeafVE.shoutSyncBuffer = {}
 LeafVE.instanceJoinedAt = nil
 LeafVE.instanceZone = nil
@@ -602,6 +604,9 @@ function LeafVE:ResetBadges(playerName)
     if type(targets) == "table" then targets[playerName] = nil end
   end
   LeafVE_DB.shoutouts[playerName] = nil
+  if LeafVE_GlobalDB.achievementCache then
+    LeafVE_GlobalDB.achievementCache[playerName] = nil
+  end
   Print("All badges reset for "..playerName..".")
   if InGuild() then
     SendAddonMessage("LeafVE", "BADGESRESET:"..playerName, "GUILD")
@@ -635,6 +640,10 @@ function LeafVE:ResetAllBadges()
   LeafVE_DB.questCompletions = {}
   LeafVE_DB.areaTriggersHit = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+  LeafVE_GlobalDB.achievementCache = {}
+  if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
+    LeafVE_AchTest_DB.achievements = {}
+  end
   Print("All badges reset for all players.")
   if InGuild() then
     SendAddonMessage("LeafVE", "BADGESRESETALL", "GUILD")
@@ -653,6 +662,12 @@ function LeafVE:HardResetLeafPoints_Local()
   LeafVE_DB.season       = {}
   LeafVE_DB.weeklyRecap  = {}
   LeafVE_DB.pointHistory = {}
+  LeafVE_DB.instanceTracking = {}
+  LeafVE_DB.questTracking = {}
+  LeafVE_DB.questCompletions = {}
+  LeafVE_DB.areaTriggersHit = {}
+  LeafVE_DB.groupSessions = {}
+  LeafVE_DB.groupCooldowns = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
   -- Refresh all visible panels (handles me, leaderWeek, leaderLife, etc.)
   if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.Refresh then
@@ -1542,7 +1557,42 @@ function LeafVE:GiveShoutout(targetName, reason)
 end
 
 function LeafVE:BroadcastMyAchievements()
-  -- Placeholder for achievement system
+  if not InGuild() then return end
+  EnsureDB()
+
+  if not LeafVE_AchTest_DB or not LeafVE_AchTest_DB.achievements then return end
+
+  -- Build entries: "achID:timestamp" pairs
+  local entries = {}
+  for achId, timestamp in pairs(LeafVE_AchTest_DB.achievements) do
+    if type(timestamp) == "number" and timestamp > 0 then
+      table.insert(entries, achId..":"..tostring(timestamp))
+    end
+  end
+
+  if table.getn(entries) == 0 then return end
+
+  -- Send in chunks to stay within the 255-byte WoW addon message limit.
+  -- "ACHSYNC:" prefix uses 8 chars (255 - 8 = 247 available). Use 220 for safety.
+  local MAX_CHUNK = 220
+  local chunk = {}
+  local chunkLen = 0
+
+  for _, entry in ipairs(entries) do
+    local sep = (chunkLen > 0) and 1 or 0
+    if chunkLen > 0 and chunkLen + sep + string.len(entry) > MAX_CHUNK then
+      SendAddonMessage("LeafVE", "ACHSYNC:"..table.concat(chunk, ","), "GUILD")
+      chunk = {}
+      chunkLen = 0
+      sep = 0
+    end
+    table.insert(chunk, entry)
+    chunkLen = chunkLen + sep + string.len(entry)
+  end
+
+  if table.getn(chunk) > 0 then
+    SendAddonMessage("LeafVE", "ACHSYNC:"..table.concat(chunk, ","), "GUILD")
+  end
 end
 
 function LeafVE:BroadcastBadges()
@@ -1808,6 +1858,14 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         self.lastShoutSyncRespondAt = now
         LeafVE:BroadcastShoutoutHistory()
       end
+      if (now - self.lastBadgeSyncRespondAt) >= LBOARD_RESPOND_COOLDOWN then
+        self.lastBadgeSyncRespondAt = now
+        LeafVE:BroadcastBadges()
+      end
+      if (now - self.lastAchSyncRespondAt) >= LBOARD_RESPOND_COOLDOWN then
+        self.lastAchSyncRespondAt = now
+        LeafVE:BroadcastMyAchievements()
+      end
     end
     return
   end
@@ -1840,6 +1898,9 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         if type(targets) == "table" then targets[targetPlayer] = nil end
       end
       LeafVE_DB.shoutouts[targetPlayer] = nil
+      if LeafVE_GlobalDB.achievementCache then
+        LeafVE_GlobalDB.achievementCache[targetPlayer] = nil
+      end
       if LeafVE.UI and LeafVE.UI.Refresh then
         LeafVE.UI:Refresh()
       end
@@ -1867,6 +1928,10 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     LeafVE_DB.questCompletions = {}
     LeafVE_DB.areaTriggersHit = {}
     LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+    LeafVE_GlobalDB.achievementCache = {}
+    if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
+      LeafVE_AchTest_DB.achievements = {}
+    end
     if LeafVE.UI and LeafVE.UI.Refresh then
       LeafVE.UI:Refresh()
     end
@@ -2150,6 +2215,69 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
           LeafVE_GlobalDB.guildAltLinks[altName] = mainName
         else
           LeafVE_GlobalDB.guildAltLinks[altName] = nil
+        end
+      end
+    end
+    return
+
+  -- Handle achievement data sync from a guild member
+  elseif string.sub(message, 1, 8) == "ACHSYNC:" then
+    local achData = string.sub(message, 9)
+    EnsureDB()
+    if not LeafVE_GlobalDB.achievementCache then
+      LeafVE_GlobalDB.achievementCache = {}
+    end
+    if not LeafVE_GlobalDB.achievementCache[sender] then
+      LeafVE_GlobalDB.achievementCache[sender] = {}
+    end
+    -- Parse "achID:timestamp,achID:timestamp,..." entries
+    local startPos = 1
+    while startPos <= string.len(achData) do
+      local commaPos = string.find(achData, ",", startPos)
+      local entry
+      if commaPos then
+        entry = string.sub(achData, startPos, commaPos - 1)
+        startPos = commaPos + 1
+      else
+        entry = string.sub(achData, startPos)
+        startPos = string.len(achData) + 1
+      end
+      local colonPos = string.find(entry, ":")
+      if colonPos then
+        local achId = string.sub(entry, 1, colonPos - 1)
+        local timestamp = tonumber(string.sub(entry, colonPos + 1))
+        if achId ~= "" and timestamp then
+          if not LeafVE_GlobalDB.achievementCache[sender][achId] then
+            LeafVE_GlobalDB.achievementCache[sender][achId] = timestamp
+          else
+            LeafVE_GlobalDB.achievementCache[sender][achId] = math.min(
+              LeafVE_GlobalDB.achievementCache[sender][achId], timestamp)
+          end
+        end
+      end
+    end
+    -- Refresh the achievement leaderboard panel if it is visible
+    if LeafVE.UI and LeafVE.UI.panels then
+      if LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
+        LeafVE.UI:RefreshAchievementsLeaderboard()
+      end
+    end
+    return
+
+  -- Handle leaderboard zero-out broadcast from admin (bypasses higher-total-wins guard)
+  elseif string.sub(message, 1, 22) == "LVE_RESET_LBOARD_ZERO:" then
+    -- Validate sender is an admin rank before applying the reset
+    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
+    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
+    if ADMIN_RANKS[senderRank] then
+      EnsureDB()
+      LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+      if LeafVE.UI and LeafVE.UI.panels then
+        if LeafVE.UI.panels.leaderLife and LeafVE.UI.panels.leaderLife:IsVisible() then
+          LeafVE.UI:RefreshLeaderboard("leaderLife")
+        end
+        if LeafVE.UI.panels.leaderWeek and LeafVE.UI.panels.leaderWeek:IsVisible() then
+          LeafVE.UI:RefreshLeaderboard("leaderWeek")
         end
       end
     end
@@ -5673,6 +5801,8 @@ local function BuildAdminPanel(panel)
         LeafVE:HardResetLeafPoints_Local()
         if InGuild() then
           SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..time(), "GUILD")
+          SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..time(), "GUILD")
+          LeafVE:BroadcastLeaderboardData()
         end
         Print("|cFFFF4444Broadcast: All Leaf Points reset for all guild members.|r")
         cf:Hide()
@@ -5732,6 +5862,7 @@ local function BuildAdminPanel(panel)
         LeafVE:HardResetAchievementLeaderboard_Local()
         if InGuild() then
           SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_ACHIEVE_ALL:"..time(), "GUILD")
+          LeafVE:BroadcastMyAchievements()
         end
         Print("|cFFFF4444Broadcast: Achievement leaderboard cache reset for all guild members.|r")
         cf:Hide()
