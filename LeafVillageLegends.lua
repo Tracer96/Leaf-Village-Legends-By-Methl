@@ -152,11 +152,13 @@ BADGES = {
   {id = "shoutout_received_50",    name = "Guild Celebrity", desc = "Receive 50 shoutouts",        icon = "Interface\\Icons\\INV_Crown_02",                     category = "Recognition", quality = BADGE_QUALITY.RARE},
   
   -- Point Milestones (AUTO-TRACKED)
-  {id = "total_500",   name = "Core Member",    desc = "Earn 500 total points",   icon = "Interface\\Icons\\INV_Jewelry_Talisman_07",  category = "Milestones", quality = BADGE_QUALITY.RARE},
-  {id = "total_1000",  name = "Guild Legend",   desc = "Earn 1000 total points",  icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Red",  category = "Milestones", quality = BADGE_QUALITY.EPIC},
-  {id = "total_2000",  name = "Elite Shinobi",  desc = "Earn 2000 total points",  icon = "Interface\\Icons\\INV_Jewelry_Talisman_09",  category = "Milestones", quality = BADGE_QUALITY.EPIC},
-  {id = "total_5000",  name = "Kage Candidate", desc = "Earn 5000 total points",  icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Black", category = "Milestones", quality = BADGE_QUALITY.EPIC},
-  {id = "total_10000", name = "Leaf Village Legend", desc = "Earn 10000 total points", icon = "Interface\\Icons\\INV_Crown_02",        category = "Milestones", quality = BADGE_QUALITY.LEGENDARY},
+  -- NOTE: Badge IDs are intentionally kept unchanged to preserve existing earned badge data.
+  -- Thresholds and descriptions reflect the new increased requirements.
+  {id = "total_500",   name = "Core Member",    desc = "Earn 2,500 total points",   icon = "Interface\\Icons\\INV_Jewelry_Talisman_07",  category = "Milestones", quality = BADGE_QUALITY.RARE},
+  {id = "total_1000",  name = "Shinobi",        desc = "Earn 5,000 total points",  icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Red",  category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_2000",  name = "Elite Shinobi",  desc = "Earn 10,000 total points",  icon = "Interface\\Icons\\INV_Jewelry_Talisman_09",  category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_5000",  name = "Kage Candidate", desc = "Earn 25,000 total points",  icon = "Interface\\Icons\\INV_Misc_Head_Dragon_Black", category = "Milestones", quality = BADGE_QUALITY.EPIC},
+  {id = "total_10000", name = "Hokage Legend",  desc = "Earn 50,000 total points", icon = "Interface\\Icons\\INV_Crown_02",        category = "Milestones", quality = BADGE_QUALITY.LEGENDARY},
   
   -- Attendance (AUTO-TRACKED if in raids)
   {id = "attendance_10", name = "Raider",       desc = "Attend 10 raids", icon = "Interface\\Icons\\Spell_Fire_Immolation",      category = "Raids", quality = BADGE_QUALITY.UNCOMMON},
@@ -844,19 +846,19 @@ function LeafVE:CheckBadgeMilestones(playerName)
   end
   
   -- === POINT MILESTONES ===
-  if totalPoints >= 500 then 
+  if totalPoints >= 2500 then 
     self:CheckAndAwardBadge(playerName, "total_500") 
   end
-  if totalPoints >= 1000 then 
+  if totalPoints >= 5000 then 
     self:CheckAndAwardBadge(playerName, "total_1000") 
   end
-  if totalPoints >= 2000 then 
+  if totalPoints >= 10000 then 
     self:CheckAndAwardBadge(playerName, "total_2000") 
   end
-  if totalPoints >= 5000 then 
+  if totalPoints >= 25000 then 
     self:CheckAndAwardBadge(playerName, "total_5000") 
   end
-  if totalPoints >= 10000 then 
+  if totalPoints >= 50000 then 
     self:CheckAndAwardBadge(playerName, "total_10000") 
   end
   
@@ -921,15 +923,15 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
     end
     return count, (badgeId == "shoutout_received_10") and 10 or 50
   elseif badgeId == "total_500" then
-    return totalPoints, 500
+    return totalPoints, 2500
   elseif badgeId == "total_1000" then
-    return totalPoints, 1000
-  elseif badgeId == "total_2000" then
-    return totalPoints, 2000
-  elseif badgeId == "total_5000" then
     return totalPoints, 5000
-  elseif badgeId == "total_10000" then
+  elseif badgeId == "total_2000" then
     return totalPoints, 10000
+  elseif badgeId == "total_5000" then
+    return totalPoints, 25000
+  elseif badgeId == "total_10000" then
+    return totalPoints, 50000
   elseif badgeId == "attendance_10" then
     return table.getn(LeafVE_DB.attendance[name] or {}), 10
   elseif badgeId == "attendance_50" then
