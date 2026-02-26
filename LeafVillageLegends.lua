@@ -469,7 +469,7 @@ local function GetLeaderboardName()
   return GetEffectiveName()
 end
 
-
+function LeafVE:AddToHistory(playerName, pointType, amount, reason)
   EnsureDB() playerName = ShortName(playerName) if not playerName then return end
   if not LeafVE_DB.pointHistory[playerName] then LeafVE_DB.pointHistory[playerName] = {} end
   table.insert(LeafVE_DB.pointHistory[playerName], {timestamp = Now(), type = pointType, amount = amount, reason = reason or "Unknown"})
