@@ -440,6 +440,7 @@ local function EnsureDB()
   if not LeafVE_GlobalDB.guildAltLinks then LeafVE_GlobalDB.guildAltLinks = {} end
   -- leaderChar stores the display name to show on the leaderboard (nil = use effective name)
   if LeafVE_DB.options.groupPoints == nil then LeafVE_DB.options.groupPoints = GROUP_POINTS end
+  if LeafVE_DB.options.loginPoints == nil then LeafVE_DB.options.loginPoints = 20 end
 end
 
 -- Returns the effective name for the current player: the linked main character name
@@ -980,10 +981,11 @@ function LeafVE:CheckDailyLogin()
   local today = DayKey()
   if not LeafVE_DB.loginTracking[effectiveName] then LeafVE_DB.loginTracking[effectiveName] = {} end
   if LeafVE_DB.loginTracking[effectiveName][today] then return end
-  self:AddPoints(effectiveName, "L", 20)
-  self:AddToHistory(effectiveName, "L", 20, "Daily login")
+  local loginPts = (LeafVE_DB.options and LeafVE_DB.options.loginPoints) or 20
+  self:AddPoints(effectiveName, "L", loginPts)
+  self:AddToHistory(effectiveName, "L", loginPts, "Daily login")
   LeafVE_DB.loginTracking[effectiveName][today] = true
-  Print("Daily login point awarded! (+20 L)")
+  Print(string.format("Daily login point awarded! (+%d L)", loginPts))
 end
 
 function LeafVE:UpdateGuildRosterCache()
@@ -6285,6 +6287,7 @@ local function BuildWelcomePanel(panel)
     fs:SetJustifyH("LEFT")
     fs:SetText(text)
     yOffset = yOffset - lineGap
+    return fs
   end
 
   local function AddDivider()
@@ -6309,37 +6312,37 @@ local function BuildWelcomePanel(panel)
   -- How to earn points
   AddSection("How to Earn Leaf Points", "Interface\\Icons\\INV_Misc_Coin_01")
 
-  AddLine("|cFFFFD700Daily Login|r  (+20 LP)", 10)
+  panel.welcomeLoginLine = AddLine(string.format("|cFFFFD700Daily Login|r  (+%d LP)", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.loginPoints) or 20), 10)
   AddLine("Log in each day to collect your ninja stipend. Chain logins unlock", 20)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
   yOffset = yOffset - 4
 
-  AddLine(string.format("|cFFFFD700Group Time|r  (+%d LP per online guildie)", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 10)
-  AddLine(string.format("Spend time in a party or raid with online guildmates. Earn %d LP", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 20)
+  panel.welcomeGroupHeader = AddLine(string.format("|cFFFFD700Group Time|r  (+%d LP per online guildie)", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 10)
+  panel.welcomeGroupDetail = AddLine(string.format("Spend time in a party or raid with online guildmates. Earn %d LP", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 20)
   AddLine("per online guildie per session. Offline members do not count.", 20)
   yOffset = yOffset - 4
 
   local soPoints = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
   local soMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
-  AddLine(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPoints), 10)
+  panel.welcomeSOHeader = AddLine(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPoints), 10)
   AddLine("Recognise a fellow shinobi's greatness! Both the giver and receiver", 20)
-  AddLine(string.format("earn %d LP. Use |cFF00CCFF/so PlayerName [reason]|r. You have", soPoints), 20)
-  AddLine(string.format("%d shoutouts per day, so spend them wisely!", soMax), 20)
+  panel.welcomeSODetail1 = AddLine(string.format("earn %d LP. Use |cFF00CCFF/so PlayerName [reason]|r. You have", soPoints), 20)
+  panel.welcomeSODetail2 = AddLine(string.format("%d shoutouts per day, so spend them wisely!", soMax), 20)
   yOffset = yOffset - 4
 
   local instPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
   local bossPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.bossPoints) or INSTANCE_BOSS_POINTS
-  AddLine(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss)", instPts, bossPts), 10)
+  panel.welcomeInstHeader = AddLine(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss)", instPts, bossPts), 10)
   AddLine("Complete dungeons, raids, or battlegrounds with a guildmate. Earn", 20)
-  AddLine(string.format("%d LP on completion plus %d LP for every named boss slain.", instPts, bossPts), 20)
+  panel.welcomeInstDetail = AddLine(string.format("%d LP on completion plus %d LP for every named boss slain.", instPts, bossPts), 20)
   AddLine("|cFF888888(Point values are configurable by guild officers.)|r", 20)
   yOffset = yOffset - 4
 
   local questPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
   local questMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
-  AddLine(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day)", questPts, questMax), 10)
-  AddLine(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", questPts), 20)
-  AddLine(string.format("up to %d quests per day. Every mission matters!", questMax), 20)
+  panel.welcomeQuestHeader = AddLine(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day)", questPts, questMax), 10)
+  panel.welcomeQuestDetail1 = AddLine(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", questPts), 20)
+  panel.welcomeQuestDetail2 = AddLine(string.format("up to %d quests per day. Every mission matters!", questMax), 20)
   yOffset = yOffset - 6
   AddDivider()
 
@@ -7641,6 +7644,55 @@ function LeafVE.UI:Refresh()
 
   elseif self.activeTab == "welcome" and self.panels.welcome then
     self.panels.welcome:Show()
+    self:RefreshWelcome()
+  end
+end
+
+function LeafVE.UI:RefreshWelcome()
+  EnsureDB()
+  local p = self.panels.welcome
+  if not p then return end
+  local opts = LeafVE_DB.options
+  local loginPts  = (opts and opts.loginPoints) or 20
+  local grpPts    = (opts and opts.groupPoints) or GROUP_POINTS
+  local soPts     = (opts and opts.shoutoutPoints) or 10
+  local soMax     = (opts and opts.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  local instPts   = (opts and opts.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
+  local bossPts   = (opts and opts.bossPoints) or INSTANCE_BOSS_POINTS
+  local questPts  = (opts and opts.questPoints) or QUEST_POINTS
+  local questMax  = (opts and opts.questMaxDaily) or QUEST_MAX_DAILY
+  if p.welcomeLoginLine then
+    p.welcomeLoginLine:SetText(string.format("|cFFFFD700Daily Login|r  (+%d LP)", loginPts))
+  end
+  if p.welcomeGroupHeader then
+    p.welcomeGroupHeader:SetText(string.format("|cFFFFD700Group Time|r  (+%d LP per online guildie)", grpPts))
+  end
+  if p.welcomeGroupDetail then
+    p.welcomeGroupDetail:SetText(string.format("Spend time in a party or raid with online guildmates. Earn %d LP", grpPts))
+  end
+  if p.welcomeSOHeader then
+    p.welcomeSOHeader:SetText(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPts))
+  end
+  if p.welcomeSODetail1 then
+    p.welcomeSODetail1:SetText(string.format("earn %d LP. Use |cFF00CCFF/so PlayerName [reason]|r. You have", soPts))
+  end
+  if p.welcomeSODetail2 then
+    p.welcomeSODetail2:SetText(string.format("%d shoutouts per day, so spend them wisely!", soMax))
+  end
+  if p.welcomeInstHeader then
+    p.welcomeInstHeader:SetText(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss)", instPts, bossPts))
+  end
+  if p.welcomeInstDetail then
+    p.welcomeInstDetail:SetText(string.format("%d LP on completion plus %d LP for every named boss slain.", instPts, bossPts))
+  end
+  if p.welcomeQuestHeader then
+    p.welcomeQuestHeader:SetText(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day)", questPts, questMax))
+  end
+  if p.welcomeQuestDetail1 then
+    p.welcomeQuestDetail1:SetText(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", questPts))
+  end
+  if p.welcomeQuestDetail2 then
+    p.welcomeQuestDetail2:SetText(string.format("up to %d quests per day. Every mission matters!", questMax))
   end
 end
 
