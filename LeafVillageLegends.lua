@@ -1017,11 +1017,12 @@ function LeafVE:GetGroupGuildies()
   if numMembers == 0 then return {} end
   for i = 1, numMembers do
     local unit = isRaid and "raid"..i or "party"..i
-    if UnitExists(unit) then local name = UnitName(unit) name = ShortName(name)
+    if UnitExists(unit) and UnitIsConnected(unit) then
+      local name = UnitName(unit) name = ShortName(name)
       local unitGuild = GetGuildInfo(unit)
       local isGuildie = (myGuild and unitGuild and unitGuild == myGuild)
         or self:IsKnownGuildie(name)
-      if name and isGuildie and UnitIsConnected(unit) then table.insert(guildies, name) end
+      if name and isGuildie then table.insert(guildies, name) end
     end
   end
   return guildies
@@ -5377,7 +5378,7 @@ local function BuildAdminPanel(panel)
   table.insert(syncCallbacks, sync11)
   yBase = yBase - gap
 
-  local _, _, syncGP = MakeNumberStepper(subFrame, "Group Points (per tick)", yBase,
+  local _, _, syncGP = MakeNumberStepper(subFrame, "Group Points (per guildie)", yBase,
     function() return LeafVE_DB.options.groupPoints or GROUP_POINTS end,
     function(v) LeafVE_DB.options.groupPoints = v end, 1, 100)
   table.insert(syncCallbacks, syncGP)
