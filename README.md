@@ -2,7 +2,7 @@
 
 **A comprehensive guild contribution tracker and gamification addon for World of Warcraft (Vanilla / Classic 1.12).**
 
-Leaf Village Legends transforms your guild experience by tracking member contributions, awarding badges, managing leaderboards, and fostering community engagement — all themed around the Naruto-inspired Leaf Village guild hierarchy.
+The Leaf Village Legends addon transforms our guild experience by tracking member contributions, awarding badges, managing leaderboards, and fostering community engagement — all themed around the Naruto-inspired Leaf Village guild hierarchy.
 
 ![Version](https://img.shields.io/badge/Version-10.7-green) ![Interface](https://img.shields.io/badge/Interface-1.12-blue) ![Language](https://img.shields.io/badge/Language-Lua-purple)
 
