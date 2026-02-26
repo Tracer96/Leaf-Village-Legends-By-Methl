@@ -1262,11 +1262,16 @@ function LeafVE:OnInstanceExit()
     local instCap = (LeafVE_DB.options and LeafVE_DB.options.instanceMaxDaily) or INSTANCE_MAX_DAILY
     local instPts = (LeafVE_DB.options and LeafVE_DB.options.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
     if instCap == 0 or tracked.completions < instCap then
-      tracked.completions = tracked.completions + 1
-      tracked.bosses = tracked.bosses + self.instanceBossesKilledThisRun
-      self:AddPoints(effectiveName, "G", instPts)
-      self:AddToHistory(effectiveName, "G", instPts, "Instance completion: "..(self.instanceZone or "Unknown"))
-      Print(string.format("Instance complete! +%d G (%d boss%s)", instPts, self.instanceBossesKilledThisRun, self.instanceBossesKilledThisRun ~= 1 and "es" or ""))
+      if self.instanceBossesKilledThisRun > 0 then
+        local scaledInstPts = instPts * self.instanceBossesKilledThisRun
+        tracked.completions = tracked.completions + 1
+        tracked.bosses = tracked.bosses + self.instanceBossesKilledThisRun
+        self:AddPoints(effectiveName, "G", scaledInstPts)
+        self:AddToHistory(effectiveName, "G", scaledInstPts, "Instance completion: "..(self.instanceZone or "Unknown"))
+        Print(string.format("Instance complete! +%d G (%d boss%s)", scaledInstPts, self.instanceBossesKilledThisRun, self.instanceBossesKilledThisRun ~= 1 and "es" or ""))
+      else
+        Print("Instance exited with no bosses slain. No completion points awarded.")
+      end
     end
   end
   self.instanceJoinedAt = nil
