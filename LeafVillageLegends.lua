@@ -6812,9 +6812,9 @@ local function BuildWelcomePanel(panel)
   panel.welcomeSODetail2 = AddLine(string.format("%d shoutouts per day, so spend them wisely!", soMax), 20)
   yOffset = yOffset - 4
 
-  panel.welcomeInstHeader = AddLine("|cFFFFD700Instance Runs|r  (+10 LP per dungeon boss, +25 LP per raid boss)", 10)
-  AddLine("Complete dungeons or raids with a guildmate. Earn", 20)
-  panel.welcomeInstDetail = AddLine("+10 dungeon completion, +25 raid completion (flat, not scaled).", 20)
+  panel.welcomeInstHeader = AddLine("|cFFFFD700Instance Runs|r  (+10 dungeon boss, +25 raid boss | +10 dungeon complete, +25 raid complete)", 10)
+  AddLine("Complete dungeons or raids with a guildmate. Earn boss kill points", 20)
+  panel.welcomeInstDetail = AddLine("plus a flat completion bonus. Boss and completion points are separate.", 20)
   yOffset = yOffset - 4
 
   local questMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
@@ -8273,6 +8273,7 @@ function LeafVE.UI:RefreshLiveHistory()
   local rowH = 18
   local yOff = -4
   local totalHeight = 0
+  local altRow = false
 
   for i = 1, count do
     local entry = allEntries[i]
@@ -8282,7 +8283,8 @@ function LeafVE.UI:RefreshLiveHistory()
     row:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, yOff)
 
     -- Alternating row background
-    if math.mod(i, 2) == 0 then
+    altRow = not altRow
+    if altRow then
       local bg = row:CreateTexture(nil, "BACKGROUND")
       bg:SetAllPoints(row)
       bg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
@@ -8355,10 +8357,10 @@ function LeafVE.UI:RefreshWelcome()
     p.welcomeSODetail2:SetText(string.format("%d shoutouts per day, so spend them wisely!", soMax))
   end
   if p.welcomeInstHeader then
-    p.welcomeInstHeader:SetText("|cFFFFD700Instance Runs|r  (+10 LP per dungeon boss, +25 LP per raid boss)")
+    p.welcomeInstHeader:SetText("|cFFFFD700Instance Runs|r  (+10 dungeon boss, +25 raid boss | +10 dungeon complete, +25 raid complete)")
   end
   if p.welcomeInstDetail then
-    p.welcomeInstDetail:SetText("+10 dungeon completion, +25 raid completion (flat, not scaled).")
+    p.welcomeInstDetail:SetText("plus a flat completion bonus. Boss and completion points are separate.")
   end
   if p.welcomeQuestHeader then
     p.welcomeQuestHeader:SetText(string.format("|cFFFFD700Quest Completions|r  (+10 LP, cap %d/day)", questMax))
