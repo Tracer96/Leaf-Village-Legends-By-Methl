@@ -469,6 +469,22 @@ local function GetEffectiveName()
   return me
 end
 
+-- Returns the main character name for any given player name by checking both
+-- the guild-wide alt links (received from other members) and local alt links.
+-- Returns nil if the name is not an alt (i.e. it is already a main or unknown).
+local function GetMainForPlayer(name)
+  if not name then return nil end
+  if LeafVE_GlobalDB then
+    if LeafVE_GlobalDB.guildAltLinks and LeafVE_GlobalDB.guildAltLinks[name] then
+      return LeafVE_GlobalDB.guildAltLinks[name]
+    end
+    if LeafVE_GlobalDB.altLinks and LeafVE_GlobalDB.altLinks[name] then
+      return LeafVE_GlobalDB.altLinks[name]
+    end
+  end
+  return nil
+end
+
 -- Returns the display name to use on the leaderboard for the current player.
 -- Honours the /lve setleaderchar setting, falling back to the effective name.
 local function GetLeaderboardName()
@@ -1019,11 +1035,12 @@ function LeafVE:CheckDailyLogin()
   if not me then return end
   -- Register this character on the account
   LeafVE_GlobalDB.registeredChars[me] = true
-  -- Pool login points under the effective (main) name for account-wide daily cap
+  -- Award login points to the effective (main) name but track the daily check
+  -- per actual character so each alt can earn login points once per day.
   local effectiveName = GetEffectiveName()
   local today = DayKey()
-  if not LeafVE_DB.loginTracking[effectiveName] then LeafVE_DB.loginTracking[effectiveName] = {} end
-  if LeafVE_DB.loginTracking[effectiveName][today] then return end
+  if not LeafVE_DB.loginTracking[me] then LeafVE_DB.loginTracking[me] = {} end
+  if LeafVE_DB.loginTracking[me][today] then return end
   local loginPts = (LeafVE_DB.options and LeafVE_DB.options.loginPoints) or 20
   -- Update login streak
   if not LeafVE_DB.loginStreaks[effectiveName] then
@@ -1043,7 +1060,7 @@ function LeafVE:CheckDailyLogin()
   if awarded and awarded > 0 then
     self:AddToHistory(effectiveName, "L", awarded, "Daily login")
   end
-  LeafVE_DB.loginTracking[effectiveName][today] = true
+  LeafVE_DB.loginTracking[me][today] = true
   if awarded and awarded > 0 then
     Print(string.format("Daily login point awarded! (+%d L)", awarded))
   end
@@ -1625,22 +1642,51 @@ function LeafVE:BroadcastLeaderboardData()
   end
   
   for name, _ in pairs(knownPlayers) do
-    -- Lifetime: prefer local alltime (direct witness), fall back to synced lboard data.
-    -- Skip entries with no points to avoid broadcasting zeros that could
-    -- overwrite correct data held by peers (defence-in-depth alongside the
-    -- higher-total-wins guard in ReceiveLeaderboardData).
-    local lpts = LeafVE_DB.alltime[name] or LeafVE_DB.lboard.alltime[name] or {L = 0, G = 0, S = 0}
-    if (lpts.L or 0) + (lpts.G or 0) + (lpts.S or 0) > 0 then
-      table.insert(data, string.format("L:%s:%d:%d:%d", name, lpts.L or 0, lpts.G or 0, lpts.S or 0))
-    end
-    
-    -- Weekly: prefer local aggregation, fall back to synced weekly data.
-    -- Skip entries with no points to avoid broadcasting zeros that could
-    -- overwrite correct data held by peers (defence-in-depth alongside the
-    -- higher-total-wins guard in ReceiveLeaderboardData).
-    local wpts = weekAgg[name] or syncedWeek[name]
-    if wpts and ((wpts.L or 0) + (wpts.G or 0) + (wpts.S or 0)) > 0 then
-      table.insert(data, string.format("W%s:%s:%d:%d:%d", wk, name, wpts.L or 0, wpts.G or 0, wpts.S or 0))
+    -- Skip alts: their points will be pooled onto the main's entry below.
+    if not GetMainForPlayer(name) then
+      -- Lifetime: prefer local alltime (direct witness), fall back to synced lboard data.
+      -- Pool any alt points onto this main entry before broadcasting.
+      -- Skip entries with no points to avoid broadcasting zeros that could
+      -- overwrite correct data held by peers (defence-in-depth alongside the
+      -- higher-total-wins guard in ReceiveLeaderboardData).
+      local lbase = LeafVE_DB.alltime[name] or LeafVE_DB.lboard.alltime[name] or {L = 0, G = 0, S = 0}
+      local lL, lG, lS = lbase.L or 0, lbase.G or 0, lbase.S or 0
+      for altName, _ in pairs(knownPlayers) do
+        local altMain = GetMainForPlayer(altName)
+        if altMain and Lower(altMain) == Lower(name) then
+          local altPts = LeafVE_DB.alltime[altName] or LeafVE_DB.lboard.alltime[altName] or {L = 0, G = 0, S = 0}
+          lL = lL + (altPts.L or 0)
+          lG = lG + (altPts.G or 0)
+          lS = lS + (altPts.S or 0)
+        end
+      end
+      if lL + lG + lS > 0 then
+        table.insert(data, string.format("L:%s:%d:%d:%d", name, lL, lG, lS))
+      end
+
+      -- Weekly: prefer local aggregation, fall back to synced weekly data.
+      -- Pool any alt weekly points onto this main entry before broadcasting.
+      -- Skip entries with no points to avoid broadcasting zeros that could
+      -- overwrite correct data held by peers (defence-in-depth alongside the
+      -- higher-total-wins guard in ReceiveLeaderboardData).
+      local wbase = weekAgg[name] or syncedWeek[name]
+      local wL = wbase and (wbase.L or 0) or 0
+      local wG = wbase and (wbase.G or 0) or 0
+      local wS = wbase and (wbase.S or 0) or 0
+      for altName, _ in pairs(knownPlayers) do
+        local altMain = GetMainForPlayer(altName)
+        if altMain and Lower(altMain) == Lower(name) then
+          local altWpts = weekAgg[altName] or syncedWeek[altName]
+          if altWpts then
+            wL = wL + (altWpts.L or 0)
+            wG = wG + (altWpts.G or 0)
+            wS = wS + (altWpts.S or 0)
+          end
+        end
+      end
+      if wL + wG + wS > 0 then
+        table.insert(data, string.format("W%s:%s:%d:%d:%d", wk, name, wL, wG, wS))
+      end
     end
   end
   
@@ -4459,46 +4505,102 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
     
     for _, guildInfo in pairs(memberSet) do
       local name = guildInfo.name
-      local pts
-      local localPts = localWeek[name]
-      local syncedPts = syncedWeek and syncedWeek[name]
-      if localPts and syncedPts then
-        local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
-        local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
-        pts = localTotal >= syncedTotal and localPts or syncedPts
-      elseif localPts then
-        pts = localPts
-      else
-        pts = syncedPts or {L = 0, G = 0, S = 0}
+      -- Skip alts: they will be pooled onto the main's entry
+      if not GetMainForPlayer(name) then
+        local pts
+        local localPts = localWeek[name]
+        local syncedPts = syncedWeek and syncedWeek[name]
+        if localPts and syncedPts then
+          local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
+          local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
+          pts = localTotal >= syncedTotal and localPts or syncedPts
+        elseif localPts then
+          pts = localPts
+        else
+          pts = syncedPts or {L = 0, G = 0, S = 0}
+        end
+        local totL = pts.L or 0
+        local totG = pts.G or 0
+        local totS = pts.S or 0
+        -- Add alt points for any alt that maps to this main
+        for _, altInfo in pairs(memberSet) do
+          local altName = altInfo.name
+          local altMain = GetMainForPlayer(altName)
+          if altMain and Lower(altMain) == Lower(name) then
+            local altLocalPts = localWeek[altName]
+            local altSyncedPts = syncedWeek and syncedWeek[altName]
+            local altPts
+            if altLocalPts and altSyncedPts then
+              local alocTotal = (altLocalPts.L or 0) + (altLocalPts.G or 0) + (altLocalPts.S or 0)
+              local asncTotal = (altSyncedPts.L or 0) + (altSyncedPts.G or 0) + (altSyncedPts.S or 0)
+              altPts = alocTotal >= asncTotal and altLocalPts or altSyncedPts
+            elseif altLocalPts then
+              altPts = altLocalPts
+            else
+              altPts = altSyncedPts or {L = 0, G = 0, S = 0}
+            end
+            totL = totL + (altPts.L or 0)
+            totG = totG + (altPts.G or 0)
+            totS = totS + (altPts.S or 0)
+          end
+        end
+        local total = totL + totG + totS
+        table.insert(leaders, {
+          name = name, total = total,
+          L = totL, G = totG, S = totS,
+          class = guildInfo.class or "Unknown"
+        })
       end
-      local total = (pts.L or 0) + (pts.G or 0) + (pts.S or 0)
-      table.insert(leaders, {
-        name = name, total = total,
-        L = pts.L or 0, G = pts.G or 0, S = pts.S or 0,
-        class = guildInfo.class or "Unknown"
-      })
     end
   else
     for _, guildInfo in pairs(memberSet) do
       local name = guildInfo.name
-      local pts
-      local localPts = LeafVE_DB.alltime[name]
-      local syncedPts = LeafVE_DB.lboard.alltime[name]
-      if localPts and syncedPts then
-        local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
-        local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
-        pts = localTotal >= syncedTotal and localPts or syncedPts
-      elseif localPts then
-        pts = localPts
-      else
-        pts = syncedPts or {L = 0, G = 0, S = 0}
+      -- Skip alts: they will be pooled onto the main's entry
+      if not GetMainForPlayer(name) then
+        local pts
+        local localPts = LeafVE_DB.alltime[name]
+        local syncedPts = LeafVE_DB.lboard.alltime[name]
+        if localPts and syncedPts then
+          local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
+          local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
+          pts = localTotal >= syncedTotal and localPts or syncedPts
+        elseif localPts then
+          pts = localPts
+        else
+          pts = syncedPts or {L = 0, G = 0, S = 0}
+        end
+        local totL = pts.L or 0
+        local totG = pts.G or 0
+        local totS = pts.S or 0
+        -- Add alt points for any alt that maps to this main
+        for _, altInfo in pairs(memberSet) do
+          local altName = altInfo.name
+          local altMain = GetMainForPlayer(altName)
+          if altMain and Lower(altMain) == Lower(name) then
+            local altLocalPts = LeafVE_DB.alltime[altName]
+            local altSyncedPts = LeafVE_DB.lboard.alltime[altName]
+            local altPts
+            if altLocalPts and altSyncedPts then
+              local alocTotal = (altLocalPts.L or 0) + (altLocalPts.G or 0) + (altLocalPts.S or 0)
+              local asncTotal = (altSyncedPts.L or 0) + (altSyncedPts.G or 0) + (altSyncedPts.S or 0)
+              altPts = alocTotal >= asncTotal and altLocalPts or altSyncedPts
+            elseif altLocalPts then
+              altPts = altLocalPts
+            else
+              altPts = altSyncedPts or {L = 0, G = 0, S = 0}
+            end
+            totL = totL + (altPts.L or 0)
+            totG = totG + (altPts.G or 0)
+            totS = totS + (altPts.S or 0)
+          end
+        end
+        local total = totL + totG + totS
+        table.insert(leaders, {
+          name = name, total = total,
+          L = totL, G = totG, S = totS,
+          class = guildInfo.class or "Unknown"
+        })
       end
-      local total = (pts.L or 0) + (pts.G or 0) + (pts.S or 0)
-      table.insert(leaders, {
-        name = name, total = total,
-        L = pts.L or 0, G = pts.G or 0, S = pts.S or 0,
-        class = guildInfo.class or "Unknown"
-      })
     end
   end
   
