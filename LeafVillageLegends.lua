@@ -20,14 +20,14 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "10.7"
+LeafVE.version = "10.8"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
 local SECONDS_PER_HOUR = 3600
 local GROUP_MIN_TIME = 300
 local GROUP_COOLDOWN = 900
-local GROUP_POINT_INTERVAL = 900
+local GROUP_POINT_INTERVAL = 1200
 local GUILD_ROSTER_CACHE_DURATION = 30
 local SHOUTOUT_MAX_PER_DAY = 2
 local LBOARD_RESYNC_COOLDOWN = 30  -- seconds between outgoing LBOARDREQ messages
@@ -35,14 +35,17 @@ local LBOARD_RESPOND_COOLDOWN = 30 -- seconds between responses to LBOARDREQ
 local SHOUT_SYNC_RESPOND_COOLDOWN = 30 -- seconds between shoutout history sync responses
 local DEFAULT_ACHIEVEMENT_POINTS = 10  -- fallback points per achievement when metadata is unavailable
 
-local INSTANCE_BOSS_POINTS = 10
-local INSTANCE_COMPLETION_POINTS = 5
+local INSTANCE_BOSS_POINTS = 10       -- dungeon boss
+local RAID_BOSS_POINTS = 25           -- raid boss
+local INSTANCE_COMPLETION_POINTS = 10 -- dungeon completion (flat)
+local RAID_COMPLETION_POINTS = 25     -- raid completion (flat)
 local INSTANCE_MIN_PRESENCE_PCT = 0.5  -- must be present for ≥50% of run time
 local INSTANCE_MAX_DAILY = 20
-local QUEST_POINTS = 1
+local QUEST_POINTS = 10
 local QUEST_MAX_DAILY = 10
 local LEAF_POINT_DAILY_CAP = 0
 local GROUP_POINTS = 10               -- points awarded per guild group tick
+local GROUP_POINTS_DAILY_CAP = 700    -- max group points per 24 hours
 
 local SEASON_REWARD_1 = 10
 local SEASON_REWARD_2 = 5
@@ -411,6 +414,7 @@ local function EnsureDB()
   if not LeafVE_DB.questTracking then LeafVE_DB.questTracking = {} end
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
+  if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
   if not LeafVE_DB.lboard.alltime then LeafVE_DB.lboard.alltime = {} end
@@ -1041,7 +1045,7 @@ function LeafVE:CheckDailyLogin()
   local today = DayKey()
   if not LeafVE_DB.loginTracking[me] then LeafVE_DB.loginTracking[me] = {} end
   if LeafVE_DB.loginTracking[me][today] then return end
-  local loginPts = (LeafVE_DB.options and LeafVE_DB.options.loginPoints) or 20
+  local loginPts = 20
   -- Update login streak
   if not LeafVE_DB.loginStreaks[effectiveName] then
     LeafVE_DB.loginStreaks[effectiveName] = {current = 0, lastLogin = nil}
@@ -1215,20 +1219,35 @@ function LeafVE:OnGroupUpdate()
   local groupHash = self:GetGroupHash(guildies)
   if not self.currentGroupStart or groupHash ~= self:GetGroupHash(self.currentGroupMembers) then
     self.currentGroupStart = Now() self.currentGroupMembers = guildies self.lastGroupAwardTick = nil
-    Print("Quest leaf points are now active! (grouped with: "..table.concat(guildies, ", ")..")")
+    Print("Group leaf points are now active! (grouped with: "..table.concat(guildies, ", ")..")")
     return
   end
   EnsureDB()
-  local groupInterval = (LeafVE_DB.options and LeafVE_DB.options.groupPointInterval) or GROUP_POINT_INTERVAL
+  local groupInterval = GROUP_POINT_INTERVAL
   local currentTick = math.floor(Now() / groupInterval)
   local lastAwardedTick = self.lastGroupAwardTick or -1
   if currentTick > lastAwardedTick and self.currentGroupStart and (Now() - self.currentGroupStart) >= groupInterval then
     local playerName = ShortName(UnitName("player"))
     if playerName then
-      local pointsPerGuildie = (LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS
+      local pointsPerGuildie = GROUP_POINTS
+      -- Enforce daily cap for group points
+      local today = DayKey()
+      if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
+      if not LeafVE_DB.groupPointsToday[playerName] then LeafVE_DB.groupPointsToday[playerName] = {} end
+      local todayData = LeafVE_DB.groupPointsToday[playerName]
+      if todayData.date ~= today then
+        todayData.date = today
+        todayData.earned = 0
+      end
+      if GROUP_POINTS_DAILY_CAP > 0 and todayData.earned >= GROUP_POINTS_DAILY_CAP then
+        self.lastGroupAwardTick = currentTick
+        Print("Group point daily cap reached ("..GROUP_POINTS_DAILY_CAP.." LP). No more group points today.")
+        return
+      end
       local points = pointsPerGuildie * numGuildies
       local awarded = self:AddPoints(playerName, "G", points)
       if awarded and awarded > 0 then
+        todayData.earned = (todayData.earned or 0) + awarded
         self:AddToHistory(playerName, "G", awarded, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
         LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
         self:CheckBadgeMilestones(playerName)
@@ -1310,6 +1329,7 @@ function LeafVE:OnZoneChanged()
       self.instanceZone = zone
       self.instanceHasGuildie = false
       self.instanceBossesKilledThisRun = 0
+      self.instanceIsRaid = (instanceType == "raid")
       local guildies = self:GetGroupGuildies()
       if table.getn(guildies) > 0 then
         self.instanceHasGuildie = true
@@ -1345,11 +1365,10 @@ function LeafVE:OnInstanceExit()
     end
     local tracked = LeafVE_DB.instanceTracking[me][today]
     local instCap = (LeafVE_DB.options and LeafVE_DB.options.instanceMaxDaily) or INSTANCE_MAX_DAILY
-    local instPts = (LeafVE_DB.options and LeafVE_DB.options.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
+    local instPts = self.instanceIsRaid and RAID_COMPLETION_POINTS or INSTANCE_COMPLETION_POINTS
     if instCap == 0 or tracked.completions < instCap then
       if self.instanceBossesKilledThisRun > 0 then
-        local scaledInstPts = instPts * self.instanceBossesKilledThisRun
-        local awarded = self:AddPoints(me, "G", scaledInstPts)
+        local awarded = self:AddPoints(me, "G", instPts)
         if awarded and awarded > 0 then
           tracked.completions = tracked.completions + 1
           tracked.bosses = tracked.bosses + self.instanceBossesKilledThisRun
@@ -1365,6 +1384,7 @@ function LeafVE:OnInstanceExit()
   self.instanceZone = nil
   self.instanceHasGuildie = false
   self.instanceBossesKilledThisRun = 0
+  self.instanceIsRaid = false
 end
 
 function LeafVE:OnBossKillChat(msg)
@@ -1376,7 +1396,7 @@ function LeafVE:OnBossKillChat(msg)
   if not me then return end
   EnsureDB()
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
-  local bossPts = (LeafVE_DB.options and LeafVE_DB.options.bossPoints) or INSTANCE_BOSS_POINTS
+  local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
   local awarded = self:AddPoints(me, "G", bossPts)
   if awarded and awarded > 0 then
     self:AddToHistory(me, "G", awarded, "Boss kill: "..bossName)
@@ -1433,7 +1453,7 @@ function LeafVE:OnQuestTurnedIn()
     LeafVE_DB.questTracking[me][today] = 0
   end
   local questCap = (LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
-  local questPts = (LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
+  local questPts = QUEST_POINTS
   if questCap ~= 0 and LeafVE_DB.questTracking[me][today] >= questCap then
     self:CacheQuestLog()
     return
@@ -1868,6 +1888,29 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   sender = ShortName(sender)
   if not sender then return end
   
+  -- Handle version check request
+  if message == "VERSIONREQ" then
+    local me = ShortName(UnitName("player"))
+    if me and sender ~= me then
+      SendAddonMessage("LeafVE", "VERSIONRSP:"..LeafVE.version, "GUILD")
+    end
+    return
+  end
+
+  -- Handle version check response
+  if string.sub(message, 1, 11) == "VERSIONRSP:" then
+    local ver = string.sub(message, 12)
+    if not LeafVE.versionResponses then LeafVE.versionResponses = {} end
+    LeafVE.versionResponses[sender] = ver
+    -- Auto-nag if someone has a higher version than us
+    local myVer = LeafVE.version
+    if not LeafVE.shownVersionNag and ver > myVer then
+      LeafVE.shownVersionNag = true
+      Print("|cFFFFAA00⚠ Your Leaf Village Legends addon is outdated! You have v"..myVer..", latest is v"..ver..". Please update!|r")
+    end
+    return
+  end
+
   -- Handle on-demand resync request
   if message == "LBOARDREQ" then
     local me = ShortName(UnitName("player"))
@@ -2445,6 +2488,152 @@ end
 -- UI SYSTEM - ALL TABS
 -------------------------------------------------
 LeafVE.UI = LeafVE.UI or { activeTab = "me" }
+
+-- C_Timer.After polyfill for WoW 1.12 (uses OnUpdate on a hidden frame)
+if not C_Timer_After then
+  C_Timer_After = function(delay, func)
+    local ticker = CreateFrame("Frame")
+    local elapsed = 0
+    ticker:SetScript("OnUpdate", function()
+      elapsed = elapsed + arg1
+      if elapsed >= delay then
+        ticker:SetScript("OnUpdate", nil)
+        ticker:Hide()
+        func()
+      end
+    end)
+    ticker:Show()
+  end
+end
+
+function LeafVE:ShowVersionResults()
+  local myVer = LeafVE.version
+  -- Build a sorted list of all known guild members
+  local results = {}
+  -- Add self
+  local me = ShortName(UnitName("player"))
+  if me then
+    table.insert(results, {name = me, ver = myVer, status = "self"})
+  end
+  -- Add responses received
+  if LeafVE.versionResponses then
+    for name, ver in pairs(LeafVE.versionResponses) do
+      if name ~= me then
+        local status
+        if ver == myVer then
+          status = "ok"
+        elseif ver < myVer then
+          status = "old"
+        else
+          status = "newer"
+        end
+        table.insert(results, {name = name, ver = ver, status = status})
+      end
+    end
+  end
+  table.sort(results, function(a, b) return a.name < b.name end)
+
+  -- Create popup frame if needed
+  if not LeafVE.versionFrame then
+    local f = CreateFrame("Frame", "LeafVE_VersionFrame", UIParent)
+    f:SetWidth(300)
+    f:SetHeight(400)
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    f:SetFrameStrata("DIALOG")
+    f:SetBackdrop({
+      bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = 16, edgeSize = 16,
+      insets = {left = 4, right = 4, top = 4, bottom = 4}
+    })
+    f:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
+    f:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.8)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function() f:StartMoving() end)
+    f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", f, "TOP", 0, -12)
+    title:SetText("|cFFFFD700Addon Version Check|r")
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, f)
+    scrollFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -40)
+    scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 8)
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseWheel", function()
+      local cur = scrollFrame:GetVerticalScroll()
+      local mx = scrollFrame:GetVerticalScrollRange()
+      local ns = cur - (arg1 * 20)
+      if ns < 0 then ns = 0 end
+      if ns > mx then ns = mx end
+      scrollFrame:SetVerticalScroll(ns)
+    end)
+
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetWidth(270)
+    scrollChild:SetHeight(1)
+    scrollFrame:SetScrollChild(scrollChild)
+
+    f.scrollChild = scrollChild
+    f.resultRows = {}
+    LeafVE.versionFrame = f
+  end
+
+  local f = LeafVE.versionFrame
+  local sc = f.scrollChild
+
+  -- Clear old rows
+  for _, row in ipairs(f.resultRows) do row:Hide() end
+  f.resultRows = {}
+
+  local yOff = -4
+  for i, entry in ipairs(results) do
+    local row = CreateFrame("Frame", nil, sc)
+    row:SetWidth(270)
+    row:SetHeight(20)
+    row:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, yOff)
+
+    local icon = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    icon:SetPoint("LEFT", row, "LEFT", 4, 0)
+    icon:SetWidth(20)
+    if entry.status == "ok" or entry.status == "self" then
+      icon:SetText("|cFF00FF00✔|r")
+    elseif entry.status == "old" then
+      icon:SetText("|cFFFF4444✘|r")
+    else
+      icon:SetText("|cFFAAAAAA⚠|r")
+    end
+
+    local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    nameFS:SetPoint("LEFT", row, "LEFT", 28, 0)
+    nameFS:SetWidth(140)
+    nameFS:SetJustifyH("LEFT")
+    nameFS:SetText(entry.name or "")
+
+    local verFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    verFS:SetPoint("LEFT", row, "LEFT", 172, 0)
+    verFS:SetWidth(90)
+    verFS:SetJustifyH("LEFT")
+    if entry.status == "old" then
+      verFS:SetText("|cFFFF4444v"..(entry.ver or "?").."  (outdated)|r")
+    elseif entry.status == "self" then
+      verFS:SetText("|cFFFFD700v"..(entry.ver or "?").."  (you)|r")
+    else
+      verFS:SetText("|cFF00FF00v"..(entry.ver or "?").."|r")
+    end
+
+    table.insert(f.resultRows, row)
+    yOff = yOff - 20
+  end
+  sc:SetHeight(math.max(math.abs(yOff) + 8, 1))
+  f:Show()
+end
+
 
 -- Achievement icon mapping
 local ACHIEVEMENT_ICONS = {
@@ -4985,6 +5174,96 @@ end)
   self.panels.roster.scrollBar:SetValue(0)
 end
 
+local function BuildLiveHistoryPanel(panel)
+  -- Block header background
+  local headerBG = panel:CreateTexture(nil, "BACKGROUND")
+  headerBG:SetPoint("TOP", panel, "TOP", -15, -10)
+  headerBG:SetWidth(420)
+  headerBG:SetHeight(50)
+  headerBG:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  headerBG:SetVertexColor(0.15, 0.15, 0.18, 0.9)
+
+  local accentTop = panel:CreateTexture(nil, "BORDER")
+  accentTop:SetPoint("TOPLEFT", headerBG, "TOPLEFT", 0, 0)
+  accentTop:SetPoint("TOPRIGHT", headerBG, "TOPRIGHT", 0, 0)
+  accentTop:SetHeight(3)
+  accentTop:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  accentTop:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+
+  local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  h:SetPoint("TOP", headerBG, "TOP", 0, -10)
+  h:SetText("|cFFFFD700Guild Point History|r")
+
+  local subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  subtitle:SetPoint("TOP", h, "BOTTOM", 0, -3)
+  subtitle:SetText("|cFF888888Live feed of all guild member point transactions|r")
+
+  local scrollFrame = CreateFrame("ScrollFrame", nil, panel)
+  scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -75)
+  scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -30, 12)
+  scrollFrame:EnableMouse(true)
+  scrollFrame:EnableMouseWheel(true)
+
+  local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+  scrollChild:SetWidth(500)
+  scrollChild:SetHeight(1)
+  scrollFrame:SetScrollChild(scrollChild)
+
+  scrollFrame:SetScript("OnMouseWheel", function()
+    local current = scrollFrame:GetVerticalScroll()
+    local maxScroll = scrollFrame:GetVerticalScrollRange()
+    local newScroll = current - (arg1 * 40)
+    if newScroll < 0 then newScroll = 0 end
+    if newScroll > maxScroll then newScroll = maxScroll end
+    scrollFrame:SetVerticalScroll(newScroll)
+  end)
+
+  local scrollBar = CreateFrame("Slider", nil, panel)
+  scrollBar:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -75)
+  scrollBar:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, 12)
+  scrollBar:SetWidth(16)
+  scrollBar:SetOrientation("VERTICAL")
+  scrollBar:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+  scrollBar:SetMinMaxValues(0, 100)
+  scrollBar:SetValue(0)
+
+  local thumb = scrollBar:GetThumbTexture()
+  thumb:SetWidth(16)
+  thumb:SetHeight(24)
+
+  scrollBar:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 8, edgeSize = 8,
+    insets = {left = 2, right = 2, top = 2, bottom = 2}
+  })
+  scrollBar:SetBackdropColor(0, 0, 0, 0.3)
+  scrollBar:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.8)
+
+  scrollBar:SetScript("OnValueChanged", function()
+    local value = scrollBar:GetValue()
+    local maxScroll = scrollFrame:GetVerticalScrollRange()
+    if maxScroll > 0 then
+      scrollFrame:SetVerticalScroll((value / 100) * maxScroll)
+    end
+  end)
+
+  scrollFrame:SetScript("OnVerticalScroll", function()
+    local maxScroll = scrollFrame:GetVerticalScrollRange()
+    if maxScroll > 0 then
+      local current = scrollFrame:GetVerticalScroll()
+      scrollBar:SetValue((current / maxScroll) * 100)
+    else
+      scrollBar:SetValue(0)
+    end
+  end)
+
+  panel.scrollFrame = scrollFrame
+  panel.scrollChild = scrollChild
+  panel.scrollBar = scrollBar
+  panel.historyEntries = {}
+end
+
 local function BuildHistoryPanel(panel)
   -- Block header background
   local headerBG = panel:CreateTexture(nil, "BACKGROUND")
@@ -5529,36 +5808,28 @@ local function BuildAdminPanel(panel)
   -- Collect all Sync callbacks so the Reset button can refresh all displays
   local syncCallbacks = {}
 
-  -- Section: Point Values
+  -- Section: Point Values (read-only, hard-coded)
   local pvSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   pvSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  pvSection:SetText("|cFF2DD35CLeaf Point Values|r")
-  yBase = yBase - 28
+  pvSection:SetText("|cFF2DD35CPoint Values (Hard-Coded)|r")
+  yBase = yBase - 24
 
-  local hint = subFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  hint:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  hint:SetText("|cFF888888(Daily caps: set to 0 for unlimited)|r")
-  hint:SetWidth(430)
-  hint:SetJustifyH("LEFT")
-  yBase = yBase - 22
-
-  local _, _, sync1 = MakeNumberStepper(subFrame, "Boss Kill Points", yBase,
-    function() return LeafVE_DB.options.bossPoints or INSTANCE_BOSS_POINTS end,
-    function(v) LeafVE_DB.options.bossPoints = v end, 1, 100)
-  table.insert(syncCallbacks, sync1)
-  yBase = yBase - gap
-
-  local _, _, sync2 = MakeNumberStepper(subFrame, "Instance Completion Points", yBase,
-    function() return LeafVE_DB.options.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS end,
-    function(v) LeafVE_DB.options.instanceCompletionPoints = v end, 1, 100)
-  table.insert(syncCallbacks, sync2)
-  yBase = yBase - gap
-
-  local _, _, sync3 = MakeNumberStepper(subFrame, "Quest Completion Points", yBase,
-    function() return LeafVE_DB.options.questPoints or QUEST_POINTS end,
-    function(v) LeafVE_DB.options.questPoints = v end, 1, 100)
-  table.insert(syncCallbacks, sync3)
-  yBase = yBase - gap
+  local pvRules = {
+    "• Group Time: 10 LP per guildie every 20 min (cap: 700/day)",
+    "• Dungeon Boss: 10 LP  |  Raid Boss: 25 LP",
+    "• Dungeon Complete: 10 LP  |  Raid Complete: 25 LP",
+    "• Quest Turn-In: 10 LP (requires guildie in group)",
+    "• Daily Login: 20 LP",
+  }
+  for _, ruleText in ipairs(pvRules) do
+    local ruleFS = subFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    ruleFS:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 18, yBase)
+    ruleFS:SetWidth(420)
+    ruleFS:SetJustifyH("LEFT")
+    ruleFS:SetText("|cFFCCCCCC"..ruleText.."|r")
+    yBase = yBase - 18
+  end
+  yBase = yBase - 8
 
   -- Divider
   local div2 = subFrame:CreateTexture(nil, "ARTWORK")
@@ -5574,19 +5845,13 @@ local function BuildAdminPanel(panel)
   dcSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
   dcSection:SetText("|cFF2DD35CDaily Caps (0 = unlimited)|r")
   yBase = yBase - 28
-  
-  local _, _, syncDailyCap = MakeNumberStepper(subFrame, "Leaf Points Daily Cap", yBase,
-    function() return LeafVE_DB.options.leafPointDailyCap or LEAF_POINT_DAILY_CAP end,
-    function(v) LeafVE_DB.options.leafPointDailyCap = v end, 0, 9999)
-  table.insert(syncCallbacks, syncDailyCap)
-  yBase = yBase - gap
-  
+
   local _, _, syncQuestCap = MakeNumberStepper(subFrame, "Quest Points Daily Cap", yBase,
     function() return LeafVE_DB.options.questMaxDaily or QUEST_MAX_DAILY end,
     function(v) LeafVE_DB.options.questMaxDaily = v end, 0, 999)
   table.insert(syncCallbacks, syncQuestCap)
   yBase = yBase - gap
-  
+
   local _, _, syncInstCap = MakeNumberStepper(subFrame, "Instance Completions Daily Cap", yBase,
     function() return LeafVE_DB.options.instanceMaxDaily or INSTANCE_MAX_DAILY end,
     function(v) LeafVE_DB.options.instanceMaxDaily = v end, 0, 999)
@@ -5647,17 +5912,6 @@ local function BuildAdminPanel(panel)
   table.insert(syncCallbacks, sync11)
   yBase = yBase - gap
 
-  local _, _, syncGPI = MakeNumberStepper(subFrame, "Group Point Interval (min)", yBase,
-    function() return math.floor((LeafVE_DB.options.groupPointInterval or GROUP_POINT_INTERVAL) / 60) end,
-    function(v) LeafVE_DB.options.groupPointInterval = v * 60 end, 1, 60)
-  table.insert(syncCallbacks, syncGPI)
-  yBase = yBase - gap
-
-  local _, _, syncGP = MakeNumberStepper(subFrame, "Group Points (per guildie)", yBase,
-    function() return LeafVE_DB.options.groupPoints or GROUP_POINTS end,
-    function(v) LeafVE_DB.options.groupPoints = v end, 1, 100)
-  table.insert(syncCallbacks, syncGP)
-  yBase = yBase - gap
 
   -- Divider
   local divSR = subFrame:CreateTexture(nil, "ARTWORK")
@@ -5714,19 +5968,13 @@ local function BuildAdminPanel(panel)
   saveBroadcastBtn:SetScript("OnClick", function()
     local opts = LeafVE_DB.options
     local serialized = string.format(
-      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,leafPointDailyCap=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,groupPointInterval=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
-      opts.bossPoints or INSTANCE_BOSS_POINTS,
-      opts.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS,
-      opts.questPoints or QUEST_POINTS,
-      opts.leafPointDailyCap or LEAF_POINT_DAILY_CAP,
+      "questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
       opts.questMaxDaily or QUEST_MAX_DAILY,
       opts.instanceMaxDaily or INSTANCE_MAX_DAILY,
       opts.shoutoutPoints or 10,
       opts.shoutoutMaxDaily or SHOUTOUT_MAX_PER_DAY,
       opts.groupMinTime or GROUP_MIN_TIME,
       opts.groupCooldown or GROUP_COOLDOWN,
-      opts.groupPoints or GROUP_POINTS,
-      opts.groupPointInterval or GROUP_POINT_INTERVAL,
       opts.seasonReward1 or SEASON_REWARD_1,
       opts.seasonReward2 or SEASON_REWARD_2,
       opts.seasonReward3 or SEASON_REWARD_3,
@@ -5746,18 +5994,12 @@ local function BuildAdminPanel(panel)
   resetBtn:SetText("Reset to Defaults")
   SkinButtonAccent(resetBtn)
   resetBtn:SetScript("OnClick", function()
-    LeafVE_DB.options.bossPoints                = INSTANCE_BOSS_POINTS
-    LeafVE_DB.options.instanceCompletionPoints  = INSTANCE_COMPLETION_POINTS
-    LeafVE_DB.options.questPoints               = QUEST_POINTS
-    LeafVE_DB.options.leafPointDailyCap         = LEAF_POINT_DAILY_CAP
     LeafVE_DB.options.questMaxDaily             = QUEST_MAX_DAILY
     LeafVE_DB.options.instanceMaxDaily          = INSTANCE_MAX_DAILY
     LeafVE_DB.options.shoutoutPoints            = 10
     LeafVE_DB.options.shoutoutMaxDaily          = SHOUTOUT_MAX_PER_DAY
     LeafVE_DB.options.groupMinTime              = GROUP_MIN_TIME
     LeafVE_DB.options.groupCooldown             = GROUP_COOLDOWN
-    LeafVE_DB.options.groupPoints               = GROUP_POINTS
-    LeafVE_DB.options.groupPointInterval        = GROUP_POINT_INTERVAL
     LeafVE_DB.options.seasonReward1             = SEASON_REWARD_1
     LeafVE_DB.options.seasonReward2             = SEASON_REWARD_2
     LeafVE_DB.options.seasonReward3             = SEASON_REWARD_3
@@ -5769,6 +6011,26 @@ local function BuildAdminPanel(panel)
   end)
   yBase = yBase - 44
 
+  -- Check Addon Versions button
+  local checkVerBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  checkVerBtn:SetWidth(160)
+  checkVerBtn:SetHeight(22)
+  checkVerBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 10)
+  checkVerBtn:SetText("Check Addon Versions")
+  SkinButtonAccent(checkVerBtn)
+  checkVerBtn:SetScript("OnClick", function()
+    -- Reset response table and send request
+    LeafVE.versionResponses = {}
+    LeafVE.versionCheckTime = Now()
+    SendAddonMessage("LeafVE", "VERSIONREQ", "GUILD")
+    -- Open the version results popup after a short delay
+    C_Timer_After(5, function()
+      LeafVE:ShowVersionResults()
+    end)
+    Print("Version check sent to guild. Results will appear in 5 seconds.")
+  end)
+  yBase = yBase - 44
+
   -- Divider
   local div3 = subFrame:CreateTexture(nil, "ARTWORK")
   div3:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
@@ -5777,8 +6039,6 @@ local function BuildAdminPanel(panel)
   div3:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
   div3:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
   yBase = yBase - 18
-
-  -- Section: Testing
   local testSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   testSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
   testSection:SetText("|cFF2DD35CTesting|r")
@@ -6524,13 +6784,13 @@ local function BuildWelcomePanel(panel)
   -- How to earn points
   AddSection("How to Earn Leaf Points", "Interface\\Icons\\INV_Misc_Coin_01")
 
-  panel.welcomeLoginLine = AddLine(string.format("|cFFFFD700Daily Login|r  (+%d LP)", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.loginPoints) or 20), 10)
+  panel.welcomeLoginLine = AddLine("|cFFFFD700Daily Login|r  (+20 LP)", 10)
   AddLine("Log in each day to collect your ninja stipend. Chain logins unlock", 20)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
   yOffset = yOffset - 4
 
-  panel.welcomeGroupHeader = AddLine(string.format("|cFFFFD700Group Time|r  (+%d LP per online guildie)", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 10)
-  panel.welcomeGroupDetail = AddLine(string.format("Spend time in a party or raid with online guildmates. Earn %d LP", (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS), 20)
+  panel.welcomeGroupHeader = AddLine("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes (cap: 700/day))", 10)
+  panel.welcomeGroupDetail = AddLine("Spend time in a party or raid with online guildmates. Earn 10 LP", 20)
   AddLine("per online guildie per session. Offline members do not count.", 20)
   yOffset = yOffset - 4
 
@@ -6542,18 +6802,14 @@ local function BuildWelcomePanel(panel)
   panel.welcomeSODetail2 = AddLine(string.format("%d shoutouts per day, so spend them wisely!", soMax), 20)
   yOffset = yOffset - 4
 
-  local instPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
-  local bossPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.bossPoints) or INSTANCE_BOSS_POINTS
-  panel.welcomeInstHeader = AddLine(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss)", instPts, bossPts), 10)
-  AddLine("Complete dungeons, raids, or battlegrounds with a guildmate. Earn", 20)
-  panel.welcomeInstDetail = AddLine(string.format("%d LP on completion plus %d LP for every named boss slain.", instPts, bossPts), 20)
-  AddLine("|cFF888888(Point values are configurable by guild officers.)|r", 20)
+  panel.welcomeInstHeader = AddLine("|cFFFFD700Instance Runs|r  (+10 LP per dungeon boss, +25 LP per raid boss)", 10)
+  AddLine("Complete dungeons or raids with a guildmate. Earn", 20)
+  panel.welcomeInstDetail = AddLine("+10 dungeon completion, +25 raid completion (flat, not scaled).", 20)
   yOffset = yOffset - 4
 
-  local questPts = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
   local questMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
-  panel.welcomeQuestHeader = AddLine(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day)", questPts, questMax), 10)
-  panel.welcomeQuestDetail1 = AddLine(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", questPts), 20)
+  panel.welcomeQuestHeader = AddLine(string.format("|cFFFFD700Quest Completions|r  (+10 LP, cap %d/day)", questMax), 10)
+  panel.welcomeQuestDetail1 = AddLine("Turn in quests while grouped with a guildmate to earn 10 LP each,", 20)
   panel.welcomeQuestDetail2 = AddLine(string.format("up to %d quests per day. Every mission matters!", questMax), 20)
   yOffset = yOffset - 6
   AddDivider()
@@ -7440,6 +7696,10 @@ function LeafVE.UI:Build()
   self.tabAlts = TabButton(f, "Alts", "LeafVE_TabAlts")
   self.tabAlts:SetPoint("LEFT", self.tabAdmin, "RIGHT", 4, 0)
   self.tabAlts:SetWidth(40)
+
+  self.tabLiveHistory = TabButton(f, "Live History", "LeafVE_TabLiveHistory")
+  self.tabLiveHistory:SetPoint("LEFT", self.tabAlts, "RIGHT", 4, 0)
+  self.tabLiveHistory:SetWidth(80)
   
   self.inset = CreateInset(f)
   self.inset:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -80)
@@ -7499,6 +7759,10 @@ function LeafVE.UI:Build()
   self.panels.alts = CreateFrame("Frame", nil, self.left)
   self.panels.alts:SetAllPoints(self.left)
   BuildAltsPanel(self.panels.alts)
+
+  self.panels.liveHistory = CreateFrame("Frame", nil, self.left)
+  self.panels.liveHistory:SetAllPoints(self.left)
+  BuildLiveHistoryPanel(self.panels.liveHistory)
 
   self.panels.welcome = CreateFrame("Frame", nil, self.left)
   self.panels.welcome:SetAllPoints(self.left)
@@ -7564,6 +7828,11 @@ function LeafVE.UI:Build()
     self:Refresh()
   end)
 
+  self.tabLiveHistory:SetScript("OnClick", function()
+    self.activeTab = "liveHistory"
+    self:Refresh()
+  end)
+
   self.tabWelcome:SetScript("OnClick", function()
     self.activeTab = "welcome"
     self:Refresh()
@@ -7587,6 +7856,7 @@ function LeafVE.UI:Build()
   self.panels.options:Hide()
   self.panels.admin:Hide()
   self.panels.alts:Hide()
+  self.panels.liveHistory:Hide()
   self.panels.welcome:Hide()
   self.panels.join:Hide()
   
@@ -7621,7 +7891,7 @@ function LeafVE.UI:Refresh()
     self.activeTab = "me"
   end
 
-  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabShoutouts, self.tabLeaderWeek, self.tabLeaderLife, self.tabBadges, self.tabAchievements, self.tabHistory, self.tabOptions, self.tabAlts}
+  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabShoutouts, self.tabLeaderWeek, self.tabLeaderLife, self.tabBadges, self.tabAchievements, self.tabHistory, self.tabOptions, self.tabAlts, self.tabLiveHistory}
   if hasAccess then
     for _, tab in ipairs(accessTabs) do
       if tab then tab:Show() end
@@ -7941,10 +8211,111 @@ function LeafVE.UI:Refresh()
     self.panels.alts:Show()
     self:RefreshAlts()
 
+  elseif self.activeTab == "liveHistory" and self.panels.liveHistory then
+    self.panels.liveHistory:Show()
+    self:RefreshLiveHistory()
+
   elseif self.activeTab == "welcome" and self.panels.welcome then
     self.panels.welcome:Show()
     self:RefreshWelcome()
   end
+end
+
+function LeafVE.UI:RefreshLiveHistory()
+  EnsureDB()
+  local p = self.panels.liveHistory
+  if not p then return end
+  local scrollChild = p.scrollChild
+  if not scrollChild then return end
+
+  -- Collect all entries from all players, merged
+  local allEntries = {}
+  for pName, entries in pairs(LeafVE_DB.pointHistory) do
+    if type(entries) == "table" then
+      for _, entry in ipairs(entries) do
+        local merged = {}
+        merged.playerName = pName
+        merged.timestamp = entry.timestamp or 0
+        merged.amount = entry.amount or 0
+        merged.reason = entry.reason or ""
+        merged.dateStr = entry.dateStr or ""
+        table.insert(allEntries, merged)
+      end
+    end
+  end
+
+  -- Sort by timestamp descending (newest first)
+  table.sort(allEntries, function(a, b) return a.timestamp > b.timestamp end)
+
+  -- Cap at 500 entries
+  local maxEntries = 500
+  local count = table.getn(allEntries)
+  if count > maxEntries then count = maxEntries end
+
+  -- Clear existing rows
+  if p.historyEntries then
+    for _, row in ipairs(p.historyEntries) do
+      row:Hide()
+    end
+  end
+  p.historyEntries = {}
+
+  local rowH = 18
+  local yOff = -4
+  local totalHeight = 0
+
+  for i = 1, count do
+    local entry = allEntries[i]
+    local row = CreateFrame("Frame", nil, scrollChild)
+    row:SetWidth(scrollChild:GetWidth() or 500)
+    row:SetHeight(rowH)
+    row:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, yOff)
+
+    -- Alternating row background
+    if math.mod(i, 2) == 0 then
+      local bg = row:CreateTexture(nil, "BACKGROUND")
+      bg:SetAllPoints(row)
+      bg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+      bg:SetVertexColor(0.1, 0.1, 0.12, 0.5)
+    end
+
+    -- Date/time
+    local dateFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    dateFS:SetPoint("LEFT", row, "LEFT", 4, 0)
+    dateFS:SetWidth(90)
+    dateFS:SetJustifyH("LEFT")
+    dateFS:SetText("|cFF888888"..(entry.dateStr or "").."  |r")
+
+    -- Player name
+    local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    nameFS:SetPoint("LEFT", row, "LEFT", 98, 0)
+    nameFS:SetWidth(80)
+    nameFS:SetJustifyH("LEFT")
+    nameFS:SetText("|cFF00CCFF"..(entry.playerName or "").."  |r")
+
+    -- Amount
+    local amtFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    amtFS:SetPoint("LEFT", row, "LEFT", 182, 0)
+    amtFS:SetWidth(55)
+    amtFS:SetJustifyH("LEFT")
+    local amtColor = (entry.amount and entry.amount > 0) and "|cFF2DD35C" or "|cFFFF4444"
+    amtFS:SetText(amtColor.."+"..tostring(entry.amount or 0).." LP|r")
+
+    -- Reason
+    local reasonFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    reasonFS:SetPoint("LEFT", row, "LEFT", 240, 0)
+    reasonFS:SetWidth(230)
+    reasonFS:SetJustifyH("LEFT")
+    reasonFS:SetText(entry.reason or "")
+
+    table.insert(p.historyEntries, row)
+    yOff = yOff - rowH
+    totalHeight = totalHeight + rowH
+  end
+
+  scrollChild:SetHeight(math.max(totalHeight + 8, 1))
+  p.scrollFrame:SetVerticalScroll(0)
+  if p.scrollBar then p.scrollBar:SetValue(0) end
 end
 
 function LeafVE.UI:RefreshWelcome()
@@ -7952,22 +8323,17 @@ function LeafVE.UI:RefreshWelcome()
   local p = self.panels.welcome
   if not p then return end
   local opts = LeafVE_DB.options
-  local loginPts  = (opts and opts.loginPoints) or 20
-  local grpPts    = (opts and opts.groupPoints) or GROUP_POINTS
-  local soPts     = (opts and opts.shoutoutPoints) or 10
-  local soMax     = (opts and opts.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
-  local instPts   = (opts and opts.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
-  local bossPts   = (opts and opts.bossPoints) or INSTANCE_BOSS_POINTS
-  local questPts  = (opts and opts.questPoints) or QUEST_POINTS
-  local questMax  = (opts and opts.questMaxDaily) or QUEST_MAX_DAILY
+  local soPts  = (opts and opts.shoutoutPoints) or 10
+  local soMax  = (opts and opts.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  local questMax = (opts and opts.questMaxDaily) or QUEST_MAX_DAILY
   if p.welcomeLoginLine then
-    p.welcomeLoginLine:SetText(string.format("|cFFFFD700Daily Login|r  (+%d LP)", loginPts))
+    p.welcomeLoginLine:SetText("|cFFFFD700Daily Login|r  (+20 LP)")
   end
   if p.welcomeGroupHeader then
-    p.welcomeGroupHeader:SetText(string.format("|cFFFFD700Group Time|r  (+%d LP per online guildie)", grpPts))
+    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes (cap: 700/day))")
   end
   if p.welcomeGroupDetail then
-    p.welcomeGroupDetail:SetText(string.format("Spend time in a party or raid with online guildmates. Earn %d LP", grpPts))
+    p.welcomeGroupDetail:SetText("Spend time in a party or raid with online guildmates. Earn 10 LP")
   end
   if p.welcomeSOHeader then
     p.welcomeSOHeader:SetText(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPts))
@@ -7979,16 +8345,16 @@ function LeafVE.UI:RefreshWelcome()
     p.welcomeSODetail2:SetText(string.format("%d shoutouts per day, so spend them wisely!", soMax))
   end
   if p.welcomeInstHeader then
-    p.welcomeInstHeader:SetText(string.format("|cFFFFD700Instance Runs|r  (+%d LP + %d per boss)", instPts, bossPts))
+    p.welcomeInstHeader:SetText("|cFFFFD700Instance Runs|r  (+10 LP per dungeon boss, +25 LP per raid boss)")
   end
   if p.welcomeInstDetail then
-    p.welcomeInstDetail:SetText(string.format("%d LP on completion plus %d LP for every named boss slain.", instPts, bossPts))
+    p.welcomeInstDetail:SetText("+10 dungeon completion, +25 raid completion (flat, not scaled).")
   end
   if p.welcomeQuestHeader then
-    p.welcomeQuestHeader:SetText(string.format("|cFFFFD700Quest Completions|r  (+%d LP, cap %d/day)", questPts, questMax))
+    p.welcomeQuestHeader:SetText(string.format("|cFFFFD700Quest Completions|r  (+10 LP, cap %d/day)", questMax))
   end
   if p.welcomeQuestDetail1 then
-    p.welcomeQuestDetail1:SetText(string.format("Turn in quests while grouped with a guildmate to earn %d LP each,", questPts))
+    p.welcomeQuestDetail1:SetText("Turn in quests while grouped with a guildmate to earn 10 LP each,")
   end
   if p.welcomeQuestDetail2 then
     p.welcomeQuestDetail2:SetText(string.format("up to %d quests per day. Every mission matters!", questMax))
@@ -8064,6 +8430,24 @@ ef:SetScript("OnEvent", function()
     local me = ShortName(UnitName("player"))
     if me then
       LeafVE_GlobalDB.registeredChars[me] = true
+    end
+    -- One-time migration: purge old "Quest area trigger" history entries
+    if not LeafVE_DB.migratedTriggerHistory then
+      EnsureDB()
+      for pName, entries in pairs(LeafVE_DB.pointHistory) do
+        if type(entries) == "table" then
+          local filtered = {}
+          for _, entry in ipairs(entries) do
+            local reason = entry.reason or ""
+            local isTrigger = string.find(reason, "Quest area trigger") or string.find(reason, "trigger %d+")
+            if not isTrigger then
+              table.insert(filtered, entry)
+            end
+          end
+          LeafVE_DB.pointHistory[pName] = filtered
+        end
+      end
+      LeafVE_DB.migratedTriggerHistory = true
     end
     LeafVE:CheckDailyLogin()
     LeafVE:PurgeStaleWeeklyData()
