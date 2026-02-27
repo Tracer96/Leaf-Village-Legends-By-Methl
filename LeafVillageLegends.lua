@@ -1624,9 +1624,14 @@ function LeafVE:BroadcastLeaderboardData()
   end
   
   for name, _ in pairs(knownPlayers) do
-    -- Lifetime: prefer local alltime (direct witness), fall back to synced lboard data
+    -- Lifetime: prefer local alltime (direct witness), fall back to synced lboard data.
+    -- Skip entries with no points to avoid broadcasting zeros that could
+    -- overwrite correct data held by peers (defence-in-depth alongside the
+    -- higher-total-wins guard in ReceiveLeaderboardData).
     local lpts = LeafVE_DB.alltime[name] or LeafVE_DB.lboard.alltime[name] or {L = 0, G = 0, S = 0}
-    table.insert(data, string.format("L:%s:%d:%d:%d", name, lpts.L or 0, lpts.G or 0, lpts.S or 0))
+    if (lpts.L or 0) + (lpts.G or 0) + (lpts.S or 0) > 0 then
+      table.insert(data, string.format("L:%s:%d:%d:%d", name, lpts.L or 0, lpts.G or 0, lpts.S or 0))
+    end
     
     -- Weekly: prefer local aggregation, fall back to synced weekly data.
     -- Skip entries with no points to avoid broadcasting zeros that could
@@ -2291,14 +2296,16 @@ end
   -- Store into dedicated lboard tables (never overwrite local accounting)
   local now = Now()
   if dataType == "L" then
-    -- Lifetime synced data: only overwrite if newer than what we have
-    local upd = LeafVE_DB.lboard.updatedAt[playerName]
-    if type(upd) ~= "table" then upd = nil end
-    local existing = upd and upd.lifetime
-    if not existing or now > existing then
+    -- Higher-total-wins guard: only overwrite if the incoming data has a higher
+    -- or equal total than what we already have.  A timestamp comparison is not
+    -- reliable here because `now` (receive time) is always greater than a
+    -- previously stored receive timestamp, which caused zero-broadcasts from
+    -- peers who lack a player's data to silently wipe correct synced values.
+    local newTotal = L + G + S
+    local existingEntry = LeafVE_DB.lboard.alltime[playerName]
+    local existingTotal = existingEntry and ((existingEntry.L or 0) + (existingEntry.G or 0) + (existingEntry.S or 0)) or 0
+    if newTotal > 0 and newTotal >= existingTotal then
       LeafVE_DB.lboard.alltime[playerName] = {L = L, G = G, S = S}
-      if not LeafVE_DB.lboard.updatedAt[playerName] then LeafVE_DB.lboard.updatedAt[playerName] = {} end
-      LeafVE_DB.lboard.updatedAt[playerName].lifetime = now
     end
 
   elseif string.sub(dataType, 1, 1) == "W" then
