@@ -42,10 +42,9 @@ local RAID_COMPLETION_POINTS = 25     -- raid completion (flat)
 local INSTANCE_MIN_PRESENCE_PCT = 0.5  -- must be present for ≥50% of run time
 local INSTANCE_MAX_DAILY = 20
 local QUEST_POINTS = 10
-local QUEST_MAX_DAILY = 10
-local LEAF_POINT_DAILY_CAP = 0
+local QUEST_MAX_DAILY = 0
+local LEAF_POINT_DAILY_CAP = 700
 local GROUP_POINTS = 10               -- points awarded per guild group tick
-local GROUP_POINTS_DAILY_CAP = 700    -- max group points per 24 hours
 
 local SEASON_REWARD_1 = 10
 local SEASON_REWARD_2 = 5
@@ -219,11 +218,11 @@ LeafVE.instanceHasGuildie = false
 LeafVE.instanceBossesKilledThisRun = 0
 LeafVE.lastGroupAwardTick = nil
 LeafVE.lastCombatAt = 0
+LeafVE.lastActivityTime = 0  -- tracks player activity for AFK detection (group points only)
 -- Quest tracking via pfDB
 LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
 LeafVE.pendingQuestTurnIn  = nil  -- quest title captured from QUEST_COMPLETE, cleared on QUEST_FINISHED
-LeafVE.suppressNextPointNotification = false  -- set before AddPoints to suppress the generic toast for quest turn-ins
 
 local function SetSize(f, w, h)
   if not f then return end
@@ -987,7 +986,7 @@ function LeafVE:TrackAttendance()
   end
 end
 
-function LeafVE:AddPoints(playerName, pointType, amount)
+function LeafVE:AddPoints(playerName, pointType, amount, reason)
   EnsureDB() playerName = ShortName(playerName) if not playerName then return end
   amount = amount or 1 local day = DayKey()
   if not LeafVE_DB.global[day] then LeafVE_DB.global[day] = {} end
@@ -997,7 +996,6 @@ function LeafVE:AddPoints(playerName, pointType, amount)
     local totals = LeafVE_DB.global[day][playerName]
     local currentTotal = (totals.L or 0) + (totals.G or 0) + (totals.S or 0)
     if currentTotal >= dailyCap then
-      LeafVE.suppressNextPointNotification = false
       return 0
     end
     if currentTotal + amount > dailyCap then
@@ -1005,7 +1003,6 @@ function LeafVE:AddPoints(playerName, pointType, amount)
     end
   end
   if amount <= 0 then
-    LeafVE.suppressNextPointNotification = false
     return 0
   end
   LeafVE_DB.global[day][playerName][pointType] = (LeafVE_DB.global[day][playerName][pointType] or 0) + amount
@@ -1018,15 +1015,15 @@ function LeafVE:AddPoints(playerName, pointType, amount)
   -- Show notification if this is the current player OR points are pooling to the current player's main
   local isMe = me and (Lower(playerName) == Lower(me) or Lower(playerName) == Lower(myEffective or ""))
   if isMe then
-    local typeNames = {L = "Login", G = "Group", S = "Shoutout"}
     if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
-      if LeafVE.suppressNextPointNotification then
-        LeafVE.suppressNextPointNotification = false
+      local toastMsg
+      if reason then
+        toastMsg = string.format("+%d LP — %s", amount, reason)
       else
-        self:ShowNotification("Points Earned!", string.format("+%d %s Point%s", amount, typeNames[pointType] or "?", amount > 1 and "s" or ""), LEAF_EMBLEM, THEME.leaf)
+        local typeNames = {L = "Login bonus", G = "Group activity", S = "Shoutout"}
+        toastMsg = string.format("+%d LP — %s", amount, typeNames[pointType] or "Points earned")
       end
-    else
-      LeafVE.suppressNextPointNotification = false
+      self:ShowNotification("Points Earned!", toastMsg, LEAF_EMBLEM, THEME.leaf)
     end
   end
   self:CheckBadgeMilestones(playerName)
@@ -1060,7 +1057,7 @@ function LeafVE:CheckDailyLogin()
     streakData.current = 1
   end
   streakData.lastLogin = today
-  local awarded = self:AddPoints(me, "L", loginPts)
+  local awarded = self:AddPoints(me, "L", loginPts, "Daily login")
   if awarded and awarded > 0 then
     self:AddToHistory(me, "L", awarded, "Daily login")
   end
@@ -1227,25 +1224,16 @@ function LeafVE:OnGroupUpdate()
   if currentTick > lastAwardedTick and self.currentGroupStart and (Now() - self.currentGroupStart) >= groupInterval then
     local playerName = ShortName(UnitName("player"))
     if playerName then
-      local pointsPerGuildie = GROUP_POINTS
-      -- Enforce daily cap for group points
-      local today = DayKey()
-      if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
-      if not LeafVE_DB.groupPointsToday[playerName] then LeafVE_DB.groupPointsToday[playerName] = {} end
-      local todayData = LeafVE_DB.groupPointsToday[playerName]
-      if todayData.date ~= today then
-        todayData.date = today
-        todayData.earned = 0
-      end
-      if GROUP_POINTS_DAILY_CAP > 0 and todayData.earned >= GROUP_POINTS_DAILY_CAP then
+      -- AFK check: skip group points if player is AFK or inactive for 10+ minutes
+      if UnitIsAFK("player") or (Now() - (LeafVE.lastActivityTime or 0) > 600) then
         self.lastGroupAwardTick = currentTick
-        Print("Group point daily cap reached ("..GROUP_POINTS_DAILY_CAP.." LP). No more group points today.")
+        Print("Group points skipped: player is AFK or inactive.")
         return
       end
+      local pointsPerGuildie = GROUP_POINTS
       local points = pointsPerGuildie * numGuildies
-      local awarded = self:AddPoints(playerName, "G", points)
+      local awarded = self:AddPoints(playerName, "G", points, "Group activity")
       if awarded and awarded > 0 then
-        todayData.earned = (todayData.earned or 0) + awarded
         self:AddToHistory(playerName, "G", awarded, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
         LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
         self:CheckBadgeMilestones(playerName)
@@ -1366,7 +1354,7 @@ function LeafVE:OnInstanceExit()
     local instPts = self.instanceIsRaid and RAID_COMPLETION_POINTS or INSTANCE_COMPLETION_POINTS
     if instCap == 0 or tracked.completions < instCap then
       if self.instanceBossesKilledThisRun > 0 then
-        local awarded = self:AddPoints(me, "G", instPts)
+        local awarded = self:AddPoints(me, "G", instPts, "Instance completion: "..(self.instanceZone or "Unknown"))
         if awarded and awarded > 0 then
           tracked.completions = tracked.completions + 1
           tracked.bosses = tracked.bosses + self.instanceBossesKilledThisRun
@@ -1395,7 +1383,7 @@ function LeafVE:OnBossKillChat(msg)
   EnsureDB()
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
   local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
-  local awarded = self:AddPoints(me, "G", bossPts)
+  local awarded = self:AddPoints(me, "G", bossPts, "Boss kill: "..bossName)
   if awarded and awarded > 0 then
     self:AddToHistory(me, "G", awarded, "Boss kill: "..bossName)
     Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
@@ -1442,21 +1430,15 @@ function LeafVE:OnQuestTurnedIn()
     end
   end
 
-  -- Daily cap tracked per character
+  -- Daily cap tracking per character (kept for history/count tracking even with cap disabled)
   if not LeafVE_DB.questTracking[me] then
     LeafVE_DB.questTracking[me] = {}
   end
   if not LeafVE_DB.questTracking[me][today] then
     LeafVE_DB.questTracking[me][today] = 0
   end
-  local questCap = (LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
   local questPts = QUEST_POINTS
-  if questCap ~= 0 and LeafVE_DB.questTracking[me][today] >= questCap then
-    self:CacheQuestLog()
-    return
-  end
-  LeafVE.suppressNextPointNotification = true
-  local awarded = self:AddPoints(me, "G", questPts)
+  local awarded = self:AddPoints(me, "G", questPts, "Quest completed")
   if awarded and awarded > 0 then
     LeafVE_DB.questTracking[me][today] = LeafVE_DB.questTracking[me][today] + 1
     if questTitle and LeafVE_DB.questCompletions[me] then
@@ -1468,10 +1450,7 @@ function LeafVE:OnQuestTurnedIn()
   if questTitle then histMsg = "Quest: "..questTitle end
   if awarded and awarded > 0 then
     self:AddToHistory(me, "G", awarded, histMsg)
-    if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
-      self:ShowNotification("Quest Complete!", string.format("[%s] +%d LP", displayTitle, awarded), QUEST_ICON, THEME.gold)
-    end
-    Print(string.format("Quest complete! [%s] +%d G (%d/%s today)", displayTitle, awarded, LeafVE_DB.questTracking[me][today], questCap == 0 and "unlimited" or tostring(questCap)))
+    Print(string.format("Quest complete! [%s] +%d G (%d today)", displayTitle, awarded, LeafVE_DB.questTracking[me][today]))
   end
   -- Update the cached log to reflect the turn-in
   self:CacheQuestLog()
@@ -1523,11 +1502,11 @@ function LeafVE:GiveShoutout(targetName, reason)
 
   local shoutPts = (LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
   LeafVE_DB.shoutouts[giverName][targetName] = Now()
-  local awardedTarget = self:AddPoints(targetName, "S", shoutPts)
+  local awardedTarget = self:AddPoints(targetName, "S", shoutPts, "Shoutout from "..giverName)
   if awardedTarget and awardedTarget > 0 then
     self:AddToHistory(targetName, "S", awardedTarget, "Shoutout from "..giverName..(reason and (": "..reason) or ""))
   end
-  local awardedGiver = self:AddPoints(giverName, "S", shoutPts)
+  local awardedGiver = self:AddPoints(giverName, "S", shoutPts, "Gave shoutout to "..targetName)
   if awardedGiver and awardedGiver > 0 then
     self:AddToHistory(giverName, "S", awardedGiver, "Gave shoutout to "..targetName..(reason and (": "..reason) or ""))
   end
@@ -2084,8 +2063,8 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
               end
               LeafVE_DB.shoutouts[msgGiver][targetName] = Now()
               local shoutPtsIncoming = (LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
-              self:AddPoints(targetName, "S", shoutPtsIncoming)
-              self:AddPoints(msgGiver, "S", shoutPtsIncoming)
+              self:AddPoints(targetName, "S", shoutPtsIncoming, "Shoutout from "..msgGiver)
+              self:AddPoints(msgGiver, "S", shoutPtsIncoming, "Gave shoutout to "..targetName)
             end
             -- If we are the shoutout recipient, award received badges on our machine
             if me and Lower(me) == Lower(targetName) then
@@ -5809,19 +5788,18 @@ local function BuildAdminPanel(panel)
   scrollFrame:SetScrollChild(subFrame)
 
   local yBase = -10
-  local gap = 34
 
-  -- Collect all Sync callbacks so the Reset button can refresh all displays
-  local syncCallbacks = {}
-
-  -- Section: Point Values (read-only, hard-coded)
+  -- Section: Current Rules (read-only)
   local pvSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   pvSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  pvSection:SetText("|cFF2DD35CPoint Values (Hard-Coded)|r")
+  pvSection:SetText("|cFF2DD35CCurrent Rules (Read-Only)|r")
   yBase = yBase - 24
 
   local pvRules = {
-    "• Group Time: 10 LP per guildie every 20 min (cap: 700/day)",
+    "• Daily LP cap: 700 LP total per day (all sources combined)",
+    "• Quest point cap: disabled (unlimited quest LP daily)",
+    "• AFK timeout: 10 min inactivity = no group points",
+    "• Group Time: 10 LP per guildie every 20 min",
     "• Dungeon Boss: 10 LP  |  Raid Boss: 25 LP",
     "• Dungeon Complete: 10 LP  |  Raid Complete: 25 LP",
     "• Quest Turn-In: 10 LP (requires guildie in group)",
@@ -5846,178 +5824,166 @@ local function BuildAdminPanel(panel)
   div2:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
   yBase = yBase - 18
 
-  -- Section: Daily Caps
-  local dcSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  dcSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  dcSection:SetText("|cFF2DD35CDaily Caps (0 = unlimited)|r")
-  yBase = yBase - 28
+  -- Section: Announce Weekly Standings
+  local awSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  awSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  awSection:SetText("|cFF2DD35CAnnounce Weekly Standings|r")
+  yBase = yBase - 24
 
-  local _, _, syncQuestCap = MakeNumberStepper(subFrame, "Quest Points Daily Cap", yBase,
-    function() return LeafVE_DB.options.questMaxDaily or QUEST_MAX_DAILY end,
-    function(v) LeafVE_DB.options.questMaxDaily = v end, 0, 999)
-  table.insert(syncCallbacks, syncQuestCap)
-  yBase = yBase - gap
-
-  local _, _, syncInstCap = MakeNumberStepper(subFrame, "Instance Completions Daily Cap", yBase,
-    function() return LeafVE_DB.options.instanceMaxDaily or INSTANCE_MAX_DAILY end,
-    function(v) LeafVE_DB.options.instanceMaxDaily = v end, 0, 999)
-  table.insert(syncCallbacks, syncInstCap)
-  yBase = yBase - gap
-
-  -- Divider
-  local divSO = subFrame:CreateTexture(nil, "ARTWORK")
-  divSO:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  divSO:SetWidth(430)
-  divSO:SetHeight(1)
-  divSO:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  divSO:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
+  local awPreview = subFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  awPreview:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 18, yBase)
+  awPreview:SetWidth(420)
+  awPreview:SetJustifyH("LEFT")
+  awPreview:SetText("|cFF888888Click 'Preview' to generate the top 5 weekly standings.|r")
   yBase = yBase - 18
 
-  -- Section: Shoutout Settings
-  local soSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  soSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  soSection:SetText("|cFF2DD35CShoutout Settings|r")
-  yBase = yBase - 28
+  local awPreviewText = subFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  awPreviewText:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 18, yBase)
+  awPreviewText:SetWidth(420)
+  awPreviewText:SetJustifyH("LEFT")
+  awPreviewText:SetText("")
+  yBase = yBase - 76
 
-  local _, _, sync6 = MakeNumberStepper(subFrame, "Shoutout Points (each)", yBase,
-    function() return LeafVE_DB.options.shoutoutPoints or 10 end,
-    function(v) LeafVE_DB.options.shoutoutPoints = v end, 1, 100)
-  table.insert(syncCallbacks, sync6)
-  yBase = yBase - gap
-
-  local _, _, sync7 = MakeNumberStepper(subFrame, "Shoutouts Per Day", yBase,
-    function() return LeafVE_DB.options.shoutoutMaxDaily or SHOUTOUT_MAX_PER_DAY end,
-    function(v) LeafVE_DB.options.shoutoutMaxDaily = v end, 1, 20)
-  table.insert(syncCallbacks, sync7)
-  yBase = yBase - gap
-
-  -- Divider
-  local divGrp = subFrame:CreateTexture(nil, "ARTWORK")
-  divGrp:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  divGrp:SetWidth(430)
-  divGrp:SetHeight(1)
-  divGrp:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  divGrp:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
-  yBase = yBase - 18
-
-  -- Section: Group Settings
-  local grpSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  grpSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  grpSection:SetText("|cFF2DD35CGroup Settings|r")
-  yBase = yBase - 28
-
-  local _, _, sync10 = MakeNumberStepper(subFrame, "Group Min Time (min)", yBase,
-    function() return math.floor((LeafVE_DB.options.groupMinTime or GROUP_MIN_TIME) / 60) end,
-    function(v) LeafVE_DB.options.groupMinTime = v * 60 end, 1, 60)
-  table.insert(syncCallbacks, sync10)
-  yBase = yBase - gap
-
-  local _, _, sync11 = MakeNumberStepper(subFrame, "Group Cooldown (min)", yBase,
-    function() return math.floor((LeafVE_DB.options.groupCooldown or GROUP_COOLDOWN) / 60) end,
-    function(v) LeafVE_DB.options.groupCooldown = v * 60 end, 1, 120)
-  table.insert(syncCallbacks, sync11)
-  yBase = yBase - gap
-
-
-  -- Divider
-  local divSR = subFrame:CreateTexture(nil, "ARTWORK")
-  divSR:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  divSR:SetWidth(430)
-  divSR:SetHeight(1)
-  divSR:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  divSR:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
-  yBase = yBase - 18
-
-  -- Section: Season Rewards
-  local srSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  srSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  srSection:SetText("|cFF2DD35CSeason Rewards (gold)|r")
-  yBase = yBase - 28
-
-  local _, _, sync12 = MakeNumberStepper(subFrame, "1st Place Gold", yBase,
-    function() return LeafVE_DB.options.seasonReward1 or SEASON_REWARD_1 end,
-    function(v) LeafVE_DB.options.seasonReward1 = v end, 0, 9999)
-  table.insert(syncCallbacks, sync12)
-  yBase = yBase - gap
-
-  local _, _, sync13 = MakeNumberStepper(subFrame, "2nd Place Gold", yBase,
-    function() return LeafVE_DB.options.seasonReward2 or SEASON_REWARD_2 end,
-    function(v) LeafVE_DB.options.seasonReward2 = v end, 0, 9999)
-  table.insert(syncCallbacks, sync13)
-  yBase = yBase - gap
-
-  local _, _, sync14 = MakeNumberStepper(subFrame, "3rd Place Gold", yBase,
-    function() return LeafVE_DB.options.seasonReward3 or SEASON_REWARD_3 end,
-    function(v) LeafVE_DB.options.seasonReward3 = v end, 0, 9999)
-  table.insert(syncCallbacks, sync14)
-  yBase = yBase - gap
-
-  local _, _, sync15 = MakeNumberStepper(subFrame, "4th Place Gold", yBase,
-    function() return LeafVE_DB.options.seasonReward4 or SEASON_REWARD_4 end,
-    function(v) LeafVE_DB.options.seasonReward4 = v end, 0, 9999)
-  table.insert(syncCallbacks, sync15)
-  yBase = yBase - gap
-
-  local _, _, sync16 = MakeNumberStepper(subFrame, "5th Place Gold", yBase,
-    function() return LeafVE_DB.options.seasonReward5 or SEASON_REWARD_5 end,
-    function(v) LeafVE_DB.options.seasonReward5 = v end, 0, 9999)
-  table.insert(syncCallbacks, sync16)
-  yBase = yBase - gap
-
-  -- Save & Broadcast Settings button
-  local saveBroadcastBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
-  saveBroadcastBtn:SetWidth(200)
-  saveBroadcastBtn:SetHeight(22)
-  saveBroadcastBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 10)
-  saveBroadcastBtn:SetText("Save & Broadcast Settings")
-  SkinButtonAccent(saveBroadcastBtn)
-  saveBroadcastBtn:SetScript("OnClick", function()
-    local opts = LeafVE_DB.options
-    local serialized = string.format(
-      "questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
-      opts.questMaxDaily or QUEST_MAX_DAILY,
-      opts.instanceMaxDaily or INSTANCE_MAX_DAILY,
-      opts.shoutoutPoints or 10,
-      opts.shoutoutMaxDaily or SHOUTOUT_MAX_PER_DAY,
-      opts.groupMinTime or GROUP_MIN_TIME,
-      opts.groupCooldown or GROUP_COOLDOWN,
-      opts.seasonReward1 or SEASON_REWARD_1,
-      opts.seasonReward2 or SEASON_REWARD_2,
-      opts.seasonReward3 or SEASON_REWARD_3,
-      opts.seasonReward4 or SEASON_REWARD_4,
-      opts.seasonReward5 or SEASON_REWARD_5
-    )
-    SendAddonMessage("LeafVE", "LVE_ADMIN_CONFIG:"..serialized, "GUILD")
-    Print("Admin settings saved and broadcast to guild!")
+  local awPreviewBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  awPreviewBtn:SetWidth(100)
+  awPreviewBtn:SetHeight(22)
+  awPreviewBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 4)
+  awPreviewBtn:SetText("Preview")
+  SkinButtonAccent(awPreviewBtn)
+  awPreviewBtn:SetScript("OnClick", function()
+    EnsureDB()
+    local wk = WeekKey()
+    local weekAgg = AggForThisWeek()
+    -- Build combined list using higher of local vs synced
+    local combined = {}
+    local syncedWeek = type(LeafVE_DB.lboard.weekly[wk]) == "table" and LeafVE_DB.lboard.weekly[wk] or {}
+    local allNames = {}
+    for n, _ in pairs(weekAgg) do allNames[n] = true end
+    for n, _ in pairs(syncedWeek) do allNames[n] = true end
+    for n, _ in pairs(allNames) do
+      local localT = weekAgg[n]
+      local syncedT = syncedWeek[n]
+      local localTotal = localT and ((localT.L or 0) + (localT.G or 0) + (localT.S or 0)) or 0
+      local syncedTotal = syncedT and ((syncedT.L or 0) + (syncedT.G or 0) + (syncedT.S or 0)) or 0
+      table.insert(combined, {name = n, total = math.max(localTotal, syncedTotal)})
+    end
+    table.sort(combined, function(a, b) return a.total > b.total end)
+    local medals = {"|cFFFFD700🥇|r", "|cFFAAAAAA🥈|r", "|cFFCD7F32🥉|r", "4.", "5."}
+    local lines = {}
+    for i = 1, math.min(5, table.getn(combined)) do
+      table.insert(lines, string.format("%s %s — %d LP", medals[i], combined[i].name, combined[i].total))
+    end
+    if table.getn(lines) == 0 then
+      awPreviewText:SetText("|cFF888888No weekly data available yet.|r")
+    else
+      awPreviewText:SetText("|cFFFFFFFF"..table.concat(lines, "\n").."|r")
+    end
   end)
-  yBase = yBase - 44
 
-  -- Reset to defaults button
-  local resetBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
-  resetBtn:SetWidth(140)
-  resetBtn:SetHeight(22)
-  resetBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 10)
-  resetBtn:SetText("Reset to Defaults")
-  SkinButtonAccent(resetBtn)
-  resetBtn:SetScript("OnClick", function()
-    LeafVE_DB.options.questMaxDaily             = QUEST_MAX_DAILY
-    LeafVE_DB.options.instanceMaxDaily          = INSTANCE_MAX_DAILY
-    LeafVE_DB.options.shoutoutPoints            = 10
-    LeafVE_DB.options.shoutoutMaxDaily          = SHOUTOUT_MAX_PER_DAY
-    LeafVE_DB.options.groupMinTime              = GROUP_MIN_TIME
-    LeafVE_DB.options.groupCooldown             = GROUP_COOLDOWN
-    LeafVE_DB.options.seasonReward1             = SEASON_REWARD_1
-    LeafVE_DB.options.seasonReward2             = SEASON_REWARD_2
-    LeafVE_DB.options.seasonReward3             = SEASON_REWARD_3
-    LeafVE_DB.options.seasonReward4             = SEASON_REWARD_4
-    LeafVE_DB.options.seasonReward5             = SEASON_REWARD_5
-    -- Re-sync all stepper displays to show the reset values
-    for _, syncFn in ipairs(syncCallbacks) do syncFn() end
-    Print("Admin settings reset to defaults.")
+  local awAnnounceBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  awAnnounceBtn:SetWidth(160)
+  awAnnounceBtn:SetHeight(22)
+  awAnnounceBtn:SetPoint("LEFT", awPreviewBtn, "RIGHT", 8, 0)
+  awAnnounceBtn:SetText("Announce to Guild")
+  SkinButtonAccent(awAnnounceBtn)
+  awAnnounceBtn:SetScript("OnClick", function()
+    if not InGuild() then Print("You are not in a guild.") return end
+    EnsureDB()
+    local wk = WeekKey()
+    local weekAgg = AggForThisWeek()
+    local combined = {}
+    local syncedWeek = type(LeafVE_DB.lboard.weekly[wk]) == "table" and LeafVE_DB.lboard.weekly[wk] or {}
+    local allNames = {}
+    for n, _ in pairs(weekAgg) do allNames[n] = true end
+    for n, _ in pairs(syncedWeek) do allNames[n] = true end
+    for n, _ in pairs(allNames) do
+      local localT = weekAgg[n]
+      local syncedT = syncedWeek[n]
+      local localTotal = localT and ((localT.L or 0) + (localT.G or 0) + (localT.S or 0)) or 0
+      local syncedTotal = syncedT and ((syncedT.L or 0) + (syncedT.G or 0) + (syncedT.S or 0)) or 0
+      table.insert(combined, {name = n, total = math.max(localTotal, syncedTotal)})
+    end
+    table.sort(combined, function(a, b) return a.total > b.total end)
+    local prefix = {"|cFFFFD700🥇 1st:|r", "|cFFAAAAAA🥈 2nd:|r", "|cFFCD7F32🥉 3rd:|r", "4th:", "5th:"}
+    SendChatMessage("[Leaf Village Weekly Standings]", "GUILD")
+    for i = 1, math.min(5, table.getn(combined)) do
+      SendChatMessage(string.format("  %s %s — %d LP", prefix[i], combined[i].name, combined[i].total), "GUILD")
+    end
+    Print("Weekly standings announced to guild!")
   end)
-  yBase = yBase - 44
+  yBase = yBase - 34
 
-  -- Check Addon Versions button
+  -- Divider
+  local divPM = subFrame:CreateTexture(nil, "ARTWORK")
+  divPM:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  divPM:SetWidth(430)
+  divPM:SetHeight(1)
+  divPM:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  divPM:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
+  yBase = yBase - 18
+
+  -- Section: Player Management
+  local pmSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  pmSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  pmSection:SetText("|cFF2DD35CPlayer Management|r")
+  yBase = yBase - 28
+
+  local pmSearchBox = CreateFrame("EditBox", "LeafVE_AdminSearchBox", subFrame, "InputBoxTemplate")
+  pmSearchBox:SetWidth(200)
+  pmSearchBox:SetHeight(20)
+  pmSearchBox:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 18, yBase)
+  pmSearchBox:SetAutoFocus(false)
+  pmSearchBox:SetText("Enter player name...")
+
+  local pmSearchBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  pmSearchBtn:SetWidth(60)
+  pmSearchBtn:SetHeight(22)
+  pmSearchBtn:SetPoint("LEFT", pmSearchBox, "RIGHT", 6, 0)
+  pmSearchBtn:SetText("Search")
+  SkinButtonAccent(pmSearchBtn)
+  yBase = yBase - 28
+
+  local pmResultText = subFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  pmResultText:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 18, yBase)
+  pmResultText:SetWidth(420)
+  pmResultText:SetJustifyH("LEFT")
+  pmResultText:SetText("|cFF888888Search for a player to view their stats.|r")
+  yBase = yBase - 72
+
+  pmSearchBtn:SetScript("OnClick", function()
+    EnsureDB()
+    local searchName = ShortName(pmSearchBox:GetText() or "")
+    if not searchName or searchName == "" then
+      pmResultText:SetText("|cFFFF4444Please enter a player name.|r")
+      return
+    end
+    local wk = WeekKey()
+    local day = DayKey()
+    local allT = LeafVE_DB.alltime[searchName] or {L = 0, G = 0, S = 0}
+    local dayT = (LeafVE_DB.global[day] and LeafVE_DB.global[day][searchName]) or {L = 0, G = 0, S = 0}
+    local weekAgg = AggForThisWeek()
+    local weekT = weekAgg[searchName] or {L = 0, G = 0, S = 0}
+    local allTotal = (allT.L or 0) + (allT.G or 0) + (allT.S or 0)
+    local dayTotal = (dayT.L or 0) + (dayT.G or 0) + (dayT.S or 0)
+    local weekTotal = (weekT.L or 0) + (weekT.G or 0) + (weekT.S or 0)
+    if allTotal == 0 and dayTotal == 0 then
+      pmResultText:SetText("|cFFFF4444Player '"..searchName.."' not found or has no data.|r")
+    else
+      pmResultText:SetText(string.format(
+        "|cFFFFFFFF%s\n  Today: %d LP (L:%d G:%d S:%d)\n  This week: %d LP\n  All-time: %d LP (L:%d G:%d S:%d)|r",
+        searchName, dayTotal, dayT.L or 0, dayT.G or 0, dayT.S or 0,
+        weekTotal, allTotal, allT.L or 0, allT.G or 0, allT.S or 0))
+    end
+  end)
+
+  -- Divider before Save & Broadcast (removed) — jump straight to Check Addon Versions
+  local divCV = subFrame:CreateTexture(nil, "ARTWORK")
+  divCV:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  divCV:SetWidth(430)
+  divCV:SetHeight(1)
+  divCV:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  divCV:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
+  yBase = yBase - 18
   local checkVerBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
   checkVerBtn:SetWidth(160)
   checkVerBtn:SetHeight(22)
@@ -6813,10 +6779,9 @@ local function BuildWelcomePanel(panel)
   panel.welcomeInstDetail = AddLine("plus a flat completion bonus. Boss and completion points are separate.", 20)
   yOffset = yOffset - 4
 
-  local questMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
-  panel.welcomeQuestHeader = AddLine(string.format("|cFFFFD700Quest Completions|r  (+10 LP, cap %d/day)", questMax), 10)
-  panel.welcomeQuestDetail1 = AddLine("Turn in quests while grouped with a guildmate to earn 10 LP each,", 20)
-  panel.welcomeQuestDetail2 = AddLine(string.format("up to %d quests per day. Every mission matters!", questMax), 20)
+  panel.welcomeQuestHeader = AddLine("|cFFFFD700Quest Completions|r  (+10 LP, unlimited)", 10)
+  panel.welcomeQuestDetail1 = AddLine("Turn in quests while grouped with a guildmate to earn 10 LP each.", 20)
+  panel.welcomeQuestDetail2 = AddLine("No daily quest limit — every mission earns LP!", 20)
   yOffset = yOffset - 6
   AddDivider()
 
@@ -7661,32 +7626,40 @@ function LeafVE.UI:Build()
   self.tabRoster:SetPoint("LEFT", self.tabMe, "RIGHT", 4, 0)
   self.tabRoster:SetWidth(60)
 
+  -- Shoutouts tab hidden (panel still accessible via /lve shoutout)
   self.tabShoutouts = TabButton(f, "Shoutouts", "LeafVE_TabShoutouts")
-  self.tabShoutouts:SetPoint("LEFT", self.tabRoster, "RIGHT", 4, 0)
-  self.tabShoutouts:SetWidth(75)
-  
+  self.tabShoutouts:Hide()
+
   self.tabLeaderWeek = TabButton(f, "Weekly", "LeafVE_TabLeaderWeek")
-  self.tabLeaderWeek:SetPoint("LEFT", self.tabShoutouts, "RIGHT", 4, 0)
+  self.tabLeaderWeek:SetPoint("LEFT", self.tabRoster, "RIGHT", 4, 0)
   self.tabLeaderWeek:SetWidth(60)
   
   self.tabLeaderLife = TabButton(f, "Lifetime", "LeafVE_TabLeaderLife")
   self.tabLeaderLife:SetPoint("LEFT", self.tabLeaderWeek, "RIGHT", 4, 0)
   self.tabLeaderLife:SetWidth(65)
   
-  self.tabBadges = TabButton(f, "Badges", "LeafVE_TabBadges")
-  self.tabBadges:SetPoint("LEFT", self.tabLeaderLife, "RIGHT", 4, 0)
-  self.tabBadges:SetWidth(65)
-  
   self.tabAchievements = TabButton(f, "Achievements", "LeafVE_TabAchievements")
-  self.tabAchievements:SetPoint("LEFT", self.tabBadges, "RIGHT", 4, 0)
+  self.tabAchievements:SetPoint("LEFT", self.tabLeaderLife, "RIGHT", 4, 0)
   self.tabAchievements:SetWidth(95)
 
+  self.tabBadges = TabButton(f, "Badges", "LeafVE_TabBadges")
+  self.tabBadges:SetPoint("LEFT", self.tabAchievements, "RIGHT", 4, 0)
+  self.tabBadges:SetWidth(65)
+
+  self.tabAlts = TabButton(f, "Alts", "LeafVE_TabAlts")
+  self.tabAlts:SetPoint("LEFT", self.tabBadges, "RIGHT", 4, 0)
+  self.tabAlts:SetWidth(40)
+
   self.tabHistory = TabButton(f, "History", "LeafVE_TabHistory")
-  self.tabHistory:SetPoint("LEFT", self.tabAchievements, "RIGHT", 4, 0)
+  self.tabHistory:SetPoint("LEFT", self.tabAlts, "RIGHT", 4, 0)
   self.tabHistory:SetWidth(60)
 
+  self.tabLiveHistory = TabButton(f, "Live History", "LeafVE_TabLiveHistory")
+  self.tabLiveHistory:SetPoint("LEFT", self.tabHistory, "RIGHT", 4, 0)
+  self.tabLiveHistory:SetWidth(80)
+
   self.tabOptions = TabButton(f, "Options", "LeafVE_TabOptions")
-  self.tabOptions:SetPoint("LEFT", self.tabHistory, "RIGHT", 4, 0)
+  self.tabOptions:SetPoint("LEFT", self.tabLiveHistory, "RIGHT", 4, 0)
   self.tabOptions:SetWidth(60)
 
   self.tabAdmin = TabButton(f, "Admin", "LeafVE_TabAdmin")
@@ -7698,14 +7671,6 @@ function LeafVE.UI:Build()
   else
     self.tabAdmin:Hide()
   end
-
-  self.tabAlts = TabButton(f, "Alts", "LeafVE_TabAlts")
-  self.tabAlts:SetPoint("LEFT", self.tabAdmin, "RIGHT", 4, 0)
-  self.tabAlts:SetWidth(40)
-
-  self.tabLiveHistory = TabButton(f, "Live History", "LeafVE_TabLiveHistory")
-  self.tabLiveHistory:SetPoint("LEFT", self.tabAlts, "RIGHT", 4, 0)
-  self.tabLiveHistory:SetWidth(80)
   
   self.inset = CreateInset(f)
   self.inset:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -80)
@@ -7937,7 +7902,7 @@ function LeafVE.UI:Refresh()
   end
   
   -- Hide all panels safely
-  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "alts", "welcome", "join"}
+  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "alts", "welcome", "join", "liveHistory"}
   for _, name in ipairs(panelNames) do
     if self.panels[name] and self.panels[name].Hide then
       self.panels[name]:Hide()
@@ -8333,12 +8298,11 @@ function LeafVE.UI:RefreshWelcome()
   local opts = LeafVE_DB.options
   local soPts  = (opts and opts.shoutoutPoints) or 10
   local soMax  = (opts and opts.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
-  local questMax = (opts and opts.questMaxDaily) or QUEST_MAX_DAILY
   if p.welcomeLoginLine then
     p.welcomeLoginLine:SetText("|cFFFFD700Daily Login|r  (+20 LP)")
   end
   if p.welcomeGroupHeader then
-    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes (cap: 700/day))")
+    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes, 700/day total cap)")
   end
   if p.welcomeGroupDetail then
     p.welcomeGroupDetail:SetText("Spend time in a party or raid with online guildmates. Earn 10 LP")
@@ -8359,13 +8323,13 @@ function LeafVE.UI:RefreshWelcome()
     p.welcomeInstDetail:SetText("plus a flat completion bonus. Boss and completion points are separate.")
   end
   if p.welcomeQuestHeader then
-    p.welcomeQuestHeader:SetText(string.format("|cFFFFD700Quest Completions|r  (+10 LP, cap %d/day)", questMax))
+    p.welcomeQuestHeader:SetText("|cFFFFD700Quest Completions|r  (+10 LP, unlimited)")
   end
   if p.welcomeQuestDetail1 then
-    p.welcomeQuestDetail1:SetText("Turn in quests while grouped with a guildmate to earn 10 LP each,")
+    p.welcomeQuestDetail1:SetText("Turn in quests while grouped with a guildmate to earn 10 LP each.")
   end
   if p.welcomeQuestDetail2 then
-    p.welcomeQuestDetail2:SetText(string.format("up to %d quests per day. Every mission matters!", questMax))
+    p.welcomeQuestDetail2:SetText("No daily quest limit — every mission earns LP!")
   end
 end
 
@@ -8405,6 +8369,12 @@ ef:RegisterEvent("QUEST_COMPLETE")
 ef:RegisterEvent("QUEST_FINISHED")
 ef:RegisterEvent("PLAYER_REGEN_DISABLED")
 ef:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
+ef:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+ef:RegisterEvent("CHAT_MSG_SAY")
+ef:RegisterEvent("CHAT_MSG_PARTY")
+ef:RegisterEvent("CHAT_MSG_GUILD")
+ef:RegisterEvent("CHAT_MSG_YELL")
+ef:RegisterEvent("LOOT_OPENED")
 
 local groupCheckTimer = 0
 local notificationTimer = 0
@@ -8507,6 +8477,7 @@ ef:SetScript("OnEvent", function()
   end
 
   if event == "ZONE_CHANGED_NEW_AREA" then
+    LeafVE.lastActivityTime = Now()
     LeafVE:OnZoneChanged()
     return
   end
@@ -8534,7 +8505,15 @@ ef:SetScript("OnEvent", function()
   end
 
   if event == "PLAYER_REGEN_DISABLED" then
+    LeafVE.lastActivityTime = Now()
     LeafVE.lastCombatAt = Now()
+    return
+  end
+
+  if event == "COMBAT_LOG_EVENT_UNFILTERED" or event == "LOOT_OPENED" or
+     event == "CHAT_MSG_SAY" or event == "CHAT_MSG_PARTY" or
+     event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_YELL" then
+    LeafVE.lastActivityTime = Now()
     return
   end
 
@@ -8860,17 +8839,12 @@ SlashCmdList["LEAFDEBUG"] = function(msg)
     local today = DayKey()
     if not LeafVE_DB.questTracking[me] then LeafVE_DB.questTracking[me] = {} end
     if not LeafVE_DB.questTracking[me][today] then LeafVE_DB.questTracking[me][today] = 0 end
-    local questCap = (LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
     local questPts = (LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
-    if questCap ~= 0 and LeafVE_DB.questTracking[me][today] >= questCap then
-      Print(string.format("Quest LP test: already at daily cap (%d/%s)", LeafVE_DB.questTracking[me][today], questCap == 0 and "unlimited" or tostring(questCap)))
-    else
-      local awarded = LeafVE:AddPoints(me, "G", questPts)
-      if awarded and awarded > 0 then
-        LeafVE_DB.questTracking[me][today] = LeafVE_DB.questTracking[me][today] + 1
-        LeafVE:AddToHistory(me, "G", awarded, "Quest completion (debug test)")
-        Print(string.format("Quest LP test: +%d G awarded (%d/%s today)", awarded, LeafVE_DB.questTracking[me][today], questCap == 0 and "unlimited" or tostring(questCap)))
-      end
+    local awarded = LeafVE:AddPoints(me, "G", questPts, "Quest completed (debug)")
+    if awarded and awarded > 0 then
+      LeafVE_DB.questTracking[me][today] = LeafVE_DB.questTracking[me][today] + 1
+      LeafVE:AddToHistory(me, "G", awarded, "Quest completion (debug test)")
+      Print(string.format("Quest LP test: +%d G awarded (%d today)", awarded, LeafVE_DB.questTracking[me][today]))
     end
     
   elseif msg == "notify" then
