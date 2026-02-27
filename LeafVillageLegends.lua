@@ -218,7 +218,7 @@ LeafVE.instanceHasGuildie = false
 LeafVE.instanceBossesKilledThisRun = 0
 LeafVE.lastGroupAwardTick = nil
 LeafVE.lastCombatAt = 0
-LeafVE.lastActivityTime = 0  -- tracks player activity for AFK detection (group points only)
+LeafVE.lastActivityTime = 0  -- will be set to Now() on PLAYER_LOGIN; tracks activity for AFK detection (group points only)
 -- Quest tracking via pfDB
 LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
@@ -5844,17 +5844,18 @@ local function BuildAdminPanel(panel)
   awPreviewText:SetText("")
   yBase = yBase - 76
 
-  local awPreviewBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
-  awPreviewBtn:SetWidth(100)
-  awPreviewBtn:SetHeight(22)
-  awPreviewBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 4)
-  awPreviewBtn:SetText("Preview")
-  SkinButtonAccent(awPreviewBtn)
-  awPreviewBtn:SetScript("OnClick", function()
+  -- Shared medal labels (text-based for Classic 1.12 compatibility)
+  local weeklyMedals = {
+    "|cFFFFD700[1st]|r",
+    "|cFFAAAAAA[2nd]|r",
+    "|cFFCD7F32[3rd]|r",
+    "[4th]",
+    "[5th]",
+  }
+  local function BuildWeeklyTop5()
     EnsureDB()
     local wk = WeekKey()
     local weekAgg = AggForThisWeek()
-    -- Build combined list using higher of local vs synced
     local combined = {}
     local syncedWeek = type(LeafVE_DB.lboard.weekly[wk]) == "table" and LeafVE_DB.lboard.weekly[wk] or {}
     local allNames = {}
@@ -5868,10 +5869,20 @@ local function BuildAdminPanel(panel)
       table.insert(combined, {name = n, total = math.max(localTotal, syncedTotal)})
     end
     table.sort(combined, function(a, b) return a.total > b.total end)
-    local medals = {"|cFFFFD700🥇|r", "|cFFAAAAAA🥈|r", "|cFFCD7F32🥉|r", "4.", "5."}
+    return combined
+  end
+
+  local awPreviewBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  awPreviewBtn:SetWidth(100)
+  awPreviewBtn:SetHeight(22)
+  awPreviewBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase - 4)
+  awPreviewBtn:SetText("Preview")
+  SkinButtonAccent(awPreviewBtn)
+  awPreviewBtn:SetScript("OnClick", function()
+    local combined = BuildWeeklyTop5()
     local lines = {}
     for i = 1, math.min(5, table.getn(combined)) do
-      table.insert(lines, string.format("%s %s — %d LP", medals[i], combined[i].name, combined[i].total))
+      table.insert(lines, string.format("%s %s - %d LP", weeklyMedals[i], combined[i].name, combined[i].total))
     end
     if table.getn(lines) == 0 then
       awPreviewText:SetText("|cFF888888No weekly data available yet.|r")
@@ -5888,26 +5899,10 @@ local function BuildAdminPanel(panel)
   SkinButtonAccent(awAnnounceBtn)
   awAnnounceBtn:SetScript("OnClick", function()
     if not InGuild() then Print("You are not in a guild.") return end
-    EnsureDB()
-    local wk = WeekKey()
-    local weekAgg = AggForThisWeek()
-    local combined = {}
-    local syncedWeek = type(LeafVE_DB.lboard.weekly[wk]) == "table" and LeafVE_DB.lboard.weekly[wk] or {}
-    local allNames = {}
-    for n, _ in pairs(weekAgg) do allNames[n] = true end
-    for n, _ in pairs(syncedWeek) do allNames[n] = true end
-    for n, _ in pairs(allNames) do
-      local localT = weekAgg[n]
-      local syncedT = syncedWeek[n]
-      local localTotal = localT and ((localT.L or 0) + (localT.G or 0) + (localT.S or 0)) or 0
-      local syncedTotal = syncedT and ((syncedT.L or 0) + (syncedT.G or 0) + (syncedT.S or 0)) or 0
-      table.insert(combined, {name = n, total = math.max(localTotal, syncedTotal)})
-    end
-    table.sort(combined, function(a, b) return a.total > b.total end)
-    local prefix = {"|cFFFFD700🥇 1st:|r", "|cFFAAAAAA🥈 2nd:|r", "|cFFCD7F32🥉 3rd:|r", "4th:", "5th:"}
-    SendChatMessage("[Leaf Village Weekly Standings]", "GUILD")
+    local combined = BuildWeeklyTop5()
+    SendChatMessage("[Leaf Village] Weekly Standings:", "GUILD")
     for i = 1, math.min(5, table.getn(combined)) do
-      SendChatMessage(string.format("  %s %s — %d LP", prefix[i], combined[i].name, combined[i].total), "GUILD")
+      SendChatMessage(string.format("  %s %s - %d LP", weeklyMedals[i], combined[i].name, combined[i].total), "GUILD")
     end
     Print("Weekly standings announced to guild!")
   end)
@@ -6761,7 +6756,7 @@ local function BuildWelcomePanel(panel)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
   yOffset = yOffset - 4
 
-  panel.welcomeGroupHeader = AddLine("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes (cap: 700/day))", 10)
+  panel.welcomeGroupHeader = AddLine("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes, governed by 700 LP daily total cap)", 10)
   panel.welcomeGroupDetail = AddLine("Spend time in a party or raid with online guildmates. Earn 10 LP", 20)
   AddLine("per online guildie per session. Offline members do not count.", 20)
   yOffset = yOffset - 4
@@ -7862,7 +7857,7 @@ function LeafVE.UI:Refresh()
     self.activeTab = "me"
   end
 
-  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabShoutouts, self.tabLeaderWeek, self.tabLeaderLife, self.tabBadges, self.tabAchievements, self.tabHistory, self.tabOptions, self.tabAlts, self.tabLiveHistory}
+  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabBadges, self.tabAchievements, self.tabHistory, self.tabOptions, self.tabAlts, self.tabLiveHistory}
   if hasAccess then
     for _, tab in ipairs(accessTabs) do
       if tab then tab:Show() end
@@ -8302,7 +8297,7 @@ function LeafVE.UI:RefreshWelcome()
     p.welcomeLoginLine:SetText("|cFFFFD700Daily Login|r  (+20 LP)")
   end
   if p.welcomeGroupHeader then
-    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes, 700/day total cap)")
+    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes, governed by 700 LP daily total cap)")
   end
   if p.welcomeGroupDetail then
     p.welcomeGroupDetail:SetText("Spend time in a party or raid with online guildmates. Earn 10 LP")
@@ -8403,6 +8398,7 @@ ef:SetScript("OnEvent", function()
   if event == "PLAYER_LOGIN" then
     Print("Loaded v"..LeafVE.version)
     Print("Auto-tracking: Login & Group points enabled!")
+    LeafVE.lastActivityTime = Now()  -- assume player is active at login
     EnsureDB()
     -- Register this character in the account-wide roster
     local me = ShortName(UnitName("player"))
