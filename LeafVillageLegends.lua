@@ -41,7 +41,6 @@ local INSTANCE_MAX_DAILY = 20
 local QUEST_POINTS = 1
 local QUEST_MAX_DAILY = 10
 local LEAF_POINT_DAILY_CAP = 0
-local AREA_TRIGGER_THRESHOLD = 0.03  -- ~3% of map width, ~60-90 yards
 local GROUP_POINTS = 10               -- points awarded per guild group tick
 
 local SEASON_REWARD_1 = 10
@@ -218,8 +217,6 @@ LeafVE.lastGroupAwardTick = nil
 LeafVE.lastCombatAt = 0
 -- Quest tracking via pfDB
 LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
-LeafVE.questAreaTrigMap    = {}   -- triggerId -> {questIds={}, x, y, mapId}  (built from pfDB)
-LeafVE.pfDbLoaded          = false
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
 LeafVE.pendingQuestTurnIn  = nil  -- quest title captured from QUEST_COMPLETE, cleared on QUEST_FINISHED
 LeafVE.suppressNextPointNotification = false  -- set before AddPoints to suppress the generic toast for quest turn-ins
@@ -412,7 +409,6 @@ local function EnsureDB()
   if not LeafVE_DB.instanceTracking then LeafVE_DB.instanceTracking = {} end
   if not LeafVE_DB.questTracking then LeafVE_DB.questTracking = {} end
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
-  if not LeafVE_DB.areaTriggersHit then LeafVE_DB.areaTriggersHit = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
@@ -437,7 +433,6 @@ local function EnsureDB()
   if LeafVE_DB.options.notificationSound == nil then LeafVE_DB.options.notificationSound = true end
   if LeafVE_DB.options.enablePointNotifications == nil then LeafVE_DB.options.enablePointNotifications = true end
   if LeafVE_DB.options.enableBadgeNotifications == nil then LeafVE_DB.options.enableBadgeNotifications = true end
-  if LeafVE_DB.options.enableAreaTrigger == nil then LeafVE_DB.options.enableAreaTrigger = true end
   if LeafVE_DB.options.bossPoints == nil then LeafVE_DB.options.bossPoints = INSTANCE_BOSS_POINTS end
   if LeafVE_DB.options.instanceCompletionPoints == nil then LeafVE_DB.options.instanceCompletionPoints = INSTANCE_COMPLETION_POINTS end
   if LeafVE_DB.options.questPoints == nil then LeafVE_DB.options.questPoints = QUEST_POINTS end
@@ -608,7 +603,6 @@ function LeafVE:ResetBadges(playerName)
   LeafVE_DB.instanceTracking[playerName] = nil
   LeafVE_DB.questTracking[playerName] = nil
   LeafVE_DB.questCompletions[playerName] = nil
-  LeafVE_DB.areaTriggersHit[playerName] = nil
   LeafVE_DB.lboard.alltime[playerName] = nil
   for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
     if type(wkData) == "table" then wkData[playerName] = nil end
@@ -654,7 +648,6 @@ function LeafVE:ResetAllBadges()
   LeafVE_DB.instanceTracking = {}
   LeafVE_DB.questTracking = {}
   LeafVE_DB.questCompletions = {}
-  LeafVE_DB.areaTriggersHit = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
   LeafVE_GlobalDB.achievementCache = {}
   if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
@@ -681,7 +674,6 @@ function LeafVE:HardResetLeafPoints_Local()
   LeafVE_DB.instanceTracking = {}
   LeafVE_DB.questTracking = {}
   LeafVE_DB.questCompletions = {}
-  LeafVE_DB.areaTriggersHit = {}
   LeafVE_DB.groupSessions = {}
   LeafVE_DB.groupCooldowns = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
@@ -1240,44 +1232,6 @@ end
 -- pfDB INTEGRATION (pfQuest database)
 -------------------------------------------------
 
--- Build lookup tables from pfDB (pfQuest addon database).
--- pfDB["quests"]["data"][id]["obj"]["A"] = area trigger IDs that are quest objectives.
--- pfDB["areatrigger"]["data"][triggerId]["coords"][n] = {x%, y%, mapId}
--- Called on PLAYER_LOGIN so pfDB is already available if pfQuest is loaded.
-function LeafVE:InitPfDB()
-  self.questAreaTrigMap = {}
-  self.pfDbLoaded = false
-
-  if not pfDB or not pfDB["quests"] or not pfDB["quests"]["data"] then return end
-  if not pfDB["areatrigger"] or not pfDB["areatrigger"]["data"] then return end
-
-  local questData   = pfDB["quests"]["data"]
-  local trigData    = pfDB["areatrigger"]["data"]
-
-  -- Walk every quest: collect area trigger IDs from objectives and end conditions
-  for questId, qdata in pairs(questData) do
-    local trigIds = {}
-    if qdata["obj"] and qdata["obj"]["A"] then
-      for _, tid in ipairs(qdata["obj"]["A"]) do trigIds[tid] = true end
-    end
-    if qdata["end"] and qdata["end"]["A"] then
-      for _, tid in ipairs(qdata["end"]["A"]) do trigIds[tid] = true end
-    end
-    for tid in pairs(trigIds) do
-      if trigData[tid] and trigData[tid]["coords"] then
-        if not self.questAreaTrigMap[tid] then
-          self.questAreaTrigMap[tid] = { questIds = {}, coords = trigData[tid]["coords"] }
-        end
-        table.insert(self.questAreaTrigMap[tid].questIds, questId)
-      end
-    end
-  end
-
-  self.pfDbLoaded = true
-  local count = 0
-  for _ in pairs(self.questAreaTrigMap) do count = count + 1 end
-end
-
 -- Snapshot the current quest log: title -> {level, isComplete}
 function LeafVE:CacheQuestLog()
   local newCache = {}
@@ -1321,65 +1275,6 @@ function LeafVE:GetCompletedQuestTitle()
     end
   end
   return nil
-end
-
--- Check if the player just entered a quest-related area trigger zone.
--- Awards LP once per trigger per day (regardless of guild-group requirement,
--- since area exploration is an individual achievement).
-function LeafVE:CheckAreaTriggerQuest()
-  if not self.pfDbLoaded then return end
-  if LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.enableAreaTrigger == false then return end
-  local me = ShortName(UnitName("player"))
-  if not me then return end
-
-  local px, py = GetPlayerMapPosition("player")
-  if not px or px == 0 then return end
-
-  local currentMapId = GetCurrentMapAreaID and GetCurrentMapAreaID() or nil
-  local today = DayKey()
-
-  EnsureDB()
-  local effectiveName = GetEffectiveName()
-  if not LeafVE_DB.areaTriggersHit[me] then LeafVE_DB.areaTriggersHit[me] = {} end
-
-  for triggerId, trigInfo in pairs(self.questAreaTrigMap) do
-    -- Skip if already awarded LP for this trigger today
-    local hitKey = triggerId..":"..today
-    if not LeafVE_DB.areaTriggersHit[me][hitKey] then
-      for _, coord in pairs(trigInfo.coords) do
-        local tx, ty, tmapId = coord[1], coord[2], coord[3]
-        -- Check that we are on the right map
-        if not currentMapId or currentMapId == tmapId then
-          -- pfDB stores coordinates as percentages (0-100); GetPlayerMapPosition returns 0-1
-          local dx = px - (tx / 100)
-          local dy = py - (ty / 100)
-          if math.sqrt(dx * dx + dy * dy) <= AREA_TRIGGER_THRESHOLD then
-            -- Player is inside this area trigger zone
-            -- Only award LP if grouped with guildmates (consistent with other quest LP)
-            local guildies = self:GetGroupGuildies()
-            if table.getn(guildies) > 0 then
-              -- Respect the daily quest LP cap (account-wide, under effectiveName)
-              local questPts = (LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
-              local questCap = (LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
-              if not LeafVE_DB.questTracking[effectiveName] then LeafVE_DB.questTracking[effectiveName] = {} end
-              if not LeafVE_DB.questTracking[effectiveName][today] then LeafVE_DB.questTracking[effectiveName][today] = 0 end
-              if questCap == 0 or LeafVE_DB.questTracking[effectiveName][today] < questCap then
-                local awarded = self:AddPoints(effectiveName, "G", questPts)
-                if awarded and awarded > 0 then
-                  LeafVE_DB.questTracking[effectiveName][today] = LeafVE_DB.questTracking[effectiveName][today] + 1
-                  self:AddToHistory(effectiveName, "G", awarded, "Quest area trigger with guildmates (trigger "..triggerId..")")
-                  Print(string.format("Quest area trigger with guildmates! +%d G (%d/%s today)", awarded, LeafVE_DB.questTracking[effectiveName][today], questCap == 0 and "unlimited" or tostring(questCap)))
-                end
-              end
-            end
-            -- Mark as hit today regardless of guild group (so we don't spam checks)
-            LeafVE_DB.areaTriggersHit[me][hitKey] = Now()
-            break
-          end
-        end
-      end
-    end
-  end
 end
 
 function LeafVE:OnZoneChanged()
@@ -1967,7 +1862,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
       LeafVE_DB.instanceTracking[targetPlayer] = nil
       LeafVE_DB.questTracking[targetPlayer] = nil
       LeafVE_DB.questCompletions[targetPlayer] = nil
-      LeafVE_DB.areaTriggersHit[targetPlayer] = nil
       LeafVE_DB.lboard.alltime[targetPlayer] = nil
       for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
         if type(wkData) == "table" then wkData[targetPlayer] = nil end
@@ -2007,7 +1901,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     LeafVE_DB.instanceTracking = {}
     LeafVE_DB.questTracking = {}
     LeafVE_DB.questCompletions = {}
-    LeafVE_DB.areaTriggersHit = {}
     LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
     LeafVE_GlobalDB.achievementCache = {}
     if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
@@ -2270,11 +2163,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
           local key = string.sub(pair, 1, eqPos - 1)
           local val = tonumber(string.sub(pair, eqPos + 1))
           if key and val ~= nil then
-            if key == "enableAreaTrigger" then
-              LeafVE_DB.options[key] = (val == 1)
-            else
-              LeafVE_DB.options[key] = val
-            end
+            LeafVE_DB.options[key] = val
           end
         end
       end
@@ -5525,27 +5414,6 @@ local function BuildAdminPanel(panel)
   -- Collect all Sync callbacks so the Reset button can refresh all displays
   local syncCallbacks = {}
 
-  -- Section: Area Trigger
-  local atSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  atSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  atSection:SetText("|cFF2DD35CArea Trigger|r")
-  yBase = yBase - 28
-
-  local atToggleBtn = MakeToggleButton(subFrame, "Enable Quest Area Trigger",
-    yBase,
-    function() return LeafVE_DB.options.enableAreaTrigger ~= false end,
-    function(v) LeafVE_DB.options.enableAreaTrigger = v end)
-  yBase = yBase - gap
-
-  -- Divider
-  local div1 = subFrame:CreateTexture(nil, "ARTWORK")
-  div1:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  div1:SetWidth(430)
-  div1:SetHeight(1)
-  div1:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  div1:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.4)
-  yBase = yBase - 18
-
   -- Section: Point Values
   local pvSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   pvSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
@@ -5730,9 +5598,8 @@ local function BuildAdminPanel(panel)
   SkinButtonAccent(saveBroadcastBtn)
   saveBroadcastBtn:SetScript("OnClick", function()
     local opts = LeafVE_DB.options
-    local enableAreaTriggerVal = (opts.enableAreaTrigger ~= false) and 1 or 0
     local serialized = string.format(
-      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,leafPointDailyCap=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,groupPointInterval=%d,enableAreaTrigger=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
+      "bossPoints=%d,instanceCompletionPoints=%d,questPoints=%d,leafPointDailyCap=%d,questMaxDaily=%d,instanceMaxDaily=%d,shoutoutPoints=%d,shoutoutMaxDaily=%d,groupMinTime=%d,groupCooldown=%d,groupPoints=%d,groupPointInterval=%d,seasonReward1=%d,seasonReward2=%d,seasonReward3=%d,seasonReward4=%d,seasonReward5=%d",
       opts.bossPoints or INSTANCE_BOSS_POINTS,
       opts.instanceCompletionPoints or INSTANCE_COMPLETION_POINTS,
       opts.questPoints or QUEST_POINTS,
@@ -5745,7 +5612,6 @@ local function BuildAdminPanel(panel)
       opts.groupCooldown or GROUP_COOLDOWN,
       opts.groupPoints or GROUP_POINTS,
       opts.groupPointInterval or GROUP_POINT_INTERVAL,
-      enableAreaTriggerVal,
       opts.seasonReward1 or SEASON_REWARD_1,
       opts.seasonReward2 or SEASON_REWARD_2,
       opts.seasonReward3 or SEASON_REWARD_3,
@@ -5765,7 +5631,6 @@ local function BuildAdminPanel(panel)
   resetBtn:SetText("Reset to Defaults")
   SkinButtonAccent(resetBtn)
   resetBtn:SetScript("OnClick", function()
-    LeafVE_DB.options.enableAreaTrigger         = true
     LeafVE_DB.options.bossPoints                = INSTANCE_BOSS_POINTS
     LeafVE_DB.options.instanceCompletionPoints  = INSTANCE_COMPLETION_POINTS
     LeafVE_DB.options.questPoints               = QUEST_POINTS
@@ -5785,14 +5650,6 @@ local function BuildAdminPanel(panel)
     LeafVE_DB.options.seasonReward5             = SEASON_REWARD_5
     -- Re-sync all stepper displays to show the reset values
     for _, syncFn in ipairs(syncCallbacks) do syncFn() end
-    -- Re-sync the area trigger toggle button text
-    if atToggleBtn then
-      if LeafVE_DB.options.enableAreaTrigger then
-        atToggleBtn:SetText("|cFF00FF00ON|r")
-      else
-        atToggleBtn:SetText("|cFFFF4444OFF|r")
-      end
-    end
     Print("Admin settings reset to defaults.")
   end)
   yBase = yBase - 44
@@ -8031,7 +7888,6 @@ local groupCheckTimer = 0
 local notificationTimer = 0
 local attendanceTimer = 0
 local badgeSyncTimer = 0
-local areaCheckTimer = 0
 local achLeaderTimer = 0
 
 ef:SetScript("OnEvent", function()
@@ -8063,8 +7919,6 @@ ef:SetScript("OnEvent", function()
     end
     LeafVE:CheckDailyLogin()
     LeafVE:PurgeStaleWeeklyData()
-    -- Build pfDB lookups (pfQuest must be loaded before us, so pfDB is ready now)
-    LeafVE:InitPfDB()
     -- Seed the quest log cache so we can diff on the first QUEST_LOG_UPDATE
     LeafVE:CacheQuestLog()
     -- Register badge hyperlink handler last so it wraps any other addon's hook
@@ -8198,13 +8052,6 @@ updateFrame:SetScript("OnUpdate", function()
        LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
       LeafVE.UI:RefreshAchievementsLeaderboard()
     end
-  end
-
-  -- Area trigger quest check (pfDB integration, runs every second)
-  areaCheckTimer = areaCheckTimer + arg1
-  if areaCheckTimer >= 1 then
-    areaCheckTimer = 0
-    LeafVE:CheckAreaTriggerQuest()
   end
 end)
 
@@ -8671,12 +8518,7 @@ SlashCmdList["LEAFDEBUG"] = function(msg)
     Print("  LeafVE.guildRosterCache: "..(LeafVE.guildRosterCache and "PASS" or "FAIL"))
     Print("  LeafVE_DB.questTracking: "..(LeafVE_DB and LeafVE_DB.questTracking and "PASS" or "FAIL"))
     
-    Print("Test 7: pfDB / quest log integration")
-    Print("  pfDB available: "..(pfDB and "YES" or "NO"))
-    Print("  pfDbLoaded: "..(LeafVE.pfDbLoaded and "YES" or "NO"))
-    local trigCount = 0
-    for _ in pairs(LeafVE.questAreaTrigMap) do trigCount = trigCount + 1 end
-    Print("  Area trigger zones mapped: "..trigCount)
+    Print("Test 7: Quest log integration")
     local logCount = 0
     for _ in pairs(LeafVE.questLogCache) do logCount = logCount + 1 end
     Print("  Cached quest log entries: "..logCount)
