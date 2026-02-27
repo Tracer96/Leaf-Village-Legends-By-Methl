@@ -33,6 +33,7 @@ local SHOUTOUT_MAX_PER_DAY = 2
 local LBOARD_RESYNC_COOLDOWN = 30  -- seconds between outgoing LBOARDREQ messages
 local LBOARD_RESPOND_COOLDOWN = 30 -- seconds between responses to LBOARDREQ
 local SHOUT_SYNC_RESPOND_COOLDOWN = 30 -- seconds between shoutout history sync responses
+local DEFAULT_ACHIEVEMENT_POINTS = 10  -- fallback points per achievement when metadata is unavailable
 
 local INSTANCE_BOSS_POINTS = 10
 local INSTANCE_COMPLETION_POINTS = 5
@@ -2234,6 +2235,16 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         end
       end
     end
+    -- After parsing all entries, compute and cache total points
+    local totalPts = 0
+    for achId, _ in pairs(LeafVE_GlobalDB.achievementCache[sender]) do
+      if achId ~= "_totalPoints" then
+        local meta = LeafVE_AchTest and LeafVE_AchTest.GetAchievementMeta and LeafVE_AchTest.GetAchievementMeta(achId)
+        local pts = (meta and meta.points) or DEFAULT_ACHIEVEMENT_POINTS
+        totalPts = totalPts + pts
+      end
+    end
+    LeafVE_GlobalDB.achievementCache[sender]._totalPoints = totalPts
     -- Refresh the achievement leaderboard panel if it is visible
     if LeafVE.UI and LeafVE.UI.panels then
       if LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
@@ -7006,19 +7017,51 @@ function LeafVE.UI:RefreshAchievementsLeaderboard()
 
   local leaders = {}
 
+  -- Build a unified set of players from both the guild roster and the achievement cache
+  local allPlayers = {}
   for _, guildInfo in pairs(LeafVE.guildRosterCache) do
-    local name = guildInfo.name
+    allPlayers[Lower(guildInfo.name)] = { name = guildInfo.name, class = guildInfo.class or "Unknown" }
+  end
+  if LeafVE_GlobalDB.achievementCache then
+    for cachedName, _ in pairs(LeafVE_GlobalDB.achievementCache) do
+      local lname = Lower(cachedName)
+      if not allPlayers[lname] then
+        allPlayers[lname] = { name = cachedName, class = "Unknown" }
+      end
+    end
+  end
+
+  for _, playerInfo in pairs(allPlayers) do
+    local name = playerInfo.name
     local achPoints = 0
 
+    -- Try live API first
     if LeafVE_AchTest and LeafVE_AchTest.API and LeafVE_AchTest.API.GetPlayerPoints then
       achPoints = LeafVE_AchTest.API.GetPlayerPoints(name) or 0
+    end
+
+    -- Fall back to cached data if live API returned nothing
+    if achPoints == 0 and LeafVE_GlobalDB.achievementCache and LeafVE_GlobalDB.achievementCache[name] then
+      local cache = LeafVE_GlobalDB.achievementCache[name]
+      if cache._totalPoints then
+        achPoints = cache._totalPoints
+      else
+        -- Manually sum cached achievement points
+        for achId, _ in pairs(cache) do
+          if achId ~= "_totalPoints" then
+            local meta = LeafVE_AchTest and LeafVE_AchTest.GetAchievementMeta and LeafVE_AchTest.GetAchievementMeta(achId)
+            local pts = (meta and meta.points) or DEFAULT_ACHIEVEMENT_POINTS
+            achPoints = achPoints + pts
+          end
+        end
+      end
     end
 
     if achPoints > 0 then
       table.insert(leaders, {
         name = name,
         points = achPoints,
-        class = guildInfo.class or "Unknown"
+        class = playerInfo.class
       })
     end
   end
