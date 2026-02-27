@@ -1056,9 +1056,9 @@ function LeafVE:CheckDailyLogin()
     streakData.current = 1
   end
   streakData.lastLogin = today
-  local awarded = self:AddPoints(effectiveName, "L", loginPts)
+  local awarded = self:AddPoints(me, "L", loginPts)
   if awarded and awarded > 0 then
-    self:AddToHistory(effectiveName, "L", awarded, "Daily login")
+    self:AddToHistory(me, "L", awarded, "Daily login")
   end
   LeafVE_DB.loginTracking[me][today] = true
   if awarded and awarded > 0 then
@@ -1225,14 +1225,13 @@ function LeafVE:OnGroupUpdate()
   if currentTick > lastAwardedTick and self.currentGroupStart and (Now() - self.currentGroupStart) >= groupInterval then
     local playerName = ShortName(UnitName("player"))
     if playerName then
-      local effectiveName = GetEffectiveName()
       local pointsPerGuildie = (LeafVE_DB.options and LeafVE_DB.options.groupPoints) or GROUP_POINTS
       local points = pointsPerGuildie * numGuildies
-      local awarded = self:AddPoints(effectiveName, "G", points)
+      local awarded = self:AddPoints(playerName, "G", points)
       if awarded and awarded > 0 then
-        self:AddToHistory(effectiveName, "G", awarded, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
-        LeafVE_DB.groupSessions[effectiveName] = (LeafVE_DB.groupSessions[effectiveName] or 0) + 1
-        self:CheckBadgeMilestones(effectiveName)
+        self:AddToHistory(playerName, "G", awarded, "Grouped with "..numGuildies.." guildies: "..table.concat(guildies, ", "))
+        LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
+        self:CheckBadgeMilestones(playerName)
       end
       self.lastGroupAwardTick = currentTick
       if awarded and awarded > 0 then
@@ -1337,25 +1336,24 @@ function LeafVE:OnInstanceExit()
   local minPresence = math.floor(GROUP_MIN_TIME * INSTANCE_MIN_PRESENCE_PCT)
   if self.instanceHasGuildie and runDuration >= minPresence then
     EnsureDB()
-    local effectiveName = GetEffectiveName()
     local today = DayKey()
-    if not LeafVE_DB.instanceTracking[effectiveName] then
-      LeafVE_DB.instanceTracking[effectiveName] = {}
+    if not LeafVE_DB.instanceTracking[me] then
+      LeafVE_DB.instanceTracking[me] = {}
     end
-    if not LeafVE_DB.instanceTracking[effectiveName][today] then
-      LeafVE_DB.instanceTracking[effectiveName][today] = {completions = 0, bosses = 0}
+    if not LeafVE_DB.instanceTracking[me][today] then
+      LeafVE_DB.instanceTracking[me][today] = {completions = 0, bosses = 0}
     end
-    local tracked = LeafVE_DB.instanceTracking[effectiveName][today]
+    local tracked = LeafVE_DB.instanceTracking[me][today]
     local instCap = (LeafVE_DB.options and LeafVE_DB.options.instanceMaxDaily) or INSTANCE_MAX_DAILY
     local instPts = (LeafVE_DB.options and LeafVE_DB.options.instanceCompletionPoints) or INSTANCE_COMPLETION_POINTS
     if instCap == 0 or tracked.completions < instCap then
       if self.instanceBossesKilledThisRun > 0 then
         local scaledInstPts = instPts * self.instanceBossesKilledThisRun
-        local awarded = self:AddPoints(effectiveName, "G", scaledInstPts)
+        local awarded = self:AddPoints(me, "G", scaledInstPts)
         if awarded and awarded > 0 then
           tracked.completions = tracked.completions + 1
           tracked.bosses = tracked.bosses + self.instanceBossesKilledThisRun
-          self:AddToHistory(effectiveName, "G", awarded, "Instance completion: "..(self.instanceZone or "Unknown"))
+          self:AddToHistory(me, "G", awarded, "Instance completion: "..(self.instanceZone or "Unknown"))
           Print(string.format("Instance complete! +%d G (%d boss%s)", awarded, self.instanceBossesKilledThisRun, self.instanceBossesKilledThisRun ~= 1 and "es" or ""))
         end
       else
@@ -1379,10 +1377,9 @@ function LeafVE:OnBossKillChat(msg)
   EnsureDB()
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
   local bossPts = (LeafVE_DB.options and LeafVE_DB.options.bossPoints) or INSTANCE_BOSS_POINTS
-  local effectiveName = GetEffectiveName()
-  local awarded = self:AddPoints(effectiveName, "G", bossPts)
+  local awarded = self:AddPoints(me, "G", bossPts)
   if awarded and awarded > 0 then
-    self:AddToHistory(effectiveName, "G", awarded, "Boss kill: "..bossName)
+    self:AddToHistory(me, "G", awarded, "Boss kill: "..bossName)
     Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
   end
 end
@@ -1411,7 +1408,6 @@ function LeafVE:OnQuestTurnedIn()
 
   EnsureDB()
   local today = DayKey()
-  local effectiveName = GetEffectiveName()
 
   -- Identify which quest was just completed from the pending turn-in capture
   local questTitle = LeafVE.pendingQuestTurnIn
@@ -1429,23 +1425,23 @@ function LeafVE:OnQuestTurnedIn()
     end
   end
 
-  -- Daily cap tracked per effective name (account-wide)
-  if not LeafVE_DB.questTracking[effectiveName] then
-    LeafVE_DB.questTracking[effectiveName] = {}
+  -- Daily cap tracked per character
+  if not LeafVE_DB.questTracking[me] then
+    LeafVE_DB.questTracking[me] = {}
   end
-  if not LeafVE_DB.questTracking[effectiveName][today] then
-    LeafVE_DB.questTracking[effectiveName][today] = 0
+  if not LeafVE_DB.questTracking[me][today] then
+    LeafVE_DB.questTracking[me][today] = 0
   end
   local questCap = (LeafVE_DB.options and LeafVE_DB.options.questMaxDaily) or QUEST_MAX_DAILY
   local questPts = (LeafVE_DB.options and LeafVE_DB.options.questPoints) or QUEST_POINTS
-  if questCap ~= 0 and LeafVE_DB.questTracking[effectiveName][today] >= questCap then
+  if questCap ~= 0 and LeafVE_DB.questTracking[me][today] >= questCap then
     self:CacheQuestLog()
     return
   end
   LeafVE.suppressNextPointNotification = true
-  local awarded = self:AddPoints(effectiveName, "G", questPts)
+  local awarded = self:AddPoints(me, "G", questPts)
   if awarded and awarded > 0 then
-    LeafVE_DB.questTracking[effectiveName][today] = LeafVE_DB.questTracking[effectiveName][today] + 1
+    LeafVE_DB.questTracking[me][today] = LeafVE_DB.questTracking[me][today] + 1
     if questTitle and LeafVE_DB.questCompletions[me] then
       LeafVE_DB.questCompletions[me][questTitle] = Now()
     end
@@ -1454,11 +1450,11 @@ function LeafVE:OnQuestTurnedIn()
   local histMsg = "Quest completion"
   if questTitle then histMsg = "Quest: "..questTitle end
   if awarded and awarded > 0 then
-    self:AddToHistory(effectiveName, "G", awarded, histMsg)
+    self:AddToHistory(me, "G", awarded, histMsg)
     if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
       self:ShowNotification("Quest Complete!", string.format("[%s] +%d LP", displayTitle, awarded), QUEST_ICON, THEME.gold)
     end
-    Print(string.format("Quest complete! [%s] +%d G (%d/%s today)", displayTitle, awarded, LeafVE_DB.questTracking[effectiveName][today], questCap == 0 and "unlimited" or tostring(questCap)))
+    Print(string.format("Quest complete! [%s] +%d G (%d/%s today)", displayTitle, awarded, LeafVE_DB.questTracking[me][today], questCap == 0 and "unlimited" or tostring(questCap)))
   end
   -- Update the cached log to reflect the turn-in
   self:CacheQuestLog()
@@ -1477,20 +1473,19 @@ function LeafVE:GiveShoutout(targetName, reason)
     return false 
   end
   
-  -- Daily cap is tracked per effective giver (account-wide)
-  local effectiveGiver = GetEffectiveName()
+  -- Daily cap is tracked per giver character
   local today = DayKey()
-  if not LeafVE_DB.shoutouts[effectiveGiver] then 
-    LeafVE_DB.shoutouts[effectiveGiver] = {} 
+  if not LeafVE_DB.shoutouts[giverName] then 
+    LeafVE_DB.shoutouts[giverName] = {} 
   end
   
   local count = 0
-  for tname, timestamp in pairs(LeafVE_DB.shoutouts[effectiveGiver]) do
+  for tname, timestamp in pairs(LeafVE_DB.shoutouts[giverName]) do
     local shoutoutDay = DayKeyFromTS(timestamp)
     if shoutoutDay == today then 
       count = count + 1 
     else 
-      LeafVE_DB.shoutouts[effectiveGiver][tname] = nil 
+      LeafVE_DB.shoutouts[giverName][tname] = nil 
     end
   end
   
@@ -1510,16 +1505,16 @@ function LeafVE:GiveShoutout(targetName, reason)
   end
 
   local shoutPts = (LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
-  LeafVE_DB.shoutouts[effectiveGiver][targetName] = Now()
+  LeafVE_DB.shoutouts[giverName][targetName] = Now()
   local awardedTarget = self:AddPoints(targetName, "S", shoutPts)
   if awardedTarget and awardedTarget > 0 then
     self:AddToHistory(targetName, "S", awardedTarget, "Shoutout from "..giverName..(reason and (": "..reason) or ""))
   end
-  local awardedGiver = self:AddPoints(effectiveGiver, "S", shoutPts)
+  local awardedGiver = self:AddPoints(giverName, "S", shoutPts)
   if awardedGiver and awardedGiver > 0 then
-    self:AddToHistory(effectiveGiver, "S", awardedGiver, "Gave shoutout to "..targetName..(reason and (": "..reason) or ""))
+    self:AddToHistory(giverName, "S", awardedGiver, "Gave shoutout to "..targetName..(reason and (": "..reason) or ""))
   end
-  self:CheckAndAwardBadge(effectiveGiver, "first_shoutout_given")
+  self:CheckAndAwardBadge(giverName, "first_shoutout_given")
   
   if InGuild() then
     reason = reason and Trim(reason) or ""
@@ -1655,7 +1650,7 @@ function LeafVE:BroadcastLeaderboardData()
         local altMain = GetMainForPlayer(altName)
         if altMain and Lower(altMain) == Lower(name) then
           local altPts = LeafVE_DB.alltime[altName] or LeafVE_DB.lboard.alltime[altName] or {L = 0, G = 0, S = 0}
-          lL = lL + (altPts.L or 0)
+          -- Do NOT pool L (Login) points from alts; only G and S pool
           lG = lG + (altPts.G or 0)
           lS = lS + (altPts.S or 0)
         end
@@ -1678,7 +1673,7 @@ function LeafVE:BroadcastLeaderboardData()
         if altMain and Lower(altMain) == Lower(name) then
           local altWpts = weekAgg[altName] or syncedWeek[altName]
           if altWpts then
-            wL = wL + (altWpts.L or 0)
+            -- Do NOT pool L (Login) points from alts; only G and S pool
             wG = wG + (altWpts.G or 0)
             wS = wS + (altWpts.S or 0)
           end
@@ -4539,7 +4534,7 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
             else
               altPts = altSyncedPts or {L = 0, G = 0, S = 0}
             end
-            totL = totL + (altPts.L or 0)
+            -- Do NOT pool L (Login) points from alts; only G and S pool
             totG = totG + (altPts.G or 0)
             totS = totS + (altPts.S or 0)
           end
@@ -4589,7 +4584,7 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
             else
               altPts = altSyncedPts or {L = 0, G = 0, S = 0}
             end
-            totL = totL + (altPts.L or 0)
+            -- Do NOT pool L (Login) points from alts; only G and S pool
             totG = totG + (altPts.G or 0)
             totS = totS + (altPts.S or 0)
           end
@@ -6030,7 +6025,8 @@ local function BuildAltsPanel(panel)
   yBase = yBase - 22
 
   local infoLines = {
-    "Link alts to a main character to pool all Leaf Points together.",
+    "Link alts to a main character to pool Gameplay (G) and Social (S)",
+    "points together. Login (L) points are tracked per character.",
     "Daily login and shoutout caps are shared across linked characters.",
     "Use |cFFFFD700/lve setleaderchar Name|r to choose which name shows on",
     "the leaderboard.",
