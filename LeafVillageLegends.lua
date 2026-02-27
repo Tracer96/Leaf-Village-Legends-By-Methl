@@ -5786,7 +5786,7 @@ local function BuildAdminPanel(panel)
   -- Section B: Announce Weekly Standings
   local announceSection = subFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   announceSection:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
-  announceSection:SetText("|cFF2DD35CThe Announce Weekly Standings|r")
+  announceSection:SetText("|cFF2DD35CAnnounce Weekly Standings|r")
   yBase = yBase - 28
 
   -- Preview text area
@@ -7780,7 +7780,7 @@ function LeafVE.UI:Refresh()
   end
   
   -- Hide all panels safely
-  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "alts", "welcome", "join", "liveHistory"}
+  local panelNames = {"me", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "alts", "welcome", "join", "liveHistory"}
   for _, name in ipairs(panelNames) do
     if self.panels[name] and self.panels[name].Hide then
       self.panels[name]:Hide()
