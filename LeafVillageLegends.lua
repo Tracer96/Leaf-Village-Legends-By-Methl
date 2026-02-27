@@ -223,7 +223,7 @@ LeafVE.lastCombatAt = 0
 LeafVE.questLogCache       = {}   -- title -> {level, isComplete}  (updated on QUEST_LOG_UPDATE)
 LeafVE.lastQuestTurnInTime = 0    -- timestamp of last quest LP award (guard against double-awarding)
 LeafVE.pendingQuestTurnIn  = nil  -- quest title captured from QUEST_COMPLETE, cleared on QUEST_FINISHED
-LeafVE.lastActivityTime = nil
+LeafVE.lastActivityTime = nil  -- set by UpdateActivity() at PLAYER_LOGIN; nil safely skips the inactivity check until then
 
 local function SetSize(f, w, h)
   if not f then return end
@@ -1355,7 +1355,7 @@ function LeafVE:OnInstanceExit()
     local instPts = self.instanceIsRaid and RAID_COMPLETION_POINTS or INSTANCE_COMPLETION_POINTS
     if instCap == 0 or tracked.completions < instCap then
       if self.instanceBossesKilledThisRun > 0 then
-        local awarded = self:AddPoints(me, "G", instPts)
+        local awarded = self:AddPoints(me, "G", instPts, "Instance: "..(self.instanceZone or "Unknown"))
         if awarded and awarded > 0 then
           tracked.completions = tracked.completions + 1
           tracked.bosses = tracked.bosses + self.instanceBossesKilledThisRun

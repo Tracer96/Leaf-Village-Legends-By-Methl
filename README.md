@@ -16,7 +16,8 @@ The Leaf Village Legends addon transforms our guild experience by tracking membe
   - **L (Login)** — Earned from daily logins and login streaks.
   - **G (Gameplay)** — Earned from quests, dungeons, raids, and boss kills.
   - **S (Social)** — Earned from shoutouts and guild social interactions.
-- **Configurable daily caps** to keep earning balanced and fair.
+- **700 LP daily cap** — A hard-coded 700 Leaf Point daily cap applies across all sources combined (login, group, quests, shoutouts). Quest completions have no separate daily cap.
+- **AFK protection** — Group points are paused if you are AFK or have been inactive for 10+ minutes.
 - **Alt character pooling** — Link alt characters to a main so Gameplay and Social points accumulate on one identity. Login points remain per-character.
 
 ### 🎖️ Badge Collection
@@ -44,7 +45,7 @@ Badges are **auto-tracked** and awarded with in-game toast notifications, chat a
 - **All-Time Leaderboard** — Lifetime total Leaf Points across all members.
 - **Weekly Leaderboard** — Resets each week for competitive seasons.
 - **Achievement Leaderboard** — Tracks completed in-game achievements.
-- **Seasonal rewards** — Configurable gold rewards for top-placing members each season.
+- **Seasonal rewards** — Fixed gold rewards for top-placing members each season (1st: 10g, 2nd: 5g, 3rd: 3g, 4th: 2g, 5th: 1g).
 - **Guild-wide syncing** via addon messaging (`GUILD` channel) — leaderboard data is shared and merged across all online members.
 
 ### 📣 Shoutout System
@@ -70,11 +71,11 @@ Badges are **auto-tracked** and awarded with in-game toast notifications, chat a
 
 ### ⚙️ Admin Panel
 Restricted to guild leadership ranks (**Hokage**, **Sannin**, **Anbu**):
-- Adjust point values for logins, quests, bosses, dungeons, shoutouts, and grouping.
-- Configure daily caps, cooldowns, and seasonal rewards.
-- **Broadcast settings** to all guild members in a single click.
+- **Current Rules** — Displays all hard-coded point values and the 700 LP daily cap for quick reference.
+- **Announce Weekly Standings** — Preview and announce top 5 weekly standings to the guild with gold reward amounts.
+- **Player Management** — Award badges to specific players or remove all data for a player.
 - Hard reset leaderboards, badges, or achievement data.
-- Award or remove badges from individual players.
+- Version check to confirm all guild members are on the same addon version.
 
 ### 🔗 Data Sync
 - Peer-to-peer leaderboard syncing over the `GUILD` addon message channel.
@@ -115,18 +116,18 @@ The main window provides tabbed navigation:
 
 | Tab | Description |
 |-----|-------------|
-| **My Profile** | Your personal Leaf Points, badges, and activity stats |
-| **Shoutouts** | Give and view shoutouts for guild members |
-| **Leaderboard (Lifetime)** | All-time Leaf Points rankings |
-| **Leaderboard (Weekly)** | Current week's rankings |
-| **Roster** | Full guild member list with details |
-| **History** | Point earning history log |
-| **Badges** | Full badge collection with progress |
-| **Achievements** | Achievement leaderboard and tracking |
-| **Options** | Notification and display settings |
-| **Admin** | Officer/leadership configuration (rank-restricted) |
-| **Alts** | Link alt characters to your main |
 | **Welcome** | How-to guide and feature overview |
+| **My Stats** | Your personal Leaf Points, badges, and activity stats |
+| **Roster** | Full guild member list with details |
+| **Weekly** | Current week's rankings |
+| **Lifetime** | All-time Leaf Points rankings |
+| **Achievements** | Achievement leaderboard and tracking |
+| **Badges** | Full badge collection with progress |
+| **Alts** | Link alt characters to your main |
+| **History** | Point earning history log |
+| **Live History** | Real-time point award feed |
+| **Options** | Notification and display settings |
+| **Admin** | Officer/leadership tools (rank-restricted) |
 
 ### Minimap Button
 A minimap icon provides quick access to toggle the UI.
@@ -155,14 +156,15 @@ Only **Hokage**, **Sannin**, and **Anbu** ranks can access the Admin panel and b
 
 | Activity | Point Type | Details |
 |----------|-----------|---------|
-| Daily Login | L (Login) | Awarded once per day; streak bonuses tracked |
-| Quest Completion | G (Gameplay) | Points per quest turn-in (daily cap applies) |
-| Boss Kill | G (Gameplay) | Points per recognized boss kill in dungeons/raids |
-| Dungeon Completion | G (Gameplay) | Scaled by number of bosses killed in the run |
-| Guild Grouping | G (Gameplay) | Points per interval while grouped with guildmates |
-| Shoutout Received | S (Social) | Points when a guildie gives you a shoutout |
+| Daily Login | L (Login) | 20 LP once per day; streak bonuses tracked |
+| Quest Completion | G (Gameplay) | 10 LP per quest turn-in (requires guildie in group, no daily cap) |
+| Boss Kill | G (Gameplay) | 10 LP (dungeon) / 25 LP (raid) per recognized boss kill |
+| Dungeon Completion | G (Gameplay) | 10 LP flat per dungeon completion |
+| Raid Completion | G (Gameplay) | 25 LP flat per raid completion |
+| Guild Grouping | G (Gameplay) | 10 LP per guildie every 20 min (AFK-protected) |
+| Shoutout Received | S (Social) | 10 LP when a guildie gives you a shoutout (max 2/day given) |
 
-All point values, caps, and cooldowns are configurable by admins.
+**Daily cap: 700 LP total across all sources per day (hard-coded).**
 
 ---
 
@@ -175,17 +177,28 @@ All point values, caps, and cooldowns are configurable by admins.
 
 ---
 
-## 🔧 Configuration Defaults
+## 🔧 Configuration
 
-| Setting | Default Value |
-|---------|--------------|
-| Group Min Time | 300 seconds (5 min) |
-| Group Cooldown | 900 seconds (15 min) |
-| Group Points | Configurable per guildie |
-| Shoutout Max Per Day | Configurable |
-| Leaf Point Daily Cap | Configurable |
-| Quest Max Daily | Configurable |
-| Instance Max Daily | Configurable |
+All point values and caps are **hard-coded** and not configurable. The following values apply:
+
+| Setting | Value |
+|---------|-------|
+| Daily LP Cap | 700 (total across all sources) |
+| Group Points per Guildie | 10 LP every 20 min |
+| Quest Points | 10 LP per turn-in (no daily cap) |
+| Daily Login Points | 20 LP |
+| Dungeon Boss | 10 LP |
+| Raid Boss | 25 LP |
+| Dungeon Completion | 10 LP |
+| Raid Completion | 25 LP |
+| Shoutout Points | 10 LP (giver and receiver) |
+| Shoutout Max Per Day | 2 per giver |
+| AFK Inactivity Threshold | 10 minutes |
+| Season Reward 1st Place | 10 gold |
+| Season Reward 2nd Place | 5 gold |
+| Season Reward 3rd Place | 3 gold |
+| Season Reward 4th Place | 2 gold |
+| Season Reward 5th Place | 1 gold |
 
 ---
 
