@@ -17,7 +17,7 @@ The Leaf Village Legends addon transforms our guild experience by tracking membe
   - **G (Gameplay)** — Earned from quests, dungeons, raids, and boss kills.
   - **S (Social)** — Earned from shoutouts and guild social interactions.
 - **Configurable daily caps** to keep earning balanced and fair.
-- **Alt character pooling** — Link alt characters to a main so Leaf Points accumulate on one identity.
+- **Alt character pooling** — Link alt characters to a main so Gameplay and Social points accumulate on one identity. Login points remain per-character.
 
 ### 🎖️ Badge Collection
 Over 20 collectible badges across 6 categories, each with WoW-style quality tiers:

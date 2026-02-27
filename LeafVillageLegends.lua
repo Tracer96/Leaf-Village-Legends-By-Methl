@@ -1056,9 +1056,9 @@ function LeafVE:CheckDailyLogin()
     streakData.current = 1
   end
   streakData.lastLogin = today
-  local awarded = self:AddPoints(effectiveName, "L", loginPts)
+  local awarded = self:AddPoints(me, "L", loginPts)
   if awarded and awarded > 0 then
-    self:AddToHistory(effectiveName, "L", awarded, "Daily login")
+    self:AddToHistory(me, "L", awarded, "Daily login")
   end
   LeafVE_DB.loginTracking[me][today] = true
   if awarded and awarded > 0 then
@@ -1655,7 +1655,7 @@ function LeafVE:BroadcastLeaderboardData()
         local altMain = GetMainForPlayer(altName)
         if altMain and Lower(altMain) == Lower(name) then
           local altPts = LeafVE_DB.alltime[altName] or LeafVE_DB.lboard.alltime[altName] or {L = 0, G = 0, S = 0}
-          lL = lL + (altPts.L or 0)
+          -- Do NOT pool L (Login) points from alts; only G and S pool
           lG = lG + (altPts.G or 0)
           lS = lS + (altPts.S or 0)
         end
@@ -1678,7 +1678,7 @@ function LeafVE:BroadcastLeaderboardData()
         if altMain and Lower(altMain) == Lower(name) then
           local altWpts = weekAgg[altName] or syncedWeek[altName]
           if altWpts then
-            wL = wL + (altWpts.L or 0)
+            -- Do NOT pool L (Login) points from alts; only G and S pool
             wG = wG + (altWpts.G or 0)
             wS = wS + (altWpts.S or 0)
           end
@@ -4539,7 +4539,7 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
             else
               altPts = altSyncedPts or {L = 0, G = 0, S = 0}
             end
-            totL = totL + (altPts.L or 0)
+            -- Do NOT pool L (Login) points from alts; only G and S pool
             totG = totG + (altPts.G or 0)
             totS = totS + (altPts.S or 0)
           end
@@ -4589,7 +4589,7 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
             else
               altPts = altSyncedPts or {L = 0, G = 0, S = 0}
             end
-            totL = totL + (altPts.L or 0)
+            -- Do NOT pool L (Login) points from alts; only G and S pool
             totG = totG + (altPts.G or 0)
             totS = totS + (altPts.S or 0)
           end
@@ -6030,7 +6030,8 @@ local function BuildAltsPanel(panel)
   yBase = yBase - 22
 
   local infoLines = {
-    "Link alts to a main character to pool all Leaf Points together.",
+    "Link alts to a main character to pool Gameplay (G) and Social (S)",
+    "points together. Login (L) points are tracked per character.",
     "Daily login and shoutout caps are shared across linked characters.",
     "Use |cFFFFD700/lve setleaderchar Name|r to choose which name shows on",
     "the leaderboard.",
