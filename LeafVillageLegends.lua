@@ -1075,10 +1075,9 @@ function LeafVE:UpdateGuildRosterCache()
   if now - self.guildRosterCacheTime < GUILD_ROSTER_CACHE_DURATION then return end
   
   self.guildRosterCache = {} 
-  if not InGuild() then return end
-  
+
+  if InGuild() then
   EnsureDB()
-  
   -- Only request a fresh roster from the server periodically to avoid hammering it.
   if GuildRoster and (now - self.guildRosterRequestAt >= GUILD_ROSTER_CACHE_DURATION) then
     GuildRoster()
@@ -1140,12 +1139,12 @@ function LeafVE:UpdateGuildRosterCache()
       end
     end
   end
+  end -- end if InGuild()
   
   self.guildRosterCacheTime = now
 end
 
 function LeafVE:GetGuildInfo(playerName)
-  if not InGuild() then return nil end
   self:UpdateGuildRosterCache() playerName = ShortName(playerName) if not playerName then return nil end
   return self.guildRosterCache[Lower(playerName)]
 end
@@ -1192,7 +1191,6 @@ function LeafVE:IsKnownGuildie(name)
 end
 
 function LeafVE:GetGroupGuildies()
-  if not InGuild() then return {} end
   local myGuild = GetGuildInfo("player")  -- may be nil early in the session
   self:UpdateGuildRosterCache()
   local guildies = {} local numMembers = GetNumRaidMembers() local isRaid = numMembers > 0
@@ -1407,7 +1405,6 @@ end
 function LeafVE:OnQuestTurnedIn()
   local me = ShortName(UnitName("player"))
   if not me then return end
-  if not InGuild() then return end
 
   -- Guard against double-awarding if QUEST_LOG_UPDATE fires multiple times
   -- for the same turn-in within a short window (e.g. ~3 seconds).
@@ -1566,7 +1563,6 @@ function LeafVE:GiveShoutout(targetName, reason)
 end
 
 function LeafVE:BroadcastMyAchievements()
-  if not InGuild() then return end
   EnsureDB()
 
   if not LeafVE_AchTest_DB or not LeafVE_AchTest_DB.achievements then return end
@@ -1580,6 +1576,8 @@ function LeafVE:BroadcastMyAchievements()
   end
 
   if table.getn(entries) == 0 then return end
+
+  if not InGuild() then return end
 
   -- Send in chunks to stay within the 255-byte WoW addon message limit.
   -- "ACHSYNC:" prefix uses 8 chars (255 - 8 = 247 available). Use 220 for safety.
@@ -1605,8 +1603,6 @@ function LeafVE:BroadcastMyAchievements()
 end
 
 function LeafVE:BroadcastBadges()
-  if not InGuild() then return end
-  
   local me = ShortName(UnitName("player"))
   if not me then return end
   
@@ -1619,15 +1615,13 @@ function LeafVE:BroadcastBadges()
     table.insert(badgeData, badgeId..":"..timestamp)
   end
   
-  if table.getn(badgeData) > 0 then
+  if table.getn(badgeData) > 0 and InGuild() then
     local message = table.concat(badgeData, ",")
     SendAddonMessage("LeafVE", "BADGES:"..message, "GUILD")
   end
 end
 
 function LeafVE:BroadcastLeaderboardData()
-  if not InGuild() then return end
-  
   local me = ShortName(UnitName("player"))
   if not me then return end
   
@@ -1708,6 +1702,7 @@ function LeafVE:BroadcastLeaderboardData()
   -- Send in chunks to stay within the 255-byte WoW addon message limit.
   -- "LBOARD:" prefix uses 7 chars (255 - 7 = 248 available). We use 220 to
   -- stay well under the limit and account for any protocol overhead.
+  if not InGuild() then return end
   local MAX_CHUNK = 220
   local chunk = {}
   local chunkLen = 0
@@ -1731,19 +1726,19 @@ function LeafVE:BroadcastLeaderboardData()
 end
 
 function LeafVE:SendResyncRequest()
-  if not InGuild() then return end
   local now = Now()
   if (now - self.lastResyncRequestAt) < LBOARD_RESYNC_COOLDOWN then return end
   self.lastResyncRequestAt = now
-  SendAddonMessage("LeafVE", "LBOARDREQ", "GUILD")
-  SendAddonMessage("LeafVE", "SHOUTSYNCREQ", "GUILD")
+  if InGuild() then
+    SendAddonMessage("LeafVE", "LBOARDREQ", "GUILD")
+    SendAddonMessage("LeafVE", "SHOUTSYNCREQ", "GUILD")
+  end
 end
 
 -- Serialize the full shoutout history table and broadcast it in chunks.
 -- Format per entry: "giver\31target\31timestamp", entries separated by ",".
 -- Message format: "SHOUTSYNC:N/T:payload" where N is chunk number, T is total.
 function LeafVE:BroadcastShoutoutHistory()
-  if not InGuild() then return end
   EnsureDB()
 
   local entries = {}
@@ -1756,6 +1751,7 @@ function LeafVE:BroadcastShoutoutHistory()
   end
 
   if table.getn(entries) == 0 then return end
+  if not InGuild() then return end
 
   -- Build payload chunks; "SHOUTSYNC:NN/TT:" prefix is at most ~16 chars,
   -- so 200-char payloads keep each message well under WoW's 255-byte limit.
@@ -1868,8 +1864,6 @@ function LeafVE:MergeShoutoutHistory(payload)
 end
 
 function LeafVE:BroadcastPlayerNote(noteText)
-  if not InGuild() then return end
-  
   local me = ShortName(UnitName("player"))
   if not me then return end
   
@@ -1878,7 +1872,9 @@ function LeafVE:BroadcastPlayerNote(noteText)
   -- Escape special characters
   noteText = string.gsub(noteText, "|", "||")
   
-  SendAddonMessage("LeafVE", "NOTE:"..noteText, "GUILD")
+  if InGuild() then
+    SendAddonMessage("LeafVE", "NOTE:"..noteText, "GUILD")
+  end
 end
 
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
