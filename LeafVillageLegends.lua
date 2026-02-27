@@ -1904,7 +1904,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     LeafVE.versionResponses[sender] = ver
     -- Auto-nag if someone has a higher version than us
     local myVer = LeafVE.version
-    if not LeafVE.shownVersionNag and ver > myVer then
+    if not LeafVE.shownVersionNag and VersionLessThan(myVer, ver) then
       LeafVE.shownVersionNag = true
       Print("|cFFFFAA00⚠ Your Leaf Village Legends addon is outdated! You have v"..myVer..", latest is v"..ver..". Please update!|r")
     end
@@ -2489,6 +2489,16 @@ end
 -------------------------------------------------
 LeafVE.UI = LeafVE.UI or { activeTab = "me" }
 
+-- Helper: compare two "major.minor" version strings numerically
+local function VersionLessThan(a, b)
+  local amaj, amin = string.match(a or "0.0", "(%d+)%.(%d+)")
+  local bmaj, bmin = string.match(b or "0.0", "(%d+)%.(%d+)")
+  amaj, amin = tonumber(amaj) or 0, tonumber(amin) or 0
+  bmaj, bmin = tonumber(bmaj) or 0, tonumber(bmin) or 0
+  if amaj ~= bmaj then return amaj < bmaj end
+  return amin < bmin
+end
+
 -- C_Timer.After polyfill for WoW 1.12 (uses OnUpdate on a hidden frame)
 if not C_Timer_After then
   C_Timer_After = function(delay, func)
@@ -2522,7 +2532,7 @@ function LeafVE:ShowVersionResults()
         local status
         if ver == myVer then
           status = "ok"
-        elseif ver < myVer then
+        elseif VersionLessThan(ver, myVer) then
           status = "old"
         else
           status = "newer"
