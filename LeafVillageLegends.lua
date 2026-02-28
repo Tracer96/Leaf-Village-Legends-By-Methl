@@ -74,6 +74,12 @@ local LEAF_POINT_DAILY_CAP = 700
 local GROUP_POINTS = 10               -- points awarded per guild group tick
 local GROUP_POINTS_DAILY_CAP = 0      -- no separate group cap; global daily cap applies
 
+-- Named constants for the three point categories.  Use these everywhere instead
+-- of raw "L"/"G"/"S" strings to prevent accidental mis-categorisation.
+local POINT_TYPE_LOGIN    = "L"  -- daily login and login-streak bonus
+local POINT_TYPE_GAMEPLAY = "G"  -- quests, dungeons, raids, boss kills, guild grouping
+local POINT_TYPE_SOCIAL   = "S"  -- shoutout received (the ONLY activity that awards S)
+
 local SEASON_REWARD_1 = 10
 local SEASON_REWARD_2 = 5
 local SEASON_REWARD_3 = 3
@@ -1274,6 +1280,10 @@ end
 
 function LeafVE:AddPoints(playerName, pointType, amount)
   EnsureDB() playerName = ShortName(playerName) if not playerName then return end
+  if pointType ~= POINT_TYPE_LOGIN and pointType ~= POINT_TYPE_GAMEPLAY and pointType ~= POINT_TYPE_SOCIAL then
+    Print("ERROR: Invalid point type '"..tostring(pointType).."' — must be L, G, or S")
+    return
+  end
   amount = amount or 1 local day = DayKey()
   if not LeafVE_DB.global[day] then LeafVE_DB.global[day] = {} end
   if not LeafVE_DB.global[day][playerName] then LeafVE_DB.global[day][playerName] = {L = 0, G = 0, S = 0} end
@@ -1844,10 +1854,6 @@ function LeafVE:GiveShoutout(targetName, reason)
   if awardedTarget and awardedTarget > 0 then
     self:AddToHistory(targetName, "S", awardedTarget, "Shoutout from "..giverName..(reason and (": "..reason) or ""))
   end
-  local awardedGiver = self:AddPoints(giverName, "S", shoutPts)
-  if awardedGiver and awardedGiver > 0 then
-    self:AddToHistory(giverName, "S", awardedGiver, "Gave shoutout to "..targetName..(reason and (": "..reason) or ""))
-  end
   self:CheckAndAwardBadge(giverName, "first_shoutout_given")
   
   if InGuild() then
@@ -2166,14 +2172,6 @@ function LeafVE:MergeShoutoutHistory(payload)
               LeafVE_DB.season[target].S = (LeafVE_DB.season[target].S or 0) + 10
               self:CheckBadgeMilestones(target)
               self:AddToHistory(target, "S", 10, "Shoutout from "..giver.." (synced)")
-              if not LeafVE_DB.global[actualDay][giver] then LeafVE_DB.global[actualDay][giver] = {L=0, G=0, S=0} end
-              LeafVE_DB.global[actualDay][giver].S = (LeafVE_DB.global[actualDay][giver].S or 0) + 10
-              if not LeafVE_DB.alltime[giver] then LeafVE_DB.alltime[giver] = {L=0, G=0, S=0} end
-              LeafVE_DB.alltime[giver].S = (LeafVE_DB.alltime[giver].S or 0) + 10
-              if not LeafVE_DB.season[giver] then LeafVE_DB.season[giver] = {L=0, G=0, S=0} end
-              LeafVE_DB.season[giver].S = (LeafVE_DB.season[giver].S or 0) + 10
-              self:CheckBadgeMilestones(giver)
-              self:AddToHistory(giver, "S", 10, "Gave shoutout to "..target.." (synced)")
               self:CheckAndAwardBadge(giver, "first_shoutout_given")
               self:CheckAndAwardBadge(target, "first_shoutout_received")
               updated = true
@@ -2720,7 +2718,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
               LeafVE_DB.shoutouts[msgGiver][targetName] = Now()
               local shoutPtsIncoming = (LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
               self:AddPoints(targetName, "S", shoutPtsIncoming)
-              self:AddPoints(msgGiver, "S", shoutPtsIncoming)
             end
             -- If we are the shoutout recipient, award received badges on our machine
             if me and Lower(me) == Lower(targetName) then
