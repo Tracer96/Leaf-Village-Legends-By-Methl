@@ -21,6 +21,10 @@ LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
 LeafVE.version = "10.8"
+-- Minimum peer version whose synced data is accepted.  Bump this whenever a
+-- version introduces a breaking data-format change so that older clients
+-- cannot corrupt the shared leaderboard / badge data.
+LeafVE.minCompatVersion = "10.8"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
@@ -596,6 +600,13 @@ end
 
 local function EnsureDB()
   if not LeafVE_DB then LeafVE_DB = {} end
+  -- Detect version upgrade and notify the player once per session.
+  if LeafVE_DB.addonVersion ~= LeafVE.version then
+    if LeafVE_DB.addonVersion then
+      Print("|cFFFFD700Leaf Village Legends updated from v"..LeafVE_DB.addonVersion.." → v"..LeafVE.version..". Old-version peers will be ignored until they update.|r")
+    end
+    LeafVE_DB.addonVersion = LeafVE.version
+  end
   if not LeafVE_DB.options then LeafVE_DB.options = {} end
   if not LeafVE_DB.ui then LeafVE_DB.ui = {} end
   if not LeafVE_DB.global then LeafVE_DB.global = {} end
@@ -2101,6 +2112,17 @@ local function VersionLessThan(a, b)
   return amin < bmin
 end
 
+-- Returns true when a sender's known version meets LeafVE.minCompatVersion.
+-- If the sender's version has not been received yet (VERSIONRSP not yet seen),
+-- we optimistically allow the message so we don't silently drop data on the
+-- very first login before any version exchange has occurred.
+local function IsSenderCompatible(sender)
+  if not LeafVE.versionResponses then return true end
+  local senderVer = LeafVE.versionResponses[sender]
+  if not senderVer then return true end
+  return not VersionLessThan(senderVer, LeafVE.minCompatVersion)
+end
+
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   if prefix ~= "LeafVE" then return end
   if channel ~= "GUILD" and channel ~= "PARTY" and channel ~= "RAID" then return end
@@ -2127,6 +2149,14 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     if not LeafVE.shownVersionNag and VersionLessThan(myVer, ver) then
       LeafVE.shownVersionNag = true
       Print("|cFFFFAA00⚠ Your Leaf Village Legends addon is outdated! You have v"..myVer..", latest is v"..ver..". Please update!|r")
+    end
+    -- Warn once when a guildmate's version is below the minimum compatible version
+    if VersionLessThan(ver, LeafVE.minCompatVersion) then
+      if not LeafVE.warnedOldVersion then LeafVE.warnedOldVersion = {} end
+      if not LeafVE.warnedOldVersion[sender] then
+        LeafVE.warnedOldVersion[sender] = true
+        Print("|cFFFF4444⚠ "..sender.." is running an outdated version (v"..ver..") and their synced data will not be accepted. Ask them to update to v"..LeafVE.minCompatVersion.."+.|r")
+      end
     end
     return
   end
@@ -2224,6 +2254,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
 
   -- Parse badge sync message
   if string.sub(message, 1, 7) == "BADGES:" then
+    if not IsSenderCompatible(sender) then return end
     local badgeData = string.sub(message, 8)
     
     EnsureDB()
@@ -2280,6 +2311,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     
   -- Parse shoutout sync message
   elseif string.sub(message, 1, 9) == "SHOUTOUT:" then
+    if not IsSenderCompatible(sender) then return end
     local shoutData = string.sub(message, 10)
     local colonPos = string.find(shoutData, ":")
     if colonPos then
@@ -2354,6 +2386,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     
     -- **NEW: Parse leaderboard sync message**
   elseif string.sub(message, 1, 7) == "LBOARD:" then
+    if not IsSenderCompatible(sender) then return end
     local lboardData = string.sub(message, 8)
     
     -- Parse comma-separated player entries
@@ -2399,6 +2432,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
 
   -- Handle chunked shoutout history sync payload
   elseif string.sub(message, 1, 10) == "SHOUTSYNC:" then
+    if not IsSenderCompatible(sender) then return end
     local rest = string.sub(message, 11)
     local slashPos = string.find(rest, "/")
     if not slashPos then return end
@@ -2475,6 +2509,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
 
   -- Handle achievement data sync from a guild member
   elseif string.sub(message, 1, 8) == "ACHSYNC:" then
+    if not IsSenderCompatible(sender) then return end
     local achData = string.sub(message, 9)
     EnsureDB()
     if not LeafVE_GlobalDB.achievementCache then
@@ -8553,6 +8588,10 @@ ef:SetScript("OnEvent", function()
       broadcastTimer = broadcastTimer + arg1
       if broadcastTimer >= 5 then
         if InGuild() then
+          -- Request version info from all online guild members so we can
+          -- enforce minCompatVersion when their data messages arrive.
+          LeafVE.versionResponses = {}
+          SendAddonMessage("LeafVE", "VERSIONREQ", "GUILD")
           LeafVE:BroadcastBadges()
           LeafVE:BroadcastLeaderboardData()
           
