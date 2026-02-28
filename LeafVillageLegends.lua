@@ -175,28 +175,227 @@ BADGES = {
 
 -- Known Classic WoW boss names for per-boss point awards (CHAT_MSG_COMBAT_HOSTILE_DEATH detection)
 local KNOWN_BOSSES = {
-  -- Dungeons
-  ["Taragaman the Hungerer"] = true, ["Mutanus the Devourer"] = true,
-  ["Edwin VanCleef"] = true, ["Arugal"] = true, ["Aku'mai"] = true,
-  ["Bazil Thredd"] = true, ["Mekgineer Thermaplugg"] = true,
-  ["Charlga Razorflank"] = true, ["Bloodmage Thalnos"] = true,
-  ["Arcanist Doan"] = true, ["Herod"] = true, ["High Inquisitor Whitemane"] = true,
-  ["Amnennar the Coldbringer"] = true, ["Archaedas"] = true,
-  ["Chief Ukorz Sandscalp"] = true, ["Princess Theradras"] = true,
-  ["Shade of Eranikus"] = true, ["Emperor Dagran Thaurissan"] = true,
-  ["King Gordok"] = true, ["Immol'thar"] = true, ["Prince Tortheldrin"] = true,
-  ["Maleki the Pallid"] = true, ["Balnazzar"] = true, ["Cannon Master Willey"] = true,
-  ["Darkmaster Gandling"] = true, ["Lord Alexei Barov"] = true,
+  -- Ragefire Chasm
+  ["Taragaman the Hungerer"] = true, ["Oggleflint"] = true,
+  ["Jergosh the Invoker"] = true, ["Bazzalan"] = true,
+  -- Wailing Caverns
+  ["Lord Cobrahn"] = true, ["Lady Anacondra"] = true, ["Kresh"] = true,
+  ["Deviate Faerie Dragon"] = true, ["Zandara Windhoof"] = true,
+  ["Lord Pythas"] = true, ["Skum"] = true, ["Vangros"] = true,
+  ["Lord Serpentis"] = true, ["Verdan the Everliving"] = true,
+  ["Mutanus the Devourer"] = true,
+  -- The Deadmines
+  ["Jared Voss"] = true, ["Rhahk'Zor"] = true, ["Miner Johnson"] = true,
+  ["Sneed"] = true, ["Sneed's Shredder"] = true, ["Gilnid"] = true,
+  ["Masterpiece Harvester"] = true, ["Mr. Smite"] = true, ["Cookie"] = true,
+  ["Captain Greenskin"] = true, ["Edwin VanCleef"] = true,
+  -- Shadowfang Keep
+  ["Rethilgore"] = true, ["Fel Steed"] = true, ["Razorclaw the Butcher"] = true,
+  ["Baron Silverlaine"] = true, ["Commander Springvale"] = true,
+  ["Sever"] = true, ["Odo the Blindwatcher"] = true, ["Deathsworn Captain"] = true,
+  ["Fenrus the Devourer"] = true, ["Arugal's Voidwalker"] = true,
+  ["Wolf Master Nandos"] = true, ["Archmage Arugal"] = true, ["Prelate Ironmane"] = true,
+  -- Blackfathom Deeps
+  ["Ghamoo-ra"] = true, ["Lady Sarevess"] = true, ["Gelihast"] = true,
+  ["Baron Aquanis"] = true, ["Velthelaxx the Defiler"] = true,
+  ["Twilight Lord Kelris"] = true, ["Old Serra'kis"] = true, ["Aku'mai"] = true,
+  -- The Stockade
+  ["Targorr the Dread"] = true, ["Kam Deepfury"] = true, ["Hamhock"] = true,
+  ["Dextren Ward"] = true, ["Bazil Thredd"] = true, ["Bruegal Ironknuckle"] = true,
+  -- Dragonmaw Retreat
+  ["Gowlfang"] = true, ["Cavernweb Broodmother"] = true, ["Web Master Torkon"] = true,
+  ["Garlok Flamekeeper"] = true, ["Halgan Redbrand"] = true,
+  ["Slagfist Destroyer"] = true, ["Overlord Blackheart"] = true,
+  ["Elder Hollowblood"] = true, ["Searistrasz"] = true, ["Zuluhed the Whacked"] = true,
+  -- Gnomeregan
+  ["Grubbis"] = true, ["Viscous Fallout"] = true, ["Electrocutioner 6000"] = true,
+  ["Crowd Pummeler 9-60"] = true, ["Dark Iron Ambassador"] = true,
+  ["Mekgineer Thermaplugg"] = true,
+  -- Razorfen Kraul
+  ["Aggem Thorncurse"] = true, ["Death Speaker Jargba"] = true,
+  ["Overlord Ramtusk"] = true, ["Razorfen Spearhide"] = true,
+  ["Agathelos the Raging"] = true, ["Blind Hunter"] = true,
+  ["Charlga Razorflank"] = true, ["Earthcaller Halmgar"] = true, ["Rotthorn"] = true,
+  -- The Crescent Grove
+  ["Grovetender Engryss"] = true, ["Keeper Ranathos"] = true,
+  ["High Priestess A'lathea"] = true, ["Fenektis the Deceiver"] = true,
+  ["Master Raxxieth"] = true,
+  -- Scarlet Monastery (Graveyard)
+  ["Interrogator Vishas"] = true, ["Duke Dreadmoore"] = true, ["Scorn"] = true,
+  ["Ironspine"] = true, ["Azshir the Sleepless"] = true, ["Fallen Champion"] = true,
+  ["Bloodmage Thalnos"] = true,
+  -- Scarlet Monastery (Library)
+  ["Houndmaster Loksey"] = true, ["Brother Wystan"] = true, ["Arcanist Doan"] = true,
+  -- Scarlet Monastery (Armory)
+  ["Herod"] = true, ["Armory Quartermaster Daghelm"] = true,
+  -- Scarlet Monastery (Cathedral)
+  ["High Inquisitor Fairbanks"] = true, ["Scarlet Commander Mograine"] = true,
+  ["High Inquisitor Whitemane"] = true,
+  -- Stormwrought Ruins
+  ["Oronok Torn-Heart"] = true, ["Dagar the Glutton"] = true,
+  ["Duke Balor the IV"] = true, ["Librarian Theodorus"] = true,
+  ["Chieftain Stormsong"] = true, ["Deathlord Tidebane"] = true,
+  ["Subjugator Halthas Shadecrest"] = true, ["Mycellakos"] = true,
+  ["Eldermaw the Primordial"] = true, ["Lady Drazare"] = true, ["Mergothid"] = true,
+  -- Razorfen Downs
+  ["Tuten'kash"] = true, ["Lady Falther'ess"] = true, ["Plaguemaw the Rotting"] = true,
+  ["Mordresh Fire Eye"] = true, ["Glutton"] = true, ["Death Prophet Rakameg"] = true,
+  ["Ragglesnout"] = true, ["Amnennar the Coldbringer"] = true,
+  -- Uldaman
+  ["Baelog"] = true, ["Olaf"] = true, ["Eric 'The Swift'"] = true,
+  ["Revelosh"] = true, ["Ironaya"] = true, ["Ancient Stone Keeper"] = true,
+  ["Galgann Firehammer"] = true, ["Grimlok"] = true, ["Archaedas"] = true,
+  -- Gilneas City
+  ["Matthias Holtz"] = true, ["Packmaster Ragetooth"] = true,
+  ["Judge Sutherland"] = true, ["Dustivan Blackcowl"] = true,
+  ["Marshal Magnus Greystone"] = true, ["Horsemaster Levvin"] = true,
+  ["Genn Greymane"] = true,
+  -- Maraudon
+  ["Noxxion"] = true, ["Razorlash"] = true, ["Lord Vyletongue"] = true,
+  ["Meshlok the Harvester"] = true, ["Celebras the Cursed"] = true,
+  ["Landslide"] = true, ["Tinkerer Gizlock"] = true, ["Rotgrip"] = true,
+  ["Princess Theradras"] = true,
+  -- Zul'Farrak
+  ["Antu'sul"] = true, ["Witch Doctor Zum'rah"] = true,
+  ["Shadowpriest Sezz'ziz"] = true, ["Dustwraith"] = true, ["Zerillis"] = true,
+  ["Gahz'rilla"] = true, ["Chief Ukorz Sandscalp"] = true,
+  ["Zel'jeb the Ancient"] = true, ["Champion Razjal the Quick"] = true,
+  -- Sunken Temple
+  ["Atal'alarion"] = true, ["Spawn of Hakkar"] = true, ["Avatar of Hakkar"] = true,
+  ["Jammal'an the Prophet"] = true, ["Ogom the Wretched"] = true,
+  ["Dreamscythe"] = true, ["Weaver"] = true, ["Morphaz"] = true,
+  ["Hazzas"] = true, ["Shade of Eranikus"] = true,
+  -- Hateforge Quarry
+  ["High Foreman Bargul Blackhammer"] = true, ["Engineer Figgles"] = true,
+  ["Corrosis"] = true, ["Hatereaver Annihilator"] = true, ["Har'gesh Doomcaller"] = true,
+  -- Blackrock Depths
+  ["Lord Roccor"] = true, ["High Interrogator Gerstahn"] = true,
+  ["Anub'shiah"] = true, ["Eviscerator"] = true, ["Gorosh the Dervish"] = true,
+  ["Grizzle"] = true, ["Hedrum the Creeper"] = true, ["Ok'thor the Breaker"] = true,
+  ["Theldren"] = true, ["Houndmaster Grebmar"] = true, ["Pyromancer Loregrain"] = true,
+  ["Warder Stilgiss"] = true, ["Verek"] = true, ["Fineous Darkvire"] = true,
+  ["Lord Incendius"] = true, ["Bael'Gar"] = true, ["General Angerforge"] = true,
+  ["Golem Lord Argelmach"] = true, ["Ambassador Flamelash"] = true,
+  ["Panzor the Invincible"] = true, ["Magmus"] = true,
+  ["Princess Moira Bronzebeard"] = true, ["Emperor Dagran Thaurissan"] = true,
+  -- Dire Maul (East)
+  ["Pusillin"] = true, ["Zevrim Thornhoof"] = true, ["Hydrospawn"] = true,
+  ["Lethtendris"] = true, ["Pimgib"] = true, ["Isalien"] = true,
+  ["Alzzin the Wildshaper"] = true,
+  -- Dire Maul (West)
+  ["Tendris Warpwood"] = true, ["Illyanna Ravenoak"] = true,
+  ["Magister Kalendris"] = true, ["Tsu'zee"] = true, ["Revanchion"] = true,
+  ["Immol'thar"] = true, ["Lord Hel'nurath"] = true, ["Prince Tortheldrin"] = true,
+  -- Dire Maul (North)
+  ["Guard Mol'dar"] = true, ["Stomper Kreeg"] = true, ["Guard Fengus"] = true,
+  ["Knot Thimblejack"] = true, ["Guard Slip'kik"] = true,
+  ["Captain Kromcrush"] = true, ["Cho'Rush the Observer"] = true, ["King Gordok"] = true,
+  -- Scholomance
+  ["Kirtonos the Herald"] = true, ["Jandice Barov"] = true, ["Lord Blackwood"] = true,
+  ["Rattlegore"] = true, ["Death Knight Darkreaver"] = true, ["Marduk Blackpool"] = true,
+  ["Vectus"] = true, ["Ras Frostwhisper"] = true, ["Kormok"] = true,
+  ["Instructor Malicia"] = true, ["Doctor Theolen Krastinov"] = true,
+  ["Lorekeeper Polkelt"] = true, ["The Ravenian"] = true,
+  ["Lord Alexei Barov"] = true, ["Lady Illucia Barov"] = true,
+  ["Darkmaster Gandling"] = true,
+  -- Stratholme
+  ["Skul"] = true, ["The Unforgiven"] = true, ["Timmy the Cruel"] = true,
+  ["Malor the Zealous"] = true, ["Crimson Hammersmith"] = true,
+  ["Cannon Master Willey"] = true, ["Archivist Galford"] = true, ["Balnazzar"] = true,
+  ["Hearthsinger Forresten"] = true, ["Balzaphon"] = true, ["Stonespine"] = true,
+  ["Baroness Anastari"] = true, ["Black Guard Swordsmith"] = true,
+  ["Nerub'enkan"] = true, ["Maleki the Pallid"] = true,
+  ["Magistrate Barthilas"] = true, ["Ramstein the Gorger"] = true,
+  ["Baron Rivendare"] = true, ["Sothos"] = true, ["Jarien"] = true,
+  -- Lower Blackrock Spire
+  ["Spirestone Butcher"] = true, ["Spirestone Battle Lord"] = true,
+  ["Spirestone Lord Magus"] = true, ["Highlord Omokk"] = true,
+  ["Shadow Hunter Vosh'gajin"] = true, ["War Master Voone"] = true,
+  ["Burning Felguard"] = true, ["Mor Grayhoof"] = true, ["Bannok Grimaxe"] = true,
+  ["Mother Smolderweb"] = true, ["Crystal Fang"] = true, ["Urok Doomhowl"] = true,
+  ["Quartermaster Zigris"] = true, ["Halycon"] = true, ["Gizrul the Slavener"] = true,
+  ["Ghok Bashguud"] = true, ["Overlord Wyrmthalak"] = true,
+  -- Upper Blackrock Spire
+  ["Pyroguard Emberseer"] = true, ["Solakar Flamewreath"] = true,
+  ["Father Flame"] = true, ["Jed Runewatcher"] = true, ["Goraluk Anvilcrack"] = true,
+  ["Warchief Rend Blackhand"] = true, ["Gyth"] = true, ["The Beast"] = true,
+  ["Lord Valthalak"] = true, ["General Drakkisath"] = true,
+  -- Karazhan Crypt
+  ["Marrowspike"] = true, ["Hivaxxis"] = true, ["Corpsemuncher"] = true,
+  ["Guard Captain Gort"] = true, ["Archlich Enkhraz"] = true,
+  ["Commander Andreon"] = true, ["Alarus"] = true,
+  -- Caverns of Time: Black Morass
+  ["Chronar"] = true, ["Epidamu"] = true, ["Drifting Avatar of Sand"] = true,
+  ["Time-Lord Epochronos"] = true, ["Mossheart"] = true, ["Rotmaw"] = true,
+  ["Antnormi"] = true,
+  -- Stormwind Vault
+  ["Aszosh Grimflame"] = true, ["Tham'Grarr"] = true, ["Black Bride"] = true,
+  ["Damian"] = true, ["Volkan Cruelblade"] = true, ["Arc'tiras"] = true,
   -- Raids
-  ["Lucifron"] = true, ["Magmadar"] = true, ["Gehennas"] = true,
-  ["Garr"] = true, ["Shazzrah"] = true, ["Ragnaros"] = true,
-  ["Onyxia"] = true, ["Razorgore the Untamed"] = true,
-  ["Vaelastrasz the Corrupt"] = true, ["Chromaggus"] = true, ["Nefarian"] = true,
-  ["Venoxis"] = true, ["Hakkar"] = true, ["Kurinnaxx"] = true,
-  ["General Rajaxx"] = true, ["Princess Huhuran"] = true, ["C'Thun"] = true,
-  ["Anub'Rekhan"] = true, ["Noth the Plaguebringer"] = true,
-  ["Heigan the Unclean"] = true, ["Loatheb"] = true, ["Kel'Thuzad"] = true,
-  ["General Drakkisath"] = true,
+  -- Zul'Gurub
+  ["High Priestess Jeklik"] = true, ["High Priest Venoxis"] = true,
+  ["High Priestess Mar'li"] = true, ["Bloodlord Mandokir"] = true,
+  ["Gri'lek"] = true, ["Hazza'rah"] = true, ["Renataki"] = true, ["Wushoolay"] = true,
+  ["Gahz'ranka"] = true, ["High Priest Thekal"] = true, ["High Priestess Arlokk"] = true,
+  ["Jin'do the Hexxer"] = true, ["Hakkar"] = true,
+  -- Ruins of Ahn'Qiraj
+  ["Kurinnaxx"] = true, ["General Rajaxx"] = true, ["Moam"] = true,
+  ["Buru the Gorger"] = true, ["Ayamiss the Hunter"] = true,
+  ["Ossirian the Unscarred"] = true,
+  -- Molten Core
+  ["Incindis"] = true, ["Lucifron"] = true, ["Magmadar"] = true,
+  ["Garr"] = true, ["Shazzrah"] = true, ["Baron Geddon"] = true,
+  ["Golemagg the Incinerator"] = true, ["Basalthar & Smoldaris"] = true,
+  ["Sorcerer-Thane Thaurissan"] = true, ["Sulfuron Harbinger"] = true,
+  ["Majordomo Executus"] = true, ["Ragnaros"] = true,
+  -- Onyxia's Lair
+  ["Onyxia"] = true,
+  -- Blackwing Lair
+  ["Razorgore the Untamed"] = true, ["Vaelastrasz the Corrupt"] = true,
+  ["Broodlord Lashlayer"] = true, ["Firemaw"] = true, ["Ebonroc"] = true,
+  ["Flamegor"] = true, ["Chromaggus"] = true, ["Nefarian"] = true,
+  -- Emerald Sanctum
+  ["Erennius"] = true, ["Solnius the Awakener"] = true,
+  -- Temple of Ahn'Qiraj
+  ["The Prophet Skeram"] = true, ["The Bug Family"] = true,
+  ["Battleguard Sartura"] = true, ["Fankriss the Unyielding"] = true,
+  ["Viscidus"] = true, ["Princess Huhuran"] = true, ["The Twin Emperors"] = true,
+  ["Ouro"] = true, ["C'Thun"] = true,
+  -- Naxxramas
+  ["Patchwerk"] = true, ["Grobbulus"] = true, ["Gluth"] = true, ["Thaddius"] = true,
+  ["Anub'Rekhan"] = true, ["Grand Widow Faerlina"] = true, ["Maexxna"] = true,
+  ["Noth the Plaguebringer"] = true, ["Heigan the Unclean"] = true, ["Loatheb"] = true,
+  ["Instructor Razuvious"] = true, ["Gothik the Harvester"] = true,
+  ["The Four Horsemen"] = true, ["Sapphiron"] = true, ["Kel'Thuzad"] = true,
+  -- Lower Karazhan Halls
+  ["Master Blacksmith Rolfen"] = true, ["Brood Queen Araxxna"] = true,
+  ["Grizikil"] = true, ["Clawlord Howlfang"] = true, ["Lord Blackwald II"] = true,
+  ["Moroes"] = true,
+  -- Upper Karazhan Halls
+  ["Keeper Gnarlmoon"] = true, ["Ley-Watcher Incantagos"] = true,
+  ["Anomalus"] = true, ["Echo of Medivh"] = true, ["King (Chess fight)"] = true,
+  ["Sanv Tas'dal"] = true, ["Kruul"] = true, ["Rupturan the Broken"] = true,
+  ["Mephistroth"] = true,
+  -- World Bosses
+  ["Azuregos"] = true, ["Emeriss"] = true, ["Lethon"] = true, ["Taerar"] = true,
+  ["Ysondre"] = true, ["Lord Kazzak"] = true, ["Nerubian Overseer"] = true,
+  ["Dark Reaver of Karazhan"] = true, ["Ostarius"] = true, ["Concavius"] = true,
+  ["Moo"] = true, ["Cla'ckora"] = true,
+  -- Rare Spawns
+  ["Earthcaller Rezengal"] = true, ["Shade Mage"] = true, ["Graypaw Alpha"] = true,
+  ["Blazespark"] = true, ["Witch Doctor Tan'zo"] = true, ["Widow of the Woods"] = true,
+  ["Dawnhowl"] = true, ["Maltimor's Prototype"] = true, ["Bonecruncher"] = true,
+  ["Duskskitter"] = true, ["Baron Perenolde"] = true, ["Kin'Tozo"] = true,
+  ["Grug'thok the Seer"] = true, ["M-0L1Y"] = true, ["Explorer Ashbeard"] = true,
+  ["Jal'akar"] = true, ["Embereye"] = true, ["Ruk'thok the Pyromancer"] = true,
+  ["Tarangos"] = true, ["Ripjaw"] = true, ["Xalvic Blackclaw"] = true,
+  ["Aquitus"] = true, ["Firstborn of Arugal"] = true, ["Letashaz"] = true,
+  ["Margon the Mighty"] = true, ["The Wandering Knight"] = true, ["Stoneshell"] = true,
+  ["Zareth Terrorblade"] = true, ["Highvale Silverback"] = true,
+  ["Mallon The Moontouched"] = true, ["Blademaster Kargron"] = true,
+  ["Professor Lysander"] = true, ["Admiral Barean Westwind"] = true,
+  ["Azurebeak"] = true, ["Barkskin Fisher"] = true, ["Crusader Larsarius"] = true,
+  ["Shadeflayer Goliath"] = true,
 }
 
 LeafVE.guildRosterCache = {}
