@@ -4735,7 +4735,7 @@ function LeafVE.UI:CreateGearPopup()
   popup.refreshBtn = refreshBtn
 
   -- Left column label
-  local slotLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local slotLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
   slotLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 15, -68)
   slotLabel:SetText("|cFFFFD700Equipment|r")
 
@@ -4753,12 +4753,12 @@ function LeafVE.UI:CreateGearPopup()
   popup.slotChild = slotChild
 
   -- Right column label
-  local statLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local statLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
   statLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 325, -68)
   statLabel:SetText("|cFFFFD700Important Stats|r")
 
   -- Stats text
-  local statsText = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  local statsText = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   statsText:SetPoint("TOPLEFT", statLabel, "BOTTOMLEFT", 0, -8)
   statsText:SetWidth(210)
   statsText:SetJustifyH("LEFT")
@@ -4817,7 +4817,7 @@ function LeafVE.UI:RefreshGearPopup(playerName)
 
   local scrollChild = self.gearPopup.slotChild
   local yOffset     = -5
-  local entryH      = 20
+  local entryH      = 30
   local me = ShortName(UnitName("player"))
   local isLocalPlayer = me and Lower(playerName) == Lower(me)
 
@@ -4834,20 +4834,20 @@ function LeafVE.UI:RefreshGearPopup(playerName)
         entry:SetWidth(265)
 
         local iconTex = entry:CreateTexture(nil, "OVERLAY")
-        iconTex:SetWidth(18)
-        iconTex:SetHeight(18)
+        iconTex:SetWidth(24)
+        iconTex:SetHeight(24)
         iconTex:SetPoint("LEFT", entry, "LEFT", 2, 0)
         entry.iconTex = iconTex
 
-        local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        labelFS:SetPoint("LEFT", entry, "LEFT", 22, 0)
-        labelFS:SetWidth(68)
+        local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        labelFS:SetPoint("LEFT", entry, "LEFT", 28, 0)
+        labelFS:SetWidth(75)
         labelFS:SetJustifyH("LEFT")
         entry.labelFS = labelFS
 
-        local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         itemFS:SetPoint("LEFT", labelFS, "RIGHT", 2, 0)
-        itemFS:SetWidth(170)
+        itemFS:SetWidth(157)
         itemFS:SetJustifyH("LEFT")
         entry.itemFS = itemFS
 
@@ -4882,6 +4882,9 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       if iconTexture then
         entry.iconTex:SetTexture(iconTexture)
         entry.iconTex:Show()
+      elseif itemId then
+        entry.iconTex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        entry.iconTex:Show()
       else
         entry.iconTex:Hide()
       end
@@ -4911,7 +4914,7 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       end
 
       entry:Show()
-      yOffset = yOffset - entryH - 2
+      yOffset = yOffset - entryH - 6
     end
   else
     local entry = self.gearPopup.slotEntries[1]
@@ -4920,18 +4923,18 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       entry:SetHeight(entryH)
       entry:SetWidth(265)
       local iconTex = entry:CreateTexture(nil, "OVERLAY")
-      iconTex:SetWidth(18)
-      iconTex:SetHeight(18)
+      iconTex:SetWidth(24)
+      iconTex:SetHeight(24)
       iconTex:SetPoint("LEFT", entry, "LEFT", 2, 0)
       entry.iconTex = iconTex
-      local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-      labelFS:SetPoint("LEFT", entry, "LEFT", 22, 0)
-      labelFS:SetWidth(68)
+      local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+      labelFS:SetPoint("LEFT", entry, "LEFT", 28, 0)
+      labelFS:SetWidth(75)
       labelFS:SetJustifyH("LEFT")
       entry.labelFS = labelFS
-      local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
       itemFS:SetPoint("LEFT", labelFS, "RIGHT", 2, 0)
-      itemFS:SetWidth(170)
+      itemFS:SetWidth(157)
       itemFS:SetJustifyH("LEFT")
       entry.itemFS = itemFS
       self.gearPopup.slotEntries[1] = entry
@@ -4942,7 +4945,7 @@ function LeafVE.UI:RefreshGearPopup(playerName)
     entry.itemId = nil
     entry.iconTex:Hide()
     entry:Show()
-    yOffset = yOffset - entryH - 2
+    yOffset = yOffset - entryH - 6
   end
 
   scrollChild:SetHeight(math.max(1, math.abs(yOffset) + 20))
