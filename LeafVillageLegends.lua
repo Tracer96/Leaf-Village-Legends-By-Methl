@@ -4226,23 +4226,37 @@ function LeafVE.UI:ShowPlayerCard(playerName)
       self.cardModel:SetPosition(0, 0, 0)
       self.cardModel:SetFacing(0.5)
     end)
-    if self.cardPortraitTypeText then
-      self.cardPortraitTypeText:SetText("|cFF00FF00Live|r")
-    end
-    -- Apply faction gradient background (red=Horde, blue=Alliance) with gold border.
-    if self.cardModelBG then
-      local faction = UnitFactionGroup(unitToken)
-      if faction == "Horde" then
-        self.cardModelBG:SetGradientAlpha("VERTICAL", 0.30, 0.02, 0.02, 1, 0.70, 0.08, 0.08, 1)
-      elseif faction == "Alliance" then
-        self.cardModelBG:SetGradientAlpha("VERTICAL", 0.02, 0.12, 0.35, 1, 0.08, 0.30, 0.75, 1)
-      else
-        self.cardModelBG:SetGradientAlpha("VERTICAL", 0.06, 0.06, 0.08, 1, 0.12, 0.12, 0.16, 1)
+    -- Fallback: if model didn't load, show class icon instead of empty model
+    local modelPath = self.cardModel:GetModel()
+    if not modelPath or modelPath == "" then
+      self.cardModel:Hide()
+      self.cardClassIconFrame:Show()
+      local classIconPath = CLASS_ICONS[class] or LEAF_FALLBACK
+      self.cardClassIcon:SetTexture(classIconPath)
+      self.cardClassIcon:SetVertexColor(1, 1, 1, 1)
+      if self.cardPortraitTypeText then
+        self.cardPortraitTypeText:SetText("|cFFFFAA00"..class.."|r")
       end
-      self.cardModelBG:Show()
-    end
-    if self.cardPortraitContainer then
-      self.cardPortraitContainer:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+      if self.cardModelBG then self.cardModelBG:Hide() end
+    else
+      if self.cardPortraitTypeText then
+        self.cardPortraitTypeText:SetText("|cFF00FF00Live|r")
+      end
+      -- Apply faction gradient background (red=Horde, blue=Alliance) with gold border.
+      if self.cardModelBG then
+        local faction = UnitFactionGroup(unitToken)
+        if faction == "Horde" then
+          self.cardModelBG:SetGradientAlpha("VERTICAL", 0.30, 0.02, 0.02, 1, 0.70, 0.08, 0.08, 1)
+        elseif faction == "Alliance" then
+          self.cardModelBG:SetGradientAlpha("VERTICAL", 0.02, 0.12, 0.35, 1, 0.08, 0.30, 0.75, 1)
+        else
+          self.cardModelBG:SetGradientAlpha("VERTICAL", 0.06, 0.06, 0.08, 1, 0.12, 0.12, 0.16, 1)
+        end
+        self.cardModelBG:Show()
+      end
+      if self.cardPortraitContainer then
+        self.cardPortraitContainer:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+      end
     end
   else
     self.cardModel:Hide()
@@ -8864,8 +8878,12 @@ function LeafVE.UI:Build()
   self.tabMe:SetPoint("LEFT", self.tabWelcome, "RIGHT", 4, 0)
   self.tabMe:SetWidth(70)
 
+  self.tabShout = TabButton(f, "Shout", "LeafVE_TabShout")
+  self.tabShout:SetPoint("LEFT", self.tabMe, "RIGHT", 4, 0)
+  self.tabShout:SetWidth(55)
+
   self.tabRoster = TabButton(f, "Roster", "LeafVE_TabRoster")
-  self.tabRoster:SetPoint("LEFT", self.tabMe, "RIGHT", 4, 0)
+  self.tabRoster:SetPoint("LEFT", self.tabShout, "RIGHT", 4, 0)
   self.tabRoster:SetWidth(60)
 
   self.tabLeaderWeek = TabButton(f, "Weekly", "LeafVE_TabLeaderWeek")
@@ -8986,6 +9004,11 @@ function LeafVE.UI:Build()
     self.activeTab = "me"
     self:Refresh()
   end)
+
+  self.tabShout:SetScript("OnClick", function()
+    self.activeTab = "shoutouts"
+    self:Refresh()
+  end)
   
   self.tabLeaderWeek:SetScript("OnClick", function()
     self.activeTab = "leaderWeek"
@@ -9095,7 +9118,7 @@ function LeafVE.UI:Refresh()
     self.activeTab = "me"
   end
 
-  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabAlts, self.tabHistory, self.tabLiveHistory, self.tabOptions}
+  local accessTabs = {self.tabWelcome, self.tabMe, self.tabShout, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabAlts, self.tabHistory, self.tabLiveHistory, self.tabOptions}
   if hasAccess then
     for _, tab in ipairs(accessTabs) do
       if tab then tab:Show() end
