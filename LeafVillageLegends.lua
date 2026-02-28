@@ -20,11 +20,11 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "10.8"
+LeafVE.version = "11.0"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
 -- cannot corrupt the shared leaderboard / badge data.
-LeafVE.minCompatVersion = "10.8"
+LeafVE.minCompatVersion = "11.0"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
