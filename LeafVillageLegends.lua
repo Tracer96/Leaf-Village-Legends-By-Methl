@@ -2052,7 +2052,13 @@ function LeafVE:BroadcastLeaderboardData()
   if table.getn(chunk) > 0 then
     SendAddonMessage("LeafVE", "LBOARD:"..table.concat(chunk, ","), "GUILD")
   end
-  
+
+  -- Propagate the admin reset timestamp so offline players who missed the original
+  -- broadcast will wipe their stale data when they receive this sync response.
+  if LeafVE_GlobalDB and LeafVE_GlobalDB.lastAdminResetTS then
+    SendAddonMessage("LeafVE", "RESETTS:"..LeafVE_GlobalDB.lastAdminResetTS, "GUILD")
+  end
+
 end
 
 function LeafVE:SendResyncRequest()
@@ -2847,7 +2853,14 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
     local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
     if ADMIN_RANKS[senderRank] then
-      LeafVE:HardResetLeafPoints_Local()
+      -- "LVE_ADMIN_RESET_LEAF_ALL:" is 25 chars; timestamp starts at position 26
+      local incomingTS = tonumber(string.sub(message, 26)) or 0
+      local localTS = LeafVE_GlobalDB and LeafVE_GlobalDB.lastAdminResetTS or 0
+      if incomingTS > 0 and incomingTS > localTS then
+        EnsureDB()
+        LeafVE_GlobalDB.lastAdminResetTS = incomingTS
+        LeafVE:HardResetLeafPoints_Local()
+      end
     end
     return
 
@@ -2864,6 +2877,17 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   -- Handle admin config broadcast
   elseif string.sub(message, 1, 17) == "LVE_ADMIN_CONFIG:" then
     -- No longer used; configurable admin settings have been removed.
+    return
+
+  -- Handle propagated admin reset timestamp (peer-to-peer propagation for offline catch-up)
+  elseif string.sub(message, 1, 8) == "RESETTS:" then
+    local incomingTS = tonumber(string.sub(message, 9)) or 0
+    local localTS = LeafVE_GlobalDB and LeafVE_GlobalDB.lastAdminResetTS or 0
+    if incomingTS > 0 and incomingTS > localTS then
+      EnsureDB()
+      LeafVE_GlobalDB.lastAdminResetTS = incomingTS
+      LeafVE:HardResetLeafPoints_Local()
+    end
     return
 
   -- Handle alt-main link broadcast from a guild member
@@ -7356,10 +7380,13 @@ local function BuildAdminPanel(panel)
       confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
       confirmBtn:SetText("Confirm Reset")
       confirmBtn:SetScript("OnClick", function()
+        local ts = time()
+        EnsureDB()
+        LeafVE_GlobalDB.lastAdminResetTS = ts
         LeafVE:HardResetLeafPoints_Local()
         if InGuild() then
-          SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..time(), "GUILD")
-          SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..time(), "GUILD")
+          SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..ts, "GUILD")
+          SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..ts, "GUILD")
           LeafVE:BroadcastLeaderboardData()
         end
         Print("|cFFFF4444Broadcast: All Leaf Points reset for all guild members.|r")
