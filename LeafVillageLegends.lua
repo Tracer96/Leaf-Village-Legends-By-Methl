@@ -1602,38 +1602,23 @@ function LeafVE:OnBossKillChat(msg)
   local me = ShortName(UnitName("player"))
   if not me then return end
   EnsureDB()
+
+  -- Require at least one other guildie in the group (solo runs don't count)
+  local guildies = self:GetGroupGuildies()
+  local hasGuildie = table.getn(guildies) > 0
+  if not hasGuildie then return end
+
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
   local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
   self.suppressPointNotification = true
   local awarded = self:AddPoints(me, "G", bossPts)
   self.suppressPointNotification = false
   if awarded and awarded > 0 then
-    self:AddToHistory(me, "G", awarded, bossName.." slain by "..me)
+    self:AddToHistory(me, "G", awarded, bossName.." slain (guild group)")
     if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
       self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, awarded), LEAF_EMBLEM, THEME.gold)
     end
-    local alsoAwarded = {}
-    local guildies = self:GetGroupGuildies()
-    for _, guildie in ipairs(guildies) do
-      if Lower(guildie) ~= Lower(me) then
-        local gAward = self:AddPoints(guildie, "G", bossPts)
-        if gAward and gAward > 0 then
-          self:AddToHistory(guildie, "G", gAward, bossName.." slain by "..me.." (party)")
-          table.insert(alsoAwarded, guildie)
-        end
-      end
-    end
-    if table.getn(alsoAwarded) > 0 then
-      Print(string.format("Boss slain: %s! +%d G (also awarded to: %s)", bossName, awarded, table.concat(alsoAwarded, ", ")))
-      local bossMsg = "BOSSKILL:"..bossName..":"..bossPts..":"..table.concat(alsoAwarded, ",")
-      if IsInRaid() then
-        SendAddonMessage("LeafVE", bossMsg, "RAID")
-      elseif IsInGroup() then
-        SendAddonMessage("LeafVE", bossMsg, "PARTY")
-      end
-    else
-      Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
-    end
+    Print(string.format("Boss slain: %s! +%d LP", bossName, awarded))
   end
 end
 
@@ -2233,43 +2218,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     end
     if LeafVE.UI and LeafVE.UI.Refresh then
       LeafVE.UI:Refresh()
-    end
-    return
-  end
-
-  -- Handle boss kill notification for party guildies awarded by the killer
-  if string.sub(message, 1, 9) == "BOSSKILL:" then
-    local bossName, pts, awardedList = string.match(message, "^BOSSKILL:([^:]+):(%d+):(.+)$")
-    pts = tonumber(pts)
-    if bossName and pts and awardedList then
-      local me = ShortName(UnitName("player"))
-      if me then
-        local startPos = 1
-        while startPos <= string.len(awardedList) do
-          local commaPos = string.find(awardedList, ",", startPos)
-          local name
-          if commaPos then
-            name = string.sub(awardedList, startPos, commaPos - 1)
-            startPos = commaPos + 1
-          else
-            name = string.sub(awardedList, startPos)
-            startPos = string.len(awardedList) + 1
-          end
-          if Lower(name) == Lower(me) then
-            -- Award LP locally on this client (the killer's client already awarded it server-side,
-            -- but we need to update our own saved variables)
-            local localAwarded = self:AddPoints(me, "G", pts)
-            if localAwarded and localAwarded > 0 then
-              self:AddToHistory(me, "G", localAwarded, bossName.." slain (party)")
-            end
-            -- Show toast notification
-            if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
-              self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, pts), LEAF_EMBLEM, THEME.gold)
-            end
-            break
-          end
-        end
-      end
     end
     return
   end
