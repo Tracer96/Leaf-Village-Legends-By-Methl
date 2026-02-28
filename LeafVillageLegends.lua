@@ -749,12 +749,13 @@ end
 function LeafVE:ProcessNotifications()
   if table.getn(self.notificationQueue) == 0 then return end
   if not self.toastFrame then self:CreateToastFrame() end
-  if self.toastFrame:IsShown() then return end
+  if self.toastShowing then return end
   local notif = table.remove(self.notificationQueue, 1)
   self.toastFrame.icon:SetTexture(notif.icon) if not self.toastFrame.icon:GetTexture() then self.toastFrame.icon:SetTexture(LEAF_FALLBACK) end
   self.toastFrame.title:SetText(notif.title) self.toastFrame.title:SetTextColor(notif.color[1], notif.color[2], notif.color[3])
   self.toastFrame.message:SetText(notif.message)
   if LeafVE_DB.options.notificationSound then PlaySound("AuctionWindowOpen") end
+  self.toastShowing = true
   self.toastFrame:Show()
   local fadeIn = 0 local fadeInFrame = CreateFrame("Frame")
   fadeInFrame:SetScript("OnUpdate", function()
@@ -767,7 +768,7 @@ function LeafVE:ProcessNotifications()
           local fadeOut = 0 local fadeOutFrame = CreateFrame("Frame")
           fadeOutFrame:SetScript("OnUpdate", function()
             fadeOut = fadeOut + arg1
-            if fadeOut >= 0.3 then self.toastFrame:SetAlpha(0) self.toastFrame:Hide() fadeOutFrame:Hide()
+            if fadeOut >= 0.3 then self.toastFrame:SetAlpha(0) self.toastFrame:Hide() self.toastShowing = false fadeOutFrame:Hide()
             else self.toastFrame:SetAlpha(1 - (fadeOut / 0.3)) end
           end)
         end
@@ -1405,6 +1406,9 @@ function LeafVE:OnBossKillChat(msg)
   local awarded = self:AddPoints(me, "G", bossPts)
   if awarded and awarded > 0 then
     self:AddToHistory(me, "G", awarded, "Boss kill: "..bossName)
+    if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
+      self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, awarded), LEAF_EMBLEM, THEME.gold)
+    end
     Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
   end
 end
@@ -4657,6 +4661,17 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
     memberSet[lowerName] = info
   end
 
+  -- Pre-build alt→mains lookup to avoid O(n²) nested loops below
+  local altsByMain = {}
+  for _, altInfo in pairs(memberSet) do
+    local altMain = GetMainForPlayer(altInfo.name)
+    if altMain then
+      local mainLower = Lower(altMain)
+      if not altsByMain[mainLower] then altsByMain[mainLower] = {} end
+      table.insert(altsByMain[mainLower], altInfo)
+    end
+  end
+
   if isWeekly then
     -- Use the higher of local aggregation and synced weekly data so that stale
     -- synced broadcasts never hide points that are accurately recorded locally.
@@ -4684,26 +4699,23 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
         local totG = pts.G or 0
         local totS = pts.S or 0
         -- Add alt points for any alt that maps to this main
-        for _, altInfo in pairs(memberSet) do
+        for _, altInfo in pairs(altsByMain[Lower(name)] or {}) do
           local altName = altInfo.name
-          local altMain = GetMainForPlayer(altName)
-          if altMain and Lower(altMain) == Lower(name) then
-            local altLocalPts = localWeek[altName]
-            local altSyncedPts = syncedWeek and syncedWeek[altName]
-            local altPts
-            if altLocalPts and altSyncedPts then
-              local alocTotal = (altLocalPts.L or 0) + (altLocalPts.G or 0) + (altLocalPts.S or 0)
-              local asncTotal = (altSyncedPts.L or 0) + (altSyncedPts.G or 0) + (altSyncedPts.S or 0)
-              altPts = alocTotal >= asncTotal and altLocalPts or altSyncedPts
-            elseif altLocalPts then
-              altPts = altLocalPts
-            else
-              altPts = altSyncedPts or {L = 0, G = 0, S = 0}
-            end
-            -- Do NOT pool L (Login) points from alts; only G and S pool
-            totG = totG + (altPts.G or 0)
-            totS = totS + (altPts.S or 0)
+          local altLocalPts = localWeek[altName]
+          local altSyncedPts = syncedWeek and syncedWeek[altName]
+          local altPts
+          if altLocalPts and altSyncedPts then
+            local alocTotal = (altLocalPts.L or 0) + (altLocalPts.G or 0) + (altLocalPts.S or 0)
+            local asncTotal = (altSyncedPts.L or 0) + (altSyncedPts.G or 0) + (altSyncedPts.S or 0)
+            altPts = alocTotal >= asncTotal and altLocalPts or altSyncedPts
+          elseif altLocalPts then
+            altPts = altLocalPts
+          else
+            altPts = altSyncedPts or {L = 0, G = 0, S = 0}
           end
+          -- Do NOT pool L (Login) points from alts; only G and S pool
+          totG = totG + (altPts.G or 0)
+          totS = totS + (altPts.S or 0)
         end
         local total = totL + totG + totS
         table.insert(leaders, {
@@ -4734,26 +4746,23 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
         local totG = pts.G or 0
         local totS = pts.S or 0
         -- Add alt points for any alt that maps to this main
-        for _, altInfo in pairs(memberSet) do
+        for _, altInfo in pairs(altsByMain[Lower(name)] or {}) do
           local altName = altInfo.name
-          local altMain = GetMainForPlayer(altName)
-          if altMain and Lower(altMain) == Lower(name) then
-            local altLocalPts = LeafVE_DB.alltime[altName]
-            local altSyncedPts = LeafVE_DB.lboard.alltime[altName]
-            local altPts
-            if altLocalPts and altSyncedPts then
-              local alocTotal = (altLocalPts.L or 0) + (altLocalPts.G or 0) + (altLocalPts.S or 0)
-              local asncTotal = (altSyncedPts.L or 0) + (altSyncedPts.G or 0) + (altSyncedPts.S or 0)
-              altPts = alocTotal >= asncTotal and altLocalPts or altSyncedPts
-            elseif altLocalPts then
-              altPts = altLocalPts
-            else
-              altPts = altSyncedPts or {L = 0, G = 0, S = 0}
-            end
-            -- Do NOT pool L (Login) points from alts; only G and S pool
-            totG = totG + (altPts.G or 0)
-            totS = totS + (altPts.S or 0)
+          local altLocalPts = LeafVE_DB.alltime[altName]
+          local altSyncedPts = LeafVE_DB.lboard.alltime[altName]
+          local altPts
+          if altLocalPts and altSyncedPts then
+            local alocTotal = (altLocalPts.L or 0) + (altLocalPts.G or 0) + (altLocalPts.S or 0)
+            local asncTotal = (altSyncedPts.L or 0) + (altSyncedPts.G or 0) + (altSyncedPts.S or 0)
+            altPts = alocTotal >= asncTotal and altLocalPts or altSyncedPts
+          elseif altLocalPts then
+            altPts = altLocalPts
+          else
+            altPts = altSyncedPts or {L = 0, G = 0, S = 0}
           end
+          -- Do NOT pool L (Login) points from alts; only G and S pool
+          totG = totG + (altPts.G or 0)
+          totS = totS + (altPts.S or 0)
         end
         local total = totL + totG + totS
         table.insert(leaders, {
