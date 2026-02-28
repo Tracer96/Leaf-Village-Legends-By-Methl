@@ -1986,12 +1986,11 @@ function LeafVE:BroadcastLeaderboardData()
   for name, _ in pairs(knownPlayers) do
     -- Skip alts: their points will be pooled onto the main's entry below.
     if not GetMainForPlayer(name) then
-      -- Lifetime: prefer local alltime (direct witness), fall back to synced lboard data.
-      -- Pool any alt points onto this main entry before broadcasting.
-      -- Skip entries with no points to avoid broadcasting zeros that could
-      -- overwrite correct data held by peers (defence-in-depth alongside the
-      -- higher-total-wins guard in ReceiveLeaderboardData).
-      local lbase = LeafVE_DB.alltime[name] or LeafVE_DB.lboard.alltime[name] or {L = 0, G = 0, S = 0}
+      -- Lifetime: use only directly-observed alltime data as the base.
+      -- Using synced lboard.alltime here would cause double-pooling: the synced
+      -- data already includes alt G/S from a previous broadcast, so pooling alts
+      -- again every 5-minute cycle inflates those values indefinitely via self-echo.
+      local lbase = LeafVE_DB.alltime[name] or {L = 0, G = 0, S = 0}
       local lL, lG, lS = lbase.L or 0, lbase.G or 0, lbase.S or 0
       for altName, _ in pairs(knownPlayers) do
         local altMain = GetMainForPlayer(altName)
@@ -2006,12 +2005,10 @@ function LeafVE:BroadcastLeaderboardData()
         table.insert(data, string.format("L:%s:%d:%d:%d", name, lL, lG, lS))
       end
 
-      -- Weekly: prefer local aggregation, fall back to synced weekly data.
-      -- Pool any alt weekly points onto this main entry before broadcasting.
-      -- Skip entries with no points to avoid broadcasting zeros that could
-      -- overwrite correct data held by peers (defence-in-depth alongside the
-      -- higher-total-wins guard in ReceiveLeaderboardData).
-      local wbase = weekAgg[name] or syncedWeek[name]
+      -- Weekly: use only locally-aggregated data as the base (never synced weekly).
+      -- The synced weekly data already contains pooled alt contributions; using it as
+      -- the base and then pooling alts again causes the same double-pool accumulation.
+      local wbase = weekAgg[name]
       local wL = wbase and (wbase.L or 0) or 0
       local wG = wbase and (wbase.G or 0) or 0
       local wS = wbase and (wbase.S or 0) or 0
@@ -2762,6 +2759,11 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     
     -- **NEW: Parse leaderboard sync message**
   elseif string.sub(message, 1, 7) == "LBOARD:" then
+    -- Ignore our own broadcasts: WoW echoes guild addon messages back to the sender.
+    -- Processing our own echo would store already-pooled data as the base for the next
+    -- broadcast, causing alt G/S contributions to accumulate every 5 minutes.
+    local me = ShortName(UnitName("player"))
+    if me and sender == me then return end
     if not IsSenderCompatible(sender) then return end
     local lboardData = string.sub(message, 8)
     
