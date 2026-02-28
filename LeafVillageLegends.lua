@@ -1625,7 +1625,12 @@ function LeafVE:OnBossKillChat(msg)
     end
     if table.getn(alsoAwarded) > 0 then
       Print(string.format("Boss slain: %s! +%d G (also awarded to: %s)", bossName, awarded, table.concat(alsoAwarded, ", ")))
-      SendAddonMessage("LeafVE", "BOSSKILL:"..bossName..":"..awarded..":"..table.concat(alsoAwarded, ","), "GUILD")
+      local bossMsg = "BOSSKILL:"..bossName..":"..bossPts..":"..table.concat(alsoAwarded, ",")
+      if IsInRaid() then
+        SendAddonMessage("LeafVE", bossMsg, "RAID")
+      elseif IsInGroup() then
+        SendAddonMessage("LeafVE", bossMsg, "PARTY")
+      end
     else
       Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
     end
@@ -2113,7 +2118,7 @@ end
 
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   if prefix ~= "LeafVE" then return end
-  if channel ~= "GUILD" then return end
+  if channel ~= "GUILD" and channel ~= "PARTY" and channel ~= "RAID" then return end
   
   sender = ShortName(sender)
   if not sender then return end
