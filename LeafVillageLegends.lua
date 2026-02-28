@@ -1217,8 +1217,10 @@ function LeafVE:AddPoints(playerName, pointType, amount)
   local isMe = me and (Lower(playerName) == Lower(me) or Lower(playerName) == Lower(myEffective or ""))
   if isMe then
     local typeNames = {L = "Login", G = "Gameplay", S = "Social"}
-    if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
-      self:ShowNotification("Points Earned!", string.format("+%d %s Point%s", amount, typeNames[pointType] or "?", amount > 1 and "s" or ""), LEAF_EMBLEM, THEME.leaf)
+    if not self.suppressPointNotification then
+      if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
+        self:ShowNotification("Points Earned!", string.format("+%d %s Point%s", amount, typeNames[pointType] or "?", amount > 1 and "s" or ""), LEAF_EMBLEM, THEME.leaf)
+      end
     end
   end
   self:CheckBadgeMilestones(playerName)
@@ -1602,13 +1604,30 @@ function LeafVE:OnBossKillChat(msg)
   EnsureDB()
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
   local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
+  self.suppressPointNotification = true
   local awarded = self:AddPoints(me, "G", bossPts)
+  self.suppressPointNotification = false
   if awarded and awarded > 0 then
-    self:AddToHistory(me, "G", awarded, "Boss kill: "..bossName)
+    self:AddToHistory(me, "G", awarded, bossName.." slain by "..me)
     if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
       self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, awarded), LEAF_EMBLEM, THEME.gold)
     end
-    Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
+    local alsoAwarded = {}
+    local guildies = self:GetGroupGuildies()
+    for _, guildie in ipairs(guildies) do
+      if Lower(guildie) ~= Lower(me) then
+        local gAward = self:AddPoints(guildie, "G", bossPts)
+        if gAward and gAward > 0 then
+          self:AddToHistory(guildie, "G", gAward, bossName.." slain by "..me.." (party)")
+          table.insert(alsoAwarded, guildie)
+        end
+      end
+    end
+    if table.getn(alsoAwarded) > 0 then
+      Print(string.format("Boss slain: %s! +%d G (also awarded to: %s)", bossName, awarded, table.concat(alsoAwarded, ", ")))
+    else
+      Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
+    end
   end
 end
 
