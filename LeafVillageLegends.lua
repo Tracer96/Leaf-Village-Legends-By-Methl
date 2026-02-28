@@ -660,6 +660,7 @@ local function EnsureDB()
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
+  if not LeafVE_DB.peerProgress then LeafVE_DB.peerProgress = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
   if not LeafVE_DB.lboard.alltime then LeafVE_DB.lboard.alltime = {} end
@@ -1155,25 +1156,54 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
   local name = ShortName(playerName)
   if not name then return nil, nil end
 
+  local me = ShortName(UnitName("player"))
+  local isMe = (name == me)
+
+  -- For other players use synced peer-progress data when available
+  local peer = (not isMe) and LeafVE_DB.peerProgress and LeafVE_DB.peerProgress[name]
+
   local alltime = LeafVE_DB.alltime[name] or {L=0, G=0, S=0}
+  -- Also check synced lboard alltime for non-local players
+  if not isMe then
+    local synced = LeafVE_DB.lboard and LeafVE_DB.lboard.alltime and LeafVE_DB.lboard.alltime[name]
+    if synced then
+      local sL = (synced.L or 0) + (synced.G or 0) + (synced.S or 0)
+      local aL = (alltime.L or 0) + (alltime.G or 0) + (alltime.S or 0)
+      if sL > aL then alltime = synced end
+    end
+  end
   local totalPoints = (alltime.L or 0) + (alltime.G or 0) + (alltime.S or 0)
 
   if badgeId == "total_logins_100" then
     return alltime.L or 0, 100
   elseif badgeId == "login_streak_7" then
-    local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
+    local streak
+    if isMe then
+      streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
+    else
+      streak = peer and peer.streak or 0
+    end
     return streak, 7
   elseif badgeId == "login_streak_30" then
-    local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
+    local streak
+    if isMe then
+      streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
+    else
+      streak = peer and peer.streak or 0
+    end
     return streak, 30
   elseif badgeId == "first_group" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 1
+    local groups = isMe and ((LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0) or (peer and peer.groups or 0)
+    return groups, 1
   elseif badgeId == "group_10" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 10
+    local groups = isMe and ((LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0) or (peer and peer.groups or 0)
+    return groups, 10
   elseif badgeId == "group_50" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 50
+    local groups = isMe and ((LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0) or (peer and peer.groups or 0)
+    return groups, 50
   elseif badgeId == "group_100" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 100
+    local groups = isMe and ((LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0) or (peer and peer.groups or 0)
+    return groups, 100
   elseif badgeId == "shoutout_received_10" or badgeId == "shoutout_received_50" then
     local count = 0
     for _, targets in pairs(LeafVE_DB.shoutouts or {}) do
@@ -1193,12 +1223,20 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
   elseif badgeId == "total_10000" then
     return totalPoints, 50000
   elseif badgeId == "attendance_10" then
-    return table.getn(LeafVE_DB.attendance[name] or {}), 10
+    local raids = isMe and table.getn(LeafVE_DB.attendance[name] or {}) or (peer and peer.raids or 0)
+    return raids, 10
   elseif badgeId == "attendance_50" then
-    return table.getn(LeafVE_DB.attendance[name] or {}), 50
+    local raids = isMe and table.getn(LeafVE_DB.attendance[name] or {}) or (peer and peer.raids or 0)
+    return raids, 50
   elseif badgeId == "guild_age_30" or badgeId == "guild_age_90" or badgeId == "guild_age_365" then
-    if LeafVE_DB.guildJoinDate and LeafVE_DB.guildJoinDate[name] then
-      local days = math.floor((Now() - LeafVE_DB.guildJoinDate[name]) / SECONDS_PER_DAY)
+    local joinTS
+    if isMe then
+      joinTS = LeafVE_DB.guildJoinDate and LeafVE_DB.guildJoinDate[name]
+    else
+      joinTS = (peer and peer.joinTS ~= 0 and peer.joinTS) or (LeafVE_DB.guildJoinDate and LeafVE_DB.guildJoinDate[name])
+    end
+    if joinTS then
+      local days = math.floor((Now() - joinTS) / SECONDS_PER_DAY)
       if badgeId == "guild_age_30" then return days, 30 end
       if badgeId == "guild_age_90" then return days, 90 end
       return days, 365
@@ -1900,7 +1938,23 @@ function LeafVE:BroadcastBadges()
   end
 end
 
-function LeafVE:BroadcastLeaderboardData()
+-- Broadcast this player's badge-progress counters so guildmates can display
+-- accurate progress bars when viewing this player's badge collection.
+-- Called on login alongside BroadcastBadges().
+function LeafVE:BroadcastBadgeProgress()
+  if not InGuild() then return end
+  local me = ShortName(UnitName("player"))
+  if not me then return end
+  EnsureDB()
+  local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[me] and LeafVE_DB.loginStreaks[me].current) or 0
+  local groups  = (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[me]) or 0
+  local raids   = table.getn(LeafVE_DB.attendance and LeafVE_DB.attendance[me] or {})
+  local joinTS  = (LeafVE_DB.guildJoinDate and LeafVE_DB.guildJoinDate[me]) or 0
+  local payload = string.format("BADGEPROG:%s:%d:%d:%d:%d", me, streak, groups, raids, joinTS)
+  SendAddonMessage("LeafVE", payload, "GUILD")
+end
+
+
   local me = ShortName(UnitName("player"))
   if not me then return end
   
@@ -2430,18 +2484,20 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     local ver = string.sub(message, 12)
     if not LeafVE.versionResponses then LeafVE.versionResponses = {} end
     LeafVE.versionResponses[sender] = ver
-    -- Auto-nag if someone has a higher version than us
-    local myVer = LeafVE.version
-    if not LeafVE.shownVersionNag and VersionLessThan(myVer, ver) then
-      LeafVE.shownVersionNag = true
-      Print("|cFFFFAA00⚠ Your Leaf Village Legends addon is outdated! You have v"..myVer..", latest is v"..ver..". Please update!|r")
-    end
-    -- Warn once when a guildmate's version is below the minimum compatible version
-    if VersionLessThan(ver, LeafVE.minCompatVersion) then
-      if not LeafVE.warnedOldVersion then LeafVE.warnedOldVersion = {} end
-      if not LeafVE.warnedOldVersion[sender] then
-        LeafVE.warnedOldVersion[sender] = true
-        Print("|cFFFF4444⚠ "..sender.." is running an outdated version (v"..ver..") and their synced data will not be accepted. Ask them to update to v"..LeafVE.minCompatVersion.."+.|r")
+    -- Only print version warnings when explicitly requested via the Admin "Check Addon Versions"
+    -- button AND only for players with an admin guild rank.
+    if LeafVE.adminVersionCheckActive and LeafVE:IsAdminRank() then
+      local myVer = LeafVE.version
+      if not LeafVE.shownVersionNag and VersionLessThan(myVer, ver) then
+        LeafVE.shownVersionNag = true
+        Print("|cFFFFAA00⚠ Your Leaf Village Legends addon is outdated! You have v"..myVer..", latest is v"..ver..". Please update!|r")
+      end
+      if VersionLessThan(ver, LeafVE.minCompatVersion) then
+        if not LeafVE.warnedOldVersion then LeafVE.warnedOldVersion = {} end
+        if not LeafVE.warnedOldVersion[sender] then
+          LeafVE.warnedOldVersion[sender] = true
+          Print("|cFFFF4444⚠ "..sender.." is running an outdated version (v"..ver..") and their synced data will not be accepted. Ask them to update to v"..LeafVE.minCompatVersion.."+.|r")
+        end
       end
     end
     return
@@ -2593,6 +2649,40 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
       LeafVE.UI:UpdateCardRecentBadges(sender)
     end
     
+    return
+
+  -- Parse badge-progress sync message: BADGEPROG:name:streak:groups:raids:joinTS
+  elseif string.sub(message, 1, 10) == "BADGEPROG:" then
+    local rest = string.sub(message, 11)
+    -- split on ":"
+    local parts = {}
+    local s = 1
+    while s <= string.len(rest) do
+      local c = string.find(rest, ":", s)
+      if c then
+        table.insert(parts, string.sub(rest, s, c - 1))
+        s = c + 1
+      else
+        table.insert(parts, string.sub(rest, s))
+        s = string.len(rest) + 1
+      end
+    end
+    if table.getn(parts) >= 5 then
+      local pname   = ShortName(parts[1]) or parts[1]
+      local streak  = tonumber(parts[2]) or 0
+      local groups  = tonumber(parts[3]) or 0
+      local raids   = tonumber(parts[4]) or 0
+      local joinTS  = tonumber(parts[5]) or 0
+      EnsureDB()
+      if not LeafVE_DB.peerProgress then LeafVE_DB.peerProgress = {} end
+      LeafVE_DB.peerProgress[pname] = { streak = streak, groups = groups, raids = raids, joinTS = joinTS }
+      -- Refresh badge tab if it is currently showing this player
+      if LeafVE.UI and LeafVE.UI.cardCurrentPlayer == pname then
+        if LeafVE.UI.panels and LeafVE.UI.panels.badges and LeafVE.UI.panels.badges:IsVisible() then
+          LeafVE.UI:RefreshBadges()
+        end
+      end
+    end
     return
     
   -- Parse shoutout sync message
@@ -7035,15 +7125,45 @@ local function BuildAdminPanel(panel)
   yBase = yBase - 90
 
   local function BuildStandingsLines()
-    local weekAgg = AggForThisWeek()
+    -- Use the same data sources as the My Stats "Current Weekly Standings" section:
+    -- merge local daily aggregation with synced weekly leaderboard data and pick
+    -- the higher total for each player so the announcement is always accurate.
+    local wk = WeekKey()
+    local localWeek = AggForThisWeek()
+    local syncedWeek = LeafVE_DB.lboard.weekly[wk]
+    local memberSet = {}
+    if LeafVE_DB.persistentRoster then
+      for _, info in pairs(LeafVE_DB.persistentRoster) do
+        memberSet[Lower(info.name)] = info
+      end
+    end
+    for lowerName, info in pairs(LeafVE.guildRosterCache) do
+      memberSet[lowerName] = info
+    end
     local sorted = {}
-    for name, pts in pairs(weekAgg) do
+    for _, guildInfo in pairs(memberSet) do
+      local name = guildInfo.name
+      local localPts = localWeek[name]
+      local syncedPts = syncedWeek and syncedWeek[name]
+      local pts
+      if localPts and syncedPts then
+        local lTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
+        local sTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
+        pts = lTotal >= sTotal and localPts or syncedPts
+      elseif localPts then
+        pts = localPts
+      else
+        pts = syncedPts or {L = 0, G = 0, S = 0}
+      end
       local total = (pts.L or 0) + (pts.G or 0) + (pts.S or 0)
       if total > 0 then
         table.insert(sorted, {name = name, total = total})
       end
     end
-    table.sort(sorted, function(a, b) return a.total > b.total end)
+    table.sort(sorted, function(a, b)
+      if a.total == b.total then return Lower(a.name) < Lower(b.name) end
+      return a.total > b.total
+    end)
     local rewards = {SEASON_REWARD_1, SEASON_REWARD_2, SEASON_REWARD_3, SEASON_REWARD_4, SEASON_REWARD_5}
     local lines = {"|cFF2DD35CLeaf Village Weekly Standings|r"}
     local ordinals = {"1st", "2nd", "3rd", "4th", "5th"}
@@ -7099,8 +7219,17 @@ local function BuildAdminPanel(panel)
   checkVerBtn:SetScript("OnClick", function()
     -- Reset response table and send request
     LeafVE.versionResponses = {}
+    LeafVE.shownVersionNag = nil
+    LeafVE.warnedOldVersion = {}
+    LeafVE.adminVersionCheckActive = true
     LeafVE.versionCheckTime = Now()
     SendAddonMessage("LeafVE", "VERSIONREQ", "GUILD")
+    -- Clear the admin flag after responses have been collected so passive
+    -- VERSIONRSP messages that arrive later do not trigger chat spam.
+    -- 10 seconds gives guild members enough time to respond to the request.
+    C_Timer_After(10, function()
+      LeafVE.adminVersionCheckActive = false
+    end)
     -- Open the version results popup after a short delay
     C_Timer_After(5, function()
       LeafVE:ShowVersionResults()
@@ -8224,7 +8353,9 @@ function LeafVE.UI:RefreshBadges()
   local me = ShortName(UnitName("player"))
   EnsureDB()
 
-  local myBadges = LeafVE_DB.badges[me] or {}
+  -- When a player card is open for someone else, show that player's badges
+  local viewTarget = (self.cardCurrentPlayer and self.cardCurrentPlayer ~= "") and self.cardCurrentPlayer or me
+  local myBadges = LeafVE_DB.badges[viewTarget] or {}
 
   -- Safety check: ensure badgeFrames exists
   if not panel.badgeFrames then
@@ -8367,7 +8498,7 @@ function LeafVE.UI:RefreshBadges()
       frame.badgeQuality = badge.quality
       frame.earnedAt = badge.earnedAt
       frame.badgeId = badge.id
-      frame.badgePlayerName = me
+      frame.badgePlayerName = viewTarget
       
       -- TOOLTIP
       frame:SetScript("OnEnter", function()
@@ -9559,6 +9690,7 @@ ef:SetScript("OnEvent", function()
           LeafVE.versionResponses = {}
           SendAddonMessage("LeafVE", "VERSIONREQ", "GUILD")
           LeafVE:BroadcastBadges()
+          LeafVE:BroadcastBadgeProgress()
           LeafVE:BroadcastLeaderboardData()
           
           local bme = ShortName(UnitName("player"))
