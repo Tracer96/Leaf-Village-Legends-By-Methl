@@ -1878,6 +1878,16 @@ function LeafVE:BroadcastPlayerNote(noteText)
   end
 end
 
+-- Helper: compare two "major.minor" version strings numerically
+local function VersionLessThan(a, b)
+  local amaj, amin = string.match(a or "0.0", "(%d+)%.(%d+)")
+  local bmaj, bmin = string.match(b or "0.0", "(%d+)%.(%d+)")
+  amaj, amin = tonumber(amaj) or 0, tonumber(amin) or 0
+  bmaj, bmin = tonumber(bmaj) or 0, tonumber(bmin) or 0
+  if amaj ~= bmaj then return amaj < bmaj end
+  return amin < bmin
+end
+
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   if prefix ~= "LeafVE" then return end
   if channel ~= "GUILD" then return end
@@ -2455,16 +2465,6 @@ end
 -- UI SYSTEM - ALL TABS
 -------------------------------------------------
 LeafVE.UI = LeafVE.UI or { activeTab = "me" }
-
--- Helper: compare two "major.minor" version strings numerically
-local function VersionLessThan(a, b)
-  local amaj, amin = string.match(a or "0.0", "(%d+)%.(%d+)")
-  local bmaj, bmin = string.match(b or "0.0", "(%d+)%.(%d+)")
-  amaj, amin = tonumber(amaj) or 0, tonumber(amin) or 0
-  bmaj, bmin = tonumber(bmaj) or 0, tonumber(bmin) or 0
-  if amaj ~= bmaj then return amaj < bmaj end
-  return amin < bmin
-end
 
 -- C_Timer.After polyfill for WoW 1.12 (uses OnUpdate on a hidden frame)
 if not C_Timer_After then
