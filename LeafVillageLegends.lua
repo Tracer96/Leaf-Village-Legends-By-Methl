@@ -54,6 +54,12 @@ local GEAR_SLOT_LABELS = {
   Trinket0Slot = "Trinket 1", Trinket1Slot = "Trinket 2", MainHandSlot = "Main Hand",
   SecondaryHandSlot = "Off Hand", RangedSlot = "Ranged",
 }
+local GEAR_SLOT_IDS = {
+  HeadSlot = 1, NeckSlot = 2, ShoulderSlot = 3, BackSlot = 15, ChestSlot = 5,
+  WristSlot = 9, HandsSlot = 10, WaistSlot = 6, LegsSlot = 7, FeetSlot = 8,
+  Finger0Slot = 11, Finger1Slot = 12, Trinket0Slot = 13, Trinket1Slot = 14,
+  MainHandSlot = 16, SecondaryHandSlot = 17, RangedSlot = 18,
+}
 
 local INSTANCE_BOSS_POINTS = 10       -- dungeon boss
 local RAID_BOSS_POINTS = 25           -- raid boss
@@ -4505,41 +4511,46 @@ local function FormatGearStats(stats, class)
   return table.concat(lines, "\n")
 end
 
--- Format a cached BCS stats table (short-key format from BroadcastMyStats) into
--- the same multi-line display used for live BCS stats in RefreshGearPopup.
+-- Format a stats table into organized vertical category layout.
+-- Accepts either the short-key table from BroadcastMyStats or a direct stat table.
 local function FormatBCSStats(s)
-  if not s then return "|cFF888888No stats available|r" end
-  local C = "|cFF2DD35C"
+  if not s then return "|cFF888888Awaiting stats broadcast...|r" end
   local G = "|cFFFFD700"
+  local W = "|cFFFFFFFF"
   local E = "|r"
-  local lines = {}
-  local ap   = s.ap  or 0;  local hi  = s.hi  or 0;  local mc  = s.mc  or 0
-  local ra   = s.ra  or 0;  local rh  = s.rh  or 0;  local rc  = s.rc  or 0
-  local ms   = s.ms  or 0;  local rs  = s.rs  or 0
-  local sp   = s.sp  or 0;  local sh  = s.sh  or 0;  local sc  = s.sc  or 0;  local ss = s.ss or 0
-  local he   = s.he  or 0;  local m5  = s.m5  or 0;  local mr  = s.mr  or 0
-  local str  = s.st  or 0;  local agi = s.ag  or 0;  local sta = s.sa  or 0
+  local ap   = s.ap  or 0;  local hi  = s.hi  or 0;  local mc  = s.mc  or 0;  local ms  = s.ms or 0
+  local sp   = s.sp  or 0;  local sh  = s.sh  or 0;  local sc  = s.sc  or 0
+  local he   = s.he  or 0;  local ss  = s.ss  or 0;  local m5  = s.m5  or 0
+  local str_ = s.st  or 0;  local agi = s.ag  or 0;  local sta = s.sa  or 0
   local int_ = s["in"] or 0; local spi = s.si or 0
   local ar   = s.ar  or 0;  local de  = s.de  or 0
   local dg   = s.dg  or 0;  local pa  = s.pa  or 0;  local bl  = s.bl  or 0
-  table.insert(lines, string.format(
-    G.."Melee"..E.."  "..C.."AP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
-    ap, hi, mc, ms))
-  table.insert(lines, string.format(
-    G.."Ranged"..E.."  "..C.."RAP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
-    ra, rh, rc, rs))
-  table.insert(lines, string.format(
-    G.."Spell"..E.."  "..C.."SP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Haste:"..E.." %d%%",
-    sp, sh, sc, ss))
-  table.insert(lines, string.format(
-    G.."Healing"..E.."  "..C.."Heal:"..E.." %d  "..C.."MP5:"..E.." %d  "..C.."MRegen:"..E.." %.0f/5s",
-    he, m5, mr * 2.5))  -- mr is per-2s tick; *2.5 converts to per-5s display
-  table.insert(lines, string.format(
-    G.."Base"..E.."  "..C.."Str:"..E.." %d  "..C.."Agi:"..E.." %d  "..C.."Sta:"..E.." %d  "..C.."Int:"..E.." %d  "..C.."Spi:"..E.." %d",
-    str, agi, sta, int_, spi))
-  table.insert(lines, string.format(
-    G.."Defense"..E.."  "..C.."Arm:"..E.." %d  "..C.."Def:"..E.." %d  "..C.."Dodge:"..E.." %.1f%%  "..C.."Parry:"..E.." %.1f%%  "..C.."Block:"..E.." %.1f%%",
-    ar, de, dg, pa, bl))
+  local lines = {}
+  table.insert(lines, G.."Melee"..E)
+  table.insert(lines, string.format("  Attack Power: "..W.."%d"..E, ap))
+  table.insert(lines, string.format("  Hit: "..W.."%d%%"..E, hi))
+  table.insert(lines, string.format("  Crit: "..W.."%.1f%%"..E, mc))
+  table.insert(lines, string.format("  Weapon Skill: "..W.."%d"..E, ms))
+  table.insert(lines, "")
+  table.insert(lines, G.."Spell"..E)
+  table.insert(lines, string.format("  Spell Power: "..W.."%d"..E, sp))
+  table.insert(lines, string.format("  Spell Hit: "..W.."%d%%"..E, sh))
+  table.insert(lines, string.format("  Spell Crit: "..W.."%.1f%%"..E, sc))
+  table.insert(lines, string.format("  Healing Power: "..W.."%d"..E, he))
+  table.insert(lines, string.format("  Haste: "..W.."%d%%"..E, ss))
+  table.insert(lines, string.format("  MP5: "..W.."%d"..E, m5))
+  table.insert(lines, "")
+  table.insert(lines, G.."Base Stats"..E)
+  table.insert(lines, string.format("  Str: "..W.."%d"..E.."  Agi: "..W.."%d"..E, str_, agi))
+  table.insert(lines, string.format("  Sta: "..W.."%d"..E.."  Int: "..W.."%d"..E, sta, int_))
+  table.insert(lines, string.format("  Spi: "..W.."%d"..E, spi))
+  table.insert(lines, "")
+  table.insert(lines, G.."Defense"..E)
+  table.insert(lines, string.format("  Armor: "..W.."%d"..E, ar))
+  table.insert(lines, string.format("  Defense: "..W.."%d"..E, de))
+  table.insert(lines, string.format("  Dodge: "..W.."%.1f%%"..E, dg))
+  table.insert(lines, string.format("  Parry: "..W.."%.1f%%"..E, pa))
+  table.insert(lines, string.format("  Block: "..W.."%.1f%%"..E, bl))
   return table.concat(lines, "\n")
 end
 
@@ -4682,6 +4693,8 @@ function LeafVE.UI:RefreshGearPopup(playerName)
   local scrollChild = self.gearPopup.slotChild
   local yOffset     = -5
   local entryH      = 20
+  local me = ShortName(UnitName("player"))
+  local isLocalPlayer = me and Lower(playerName) == Lower(me)
 
   if snapshot and snapshot.slots then
     for i = 1, table.getn(GEAR_SLOT_NAMES) do
@@ -4695,15 +4708,21 @@ function LeafVE.UI:RefreshGearPopup(playerName)
         entry:SetHeight(entryH)
         entry:SetWidth(265)
 
+        local iconTex = entry:CreateTexture(nil, "OVERLAY")
+        iconTex:SetWidth(18)
+        iconTex:SetHeight(18)
+        iconTex:SetPoint("LEFT", entry, "LEFT", 2, 0)
+        entry.iconTex = iconTex
+
         local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        labelFS:SetPoint("LEFT", entry, "LEFT", 2, 0)
-        labelFS:SetWidth(78)
+        labelFS:SetPoint("LEFT", entry, "LEFT", 22, 0)
+        labelFS:SetWidth(68)
         labelFS:SetJustifyH("LEFT")
         entry.labelFS = labelFS
 
         local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        itemFS:SetPoint("LEFT", labelFS, "RIGHT", 4, 0)
-        itemFS:SetWidth(180)
+        itemFS:SetPoint("LEFT", labelFS, "RIGHT", 2, 0)
+        itemFS:SetWidth(170)
         itemFS:SetJustifyH("LEFT")
         entry.itemFS = itemFS
 
@@ -4725,6 +4744,22 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       entry:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 2, yOffset)
       entry.itemId = itemId
       entry.labelFS:SetText("|cFFAAAAAA" .. label .. ":|r")
+
+      -- Determine icon texture: live for local player, from item cache for others
+      local slotID = GEAR_SLOT_IDS[slotName]
+      local iconTexture = nil
+      if isLocalPlayer and slotID then
+        iconTexture = GetInventoryItemTexture("player", slotID)
+      elseif itemId then
+        local _, _, _, _, _, _, _, _, _, itemTex = GetItemInfo(itemId)
+        iconTexture = itemTex
+      end
+      if iconTexture then
+        entry.iconTex:SetTexture(iconTexture)
+        entry.iconTex:Show()
+      else
+        entry.iconTex:Hide()
+      end
 
       if itemId then
         local itemName, _, itemRarity = GetItemInfo(itemId)
@@ -4759,14 +4794,19 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       entry = CreateFrame("Frame", nil, scrollChild)
       entry:SetHeight(entryH)
       entry:SetWidth(265)
+      local iconTex = entry:CreateTexture(nil, "OVERLAY")
+      iconTex:SetWidth(18)
+      iconTex:SetHeight(18)
+      iconTex:SetPoint("LEFT", entry, "LEFT", 2, 0)
+      entry.iconTex = iconTex
       local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-      labelFS:SetPoint("LEFT", entry, "LEFT", 2, 0)
-      labelFS:SetWidth(78)
+      labelFS:SetPoint("LEFT", entry, "LEFT", 22, 0)
+      labelFS:SetWidth(68)
       labelFS:SetJustifyH("LEFT")
       entry.labelFS = labelFS
       local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-      itemFS:SetPoint("LEFT", labelFS, "RIGHT", 4, 0)
-      itemFS:SetWidth(180)
+      itemFS:SetPoint("LEFT", labelFS, "RIGHT", 2, 0)
+      itemFS:SetWidth(170)
       itemFS:SetJustifyH("LEFT")
       entry.itemFS = itemFS
       self.gearPopup.slotEntries[1] = entry
@@ -4775,21 +4815,21 @@ function LeafVE.UI:RefreshGearPopup(playerName)
     entry.labelFS:SetText("")
     entry.itemFS:SetText("|cFF888888No gear data available|r")
     entry.itemId = nil
+    entry.iconTex:Hide()
     entry:Show()
     yOffset = yOffset - entryH - 2
   end
 
   scrollChild:SetHeight(math.max(1, math.abs(yOffset) + 20))
 
-  -- Compute and display class-aware stats
+  -- Compute and display organized stats
   local statsText = "|cFF888888No stats available|r"
-  local me = ShortName(UnitName("player"))
-  if me and Lower(playerName) == Lower(me) and BCS and BCS.RunScans then
+  if isLocalPlayer and BCS and BCS.RunScans then
     -- Local player: use BCS for live computed stats
-    if BCS.needScanGear    == nil then BCS.needScanGear    = true end
-    if BCS.needScanTalents == nil then BCS.needScanTalents = true end
-    if BCS.needScanAuras   == nil then BCS.needScanAuras   = true end
-    if BCS.needScanSkills  == nil then BCS.needScanSkills  = true end
+    BCS.needScanGear    = true
+    BCS.needScanTalents = true
+    BCS.needScanAuras   = true
+    BCS.needScanSkills  = true
     BCS:RunScans()
     BCS.needScanGear    = false
     BCS.needScanTalents = false
@@ -4798,26 +4838,22 @@ function LeafVE.UI:RefreshGearPopup(playerName)
 
     local apBase, apPos, apNeg = UnitAttackPower("player")
     local ap = (apBase or 0) + (apPos or 0) + (apNeg or 0)
-    local rapBase, rapPos, rapNeg = 0, 0, 0
-    if UnitRangedAttackPower then
-      rapBase, rapPos, rapNeg = UnitRangedAttackPower("player")
-      rapBase = rapBase or 0; rapPos = rapPos or 0; rapNeg = rapNeg or 0
-    end
-    local rap         = rapBase + rapPos + rapNeg
     local hit         = BCS:GetHitRating() or 0
     local mcrit       = BCS:GetCritChance() or 0
-    local rangedHit   = BCS:GetRangedHitRating() or 0
-    local rcrit       = BCS:GetRangedCritChance() or 0
     local mhSkill     = BCS:GetMHWeaponSkill() or 0
-    local rangedSkill = BCS:GetRangedWeaponSkill() or 0
     local spellPower  = BCS:GetSpellPower() or 0
     local spellHit    = BCS:GetSpellHitRating() or 0
     local spellCrit   = BCS:GetSpellCritChance() or 0
     local healing     = BCS:GetHealingPower() or 0
-    local manaBase, _, manaMP5 = BCS:GetManaRegen()
-    manaBase = manaBase or 0; manaMP5 = manaMP5 or 0
     local _, spellHaste = BCS:GetHaste()
     spellHaste = spellHaste or 0
+    local _, _, manaMP5 = BCS:GetManaRegen()
+    manaMP5 = manaMP5 or 0
+    local _, str_ = UnitStat("player", 1)
+    local _, agi  = UnitStat("player", 2)
+    local _, sta  = UnitStat("player", 3)
+    local _, int_ = UnitStat("player", 4)
+    local _, spi  = UnitStat("player", 5)
     local dodge  = GetDodgeChance and GetDodgeChance() or 0
     local parry  = GetParryChance and GetParryChance() or 0
     local block  = GetBlockChance and GetBlockChance() or 0
@@ -4826,42 +4862,24 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       defBase, defMod = UnitDefense("player")
       defBase = defBase or 0; defMod = defMod or 0
     end
-    local defense = defBase + defMod
     local _, armor = UnitArmor("player")
-    armor = armor or 0
-
-    local C = "|cFF2DD35C"
-    local G = "|cFFFFD700"
-    local E = "|r"
-    local lines = {}
-    table.insert(lines, string.format(
-      G.."Melee"..E.."  "..C.."AP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
-      ap, hit, mcrit, mhSkill))
-    table.insert(lines, string.format(
-      G.."Ranged"..E.."  "..C.."RAP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
-      rap, rangedHit, rcrit, rangedSkill))
-    table.insert(lines, string.format(
-      G.."Spell"..E.."  "..C.."SP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Haste:"..E.." %d%%",
-      spellPower, spellHit, spellCrit, spellHaste))
-    table.insert(lines, string.format(
-      G.."Healing"..E.."  "..C.."Heal:"..E.." %d  "..C.."MP5:"..E.." %d  "..C.."MRegen:"..E.." %.0f/5s",
-      healing, manaMP5, manaBase * 2.5))
-    table.insert(lines, string.format(
-      G.."Defense"..E.."  "..C.."Arm:"..E.." %d  "..C.."Def:"..E.." %d  "..C.."Dodge:"..E.." %.1f%%  "..C.."Parry:"..E.." %.1f%%  "..C.."Block:"..E.." %.1f%%",
-      armor, defense, dodge, parry, block))
-    statsText = table.concat(lines, "\n")
-  elseif snapshot and snapshot.slots then
-    -- Check for cached BCS stats from broadcast first
+    statsText = FormatBCSStats({
+      ap = ap, hi = hit, mc = mcrit, ms = mhSkill,
+      sp = spellPower, sh = spellHit, sc = spellCrit, he = healing,
+      ss = spellHaste, m5 = manaMP5,
+      st = str_ or 0, ag = agi or 0, sa = sta or 0,
+      ["in"] = int_ or 0, si = spi or 0,
+      ar = armor or 0, de = defBase + defMod,
+      dg = dodge, pa = parry, bl = block,
+    })
+  else
+    -- Other players: check for cached BCS stats from broadcast
     EnsureDB()
     local cachedBCS = LeafVE_GlobalDB.gearStatsCache and LeafVE_GlobalDB.gearStatsCache[nameLower]
     if cachedBCS and cachedBCS.stats then
       statsText = FormatBCSStats(cachedBCS.stats)
     else
-      -- Fall back to tooltip-parsed gear stats
-      local guildInfo = LeafVE:GetGuildInfo(playerName)
-      local class     = guildInfo and guildInfo.class or "Unknown"
-      local stats     = ComputeGearStats(snapshot.slots)
-      statsText       = FormatGearStats(stats, class)
+      statsText = "|cFF888888Awaiting stats broadcast...|r"
     end
   end
   self.gearPopup.statsText:SetText(statsText)
