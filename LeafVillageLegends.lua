@@ -1595,10 +1595,13 @@ function LeafVE:OnInstanceExit()
 end
 
 function LeafVE:OnBossKillChat(msg)
-  if not self.instanceJoinedAt then return end
-  local bossName = string.match(msg, "^(.+) dies%.$")
+  -- Match "BossName is slain by PlayerName." (CHAT_MSG_COMBAT_HOSTILE_DEATH — player kill)
+  -- Also accept "BossName dies." as a fallback (environmental/fall damage kill)
+  local bossName = string.match(msg, "^(.+) is slain by .+%.$")
+                or string.match(msg, "^(.+) dies%.$")
   if not bossName then return end
   if not KNOWN_BOSSES[bossName] then return end
+
   local me = ShortName(UnitName("player"))
   if not me then return end
   EnsureDB()
@@ -1608,7 +1611,13 @@ function LeafVE:OnBossKillChat(msg)
   local hasGuildie = table.getn(guildies) > 0
   if not hasGuildie then return end
 
-  self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
+  -- Guard against double-awarding if both patterns fire for the same boss kill
+  self.recentBossKills = self.recentBossKills or {}
+  local lastKill = self.recentBossKills[bossName] or 0
+  if Now() - lastKill < 10 then return end
+  self.recentBossKills[bossName] = Now()
+
+  self.instanceBossesKilledThisRun = (self.instanceBossesKilledThisRun or 0) + 1
   local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
   self.suppressPointNotification = true
   local awarded = self:AddPoints(me, "G", bossPts)
