@@ -5011,6 +5011,145 @@ local legend = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   legend:SetWidth(maxWidth)
   legend:SetJustifyH("LEFT")
   legend:SetText("|cFFAAAAAAL = Login  |  G = Group  |  S = Shoutout|r")
+
+  -- Character Stats section (BCS-backed), scrollable, above legend
+  local csHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  csHeader:SetPoint("BOTTOMLEFT", legend, "TOPLEFT", 0, 8)
+  csHeader:SetText("|cFFFFD700Character Stats|r  |cFF888888(scroll for more)|r")
+
+  local csScrollFrame = CreateFrame("ScrollFrame", nil, panel)
+  csScrollFrame:SetPoint("BOTTOMLEFT", csHeader, "TOPLEFT", 0, 4)
+  csScrollFrame:SetWidth(500)
+  csScrollFrame:SetHeight(90)
+  csScrollFrame:EnableMouse(true)
+  csScrollFrame:EnableMouseWheel(true)
+
+  local csScrollChild = CreateFrame("Frame", nil, csScrollFrame)
+  csScrollChild:SetWidth(480)
+  csScrollChild:SetHeight(1)
+  csScrollFrame:SetScrollChild(csScrollChild)
+
+  csScrollFrame:SetScript("OnMouseWheel", function()
+    local cur = csScrollFrame:GetVerticalScroll()
+    local maxS = csScrollFrame:GetVerticalScrollRange()
+    local new = cur - (arg1 * 20)
+    if new < 0 then new = 0 end
+    if new > maxS then new = maxS end
+    csScrollFrame:SetVerticalScroll(new)
+  end)
+
+  local csText = csScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  csText:SetPoint("TOPLEFT", csScrollChild, "TOPLEFT", 0, -2)
+  csText:SetWidth(470)
+  csText:SetJustifyH("LEFT")
+  csText:SetText("|cFF888888Loading...|r")
+  panel.charStatsText = csText
+  panel.charStatsScrollChild = csScrollChild
+end
+
+-- Refresh the BCS-backed character stats block in the "me" panel.
+local function RefreshCharStats(panel)
+  if not panel or not panel.charStatsText then return end
+
+  if not BCS or not BCS.RunScans then
+    panel.charStatsText:SetText("|cFF888888(character stats unavailable)|r")
+    return
+  end
+
+  -- Ensure flags are initialised at least once.
+  if BCS.needScanGear == nil     then BCS.needScanGear     = true end
+  if BCS.needScanTalents == nil  then BCS.needScanTalents  = true end
+  if BCS.needScanAuras == nil    then BCS.needScanAuras    = true end
+  if BCS.needScanSkills == nil   then BCS.needScanSkills   = true end
+
+  BCS:RunScans()
+  -- Clear dirty flags after consuming scans (mirrors BCS:UpdateStats() pattern).
+  -- Any event that fires after this point will re-set the flags for the next refresh.
+  BCS.needScanGear     = false
+  BCS.needScanTalents  = false
+  BCS.needScanAuras    = false
+  BCS.needScanSkills   = false
+
+  -- Base stats
+  local _, str = UnitStat("player", 1)
+  local _, agi = UnitStat("player", 2)
+  local _, sta = UnitStat("player", 3)
+  local _, int = UnitStat("player", 4)
+  local _, spi = UnitStat("player", 5)
+  local _, armor = UnitArmor("player")  -- effectiveArmor is second return value
+  str = str or 0; agi = agi or 0; sta = sta or 0
+  int = int or 0; spi = spi or 0; armor = armor or 0
+
+  -- Melee / Ranged
+  local apBase, apPos, apNeg = UnitAttackPower("player")
+  local ap = (apBase or 0) + (apPos or 0) + (apNeg or 0)
+  local rapBase, rapPos, rapNeg = 0, 0, 0
+  if UnitRangedAttackPower then
+    rapBase, rapPos, rapNeg = UnitRangedAttackPower("player")
+    rapBase = rapBase or 0; rapPos = rapPos or 0; rapNeg = rapNeg or 0
+  end
+  local rap = rapBase + rapPos + rapNeg
+  local hit      = BCS:GetHitRating() or 0
+  local rcrit    = BCS:GetRangedCritChance() or 0
+  local rangedHit = BCS:GetRangedHitRating() or 0
+  local mhSkill  = BCS:GetMHWeaponSkill() or 0
+  local rangedSkill = BCS:GetRangedWeaponSkill() or 0
+  -- Melee crit via spellbook (BCS:GetCritChance reads "X% chance to crit" text)
+  local mcrit = BCS:GetCritChance() or 0
+
+  -- Spell stats (only the first return value is used from each getter)
+  local spellPower = BCS:GetSpellPower() or 0   -- first return: dmgAndHealing
+  local spellHit   = BCS:GetSpellHitRating() or 0   -- first return: overall spell hit %
+  local spellCrit  = BCS:GetSpellCritChance() or 0
+  local healing    = BCS:GetHealingPower() or 0   -- first return: gear/talent healing bonus
+  local manaBase, manaCasting, manaMP5 = BCS:GetManaRegen()
+  manaBase = manaBase or 0; manaMP5 = manaMP5 or 0
+  local haste, spellHaste = BCS:GetHaste()
+  haste = haste or 0; spellHaste = spellHaste or 0
+
+  -- Defense
+  local dodge  = GetDodgeChance and GetDodgeChance() or 0
+  local parry  = GetParryChance and GetParryChance() or 0
+  local block  = GetBlockChance and GetBlockChance() or 0
+  local defBase, defMod = 0, 0
+  if UnitDefense then
+    defBase, defMod = UnitDefense("player")
+    defBase = defBase or 0; defMod = defMod or 0
+  end
+  local defense = defBase + defMod
+
+  local C = "|cFF2DD35C"  -- green for labels
+  local G = "|cFFFFD700"  -- gold for category headers
+  local E = "|r"
+
+  local lines = {}
+  table.insert(lines, string.format(
+    G.."Base Stats"..E.."  "..C.."STR"..E.." %d  "..C.."AGI"..E.." %d  "..C.."STA"..E.." %d  "..C.."INT"..E.." %d  "..C.."SPI"..E.." %d",
+    str, agi, sta, int, spi))
+  table.insert(lines, string.format(
+    G.."Melee"..E.."  "..C.."AP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
+    ap, hit, mcrit, mhSkill))
+  table.insert(lines, string.format(
+    G.."Ranged"..E.."  "..C.."RAP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
+    rap, rangedHit, rcrit, rangedSkill))
+  table.insert(lines, string.format(
+    G.."Spell"..E.."  "..C.."SP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Haste:"..E.." %d%%",
+    spellPower, spellHit, spellCrit, spellHaste))
+  table.insert(lines, string.format(
+    G.."Healing"..E.."  "..C.."Heal:"..E.." %d  "..C.."MP5:"..E.." %d  "..C.."MRegen:"..E.." %.0f/5s",
+    healing, manaMP5, manaBase * 2.5))
+  table.insert(lines, string.format(
+    G.."Defense"..E.."  "..C.."Arm:"..E.." %d  "..C.."Def:"..E.." %d  "..C.."Dodge:"..E.." %.1f%%  "..C.."Parry:"..E.." %.1f%%  "..C.."Block:"..E.." %.1f%%",
+    armor, defense, dodge, parry, block))
+
+  local text = table.concat(lines, "\n")
+  panel.charStatsText:SetText(text)
+
+  -- Resize scroll child to fit text
+  if panel.charStatsScrollChild then
+    local textH = panel.charStatsText:GetStringHeight()
+    panel.charStatsScrollChild:SetHeight(math.max(1, (textH or 80) + 10))
+  end
 end
 
 local function BuildShoutoutsPanel(panel)
@@ -8892,6 +9031,9 @@ function LeafVE.UI:Refresh()
       end
     end
 
+    -- Refresh BCS-backed character stats display
+    RefreshCharStats(self.panels.me)
+
   elseif self.activeTab == "shoutouts" and self.panels.shoutouts then
     self.panels.shoutouts:Show()
     local me = ShortName(UnitName("player"))
@@ -9151,6 +9293,9 @@ ef:RegisterEvent("CHAT_MSG_GUILD")
 ef:RegisterEvent("CHAT_MSG_WHISPER")
 ef:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
 ef:RegisterEvent("UNIT_INVENTORY_CHANGED")
+ef:RegisterEvent("CHARACTER_POINTS_CHANGED")
+ef:RegisterEvent("PLAYER_AURAS_CHANGED")
+ef:RegisterEvent("CHAT_MSG_SKILL")
 
 local groupCheckTimer = 0
 local notificationTimer = 0
@@ -9181,6 +9326,13 @@ ef:SetScript("OnEvent", function()
     Print("Auto-tracking: Login & Group points enabled!")
     EnsureDB()
     LeafVE:RecordActivity()
+    -- Initialise BCS scan dirty flags so stats are computed on first tab open
+    if BCS then
+      BCS.needScanGear     = true
+      BCS.needScanTalents  = true
+      BCS.needScanAuras    = true
+      BCS.needScanSkills   = true
+    end
     -- Register this character in the account-wide roster
     local me = ShortName(UnitName("player"))
     if me then
@@ -9310,7 +9462,27 @@ ef:SetScript("OnEvent", function()
   if event == "UNIT_INVENTORY_CHANGED" then
     if arg1 == "player" then
       LeafVE:BroadcastMyGear()
+      -- Debounce BCS gear scan (200 ms, same as standalone BCS addon)
+      if BCS then
+        LeafVE.bcsInventoryDebounceTimer   = 0.2
+        LeafVE.bcsInventoryDebouncePending = true
+      end
     end
+    return
+  end
+
+  if event == "CHARACTER_POINTS_CHANGED" then
+    if BCS then BCS.needScanTalents = true end
+    return
+  end
+
+  if event == "PLAYER_AURAS_CHANGED" then
+    if BCS then BCS.needScanAuras = true end
+    return
+  end
+
+  if event == "CHAT_MSG_SKILL" then
+    if BCS then BCS.needScanSkills = true end
     return
   end
 end)
@@ -9322,6 +9494,16 @@ updateFrame:SetScript("OnUpdate", function()
   attendanceTimer = attendanceTimer + arg1
   badgeSyncTimer = badgeSyncTimer + arg1
   achLeaderTimer = achLeaderTimer + arg1
+
+  -- BCS inventory debounce: coalesce rapid gear-change events into one scan
+  if BCS and LeafVE.bcsInventoryDebouncePending then
+    LeafVE.bcsInventoryDebounceTimer = LeafVE.bcsInventoryDebounceTimer - arg1
+    if LeafVE.bcsInventoryDebounceTimer <= 0 then
+      LeafVE.bcsInventoryDebouncePending = false
+      BCS.needScanGear   = true
+      BCS.needScanSkills = true
+    end
+  end
 
   if groupCheckTimer >= 30 then
     groupCheckTimer = 0
