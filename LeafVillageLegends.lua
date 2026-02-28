@@ -2251,6 +2251,12 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
             startPos = string.len(awardedList) + 1
           end
           if Lower(name) == Lower(me) then
+            -- Actually award the points on the receiving guildie's client
+            EnsureDB()
+            local awarded = self:AddPoints(me, "G", pts)
+            if awarded and awarded > 0 then
+              self:AddToHistory(me, "G", awarded, bossName.." slain by "..sender.." (party)")
+            end
             if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
               self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, pts), LEAF_EMBLEM, THEME.gold)
             end
