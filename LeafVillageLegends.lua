@@ -4570,7 +4570,74 @@ function LeafVE.UI:RefreshGearPopup(playerName)
 
   -- Compute and display class-aware stats
   local statsText = "|cFF888888No stats available|r"
-  if snapshot and snapshot.slots then
+  local me = ShortName(UnitName("player"))
+  if me and Lower(playerName) == Lower(me) and BCS and BCS.RunScans then
+    -- Local player: use BCS for live computed stats
+    if BCS.needScanGear    == nil then BCS.needScanGear    = true end
+    if BCS.needScanTalents == nil then BCS.needScanTalents = true end
+    if BCS.needScanAuras   == nil then BCS.needScanAuras   = true end
+    if BCS.needScanSkills  == nil then BCS.needScanSkills  = true end
+    BCS:RunScans()
+    BCS.needScanGear    = false
+    BCS.needScanTalents = false
+    BCS.needScanAuras   = false
+    BCS.needScanSkills  = false
+
+    local apBase, apPos, apNeg = UnitAttackPower("player")
+    local ap = (apBase or 0) + (apPos or 0) + (apNeg or 0)
+    local rapBase, rapPos, rapNeg = 0, 0, 0
+    if UnitRangedAttackPower then
+      rapBase, rapPos, rapNeg = UnitRangedAttackPower("player")
+      rapBase = rapBase or 0; rapPos = rapPos or 0; rapNeg = rapNeg or 0
+    end
+    local rap         = rapBase + rapPos + rapNeg
+    local hit         = BCS:GetHitRating() or 0
+    local mcrit       = BCS:GetCritChance() or 0
+    local rangedHit   = BCS:GetRangedHitRating() or 0
+    local rcrit       = BCS:GetRangedCritChance() or 0
+    local mhSkill     = BCS:GetMHWeaponSkill() or 0
+    local rangedSkill = BCS:GetRangedWeaponSkill() or 0
+    local spellPower  = BCS:GetSpellPower() or 0
+    local spellHit    = BCS:GetSpellHitRating() or 0
+    local spellCrit   = BCS:GetSpellCritChance() or 0
+    local healing     = BCS:GetHealingPower() or 0
+    local manaBase, _, manaMP5 = BCS:GetManaRegen()
+    manaBase = manaBase or 0; manaMP5 = manaMP5 or 0
+    local _, spellHaste = BCS:GetHaste()
+    spellHaste = spellHaste or 0
+    local dodge  = GetDodgeChance and GetDodgeChance() or 0
+    local parry  = GetParryChance and GetParryChance() or 0
+    local block  = GetBlockChance and GetBlockChance() or 0
+    local defBase, defMod = 0, 0
+    if UnitDefense then
+      defBase, defMod = UnitDefense("player")
+      defBase = defBase or 0; defMod = defMod or 0
+    end
+    local defense = defBase + defMod
+    local _, armor = UnitArmor("player")
+    armor = armor or 0
+
+    local C = "|cFF2DD35C"
+    local G = "|cFFFFD700"
+    local E = "|r"
+    local lines = {}
+    table.insert(lines, string.format(
+      G.."Melee"..E.."  "..C.."AP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
+      ap, hit, mcrit, mhSkill))
+    table.insert(lines, string.format(
+      G.."Ranged"..E.."  "..C.."RAP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
+      rap, rangedHit, rcrit, rangedSkill))
+    table.insert(lines, string.format(
+      G.."Spell"..E.."  "..C.."SP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Haste:"..E.." %d%%",
+      spellPower, spellHit, spellCrit, spellHaste))
+    table.insert(lines, string.format(
+      G.."Healing"..E.."  "..C.."Heal:"..E.." %d  "..C.."MP5:"..E.." %d  "..C.."MRegen:"..E.." %.0f/5s",
+      healing, manaMP5, manaBase * 2.5))
+    table.insert(lines, string.format(
+      G.."Defense"..E.."  "..C.."Arm:"..E.." %d  "..C.."Def:"..E.." %d  "..C.."Dodge:"..E.." %.1f%%  "..C.."Parry:"..E.." %.1f%%  "..C.."Block:"..E.." %.1f%%",
+      armor, defense, dodge, parry, block))
+    statsText = table.concat(lines, "\n")
+  elseif snapshot and snapshot.slots then
     local guildInfo = LeafVE:GetGuildInfo(playerName)
     local class     = guildInfo and guildInfo.class or "Unknown"
     local stats     = ComputeGearStats(snapshot.slots)
@@ -5012,144 +5079,6 @@ local legend = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   legend:SetJustifyH("LEFT")
   legend:SetText("|cFFAAAAAAL = Login  |  G = Group  |  S = Shoutout|r")
 
-  -- Character Stats section (BCS-backed), scrollable, above legend
-  local csHeader = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  csHeader:SetPoint("BOTTOMLEFT", legend, "TOPLEFT", 0, 8)
-  csHeader:SetText("|cFFFFD700Character Stats|r  |cFF888888(scroll for more)|r")
-
-  local csScrollFrame = CreateFrame("ScrollFrame", nil, panel)
-  csScrollFrame:SetPoint("BOTTOMLEFT", csHeader, "TOPLEFT", 0, 4)
-  csScrollFrame:SetWidth(500)
-  csScrollFrame:SetHeight(90)
-  csScrollFrame:EnableMouse(true)
-  csScrollFrame:EnableMouseWheel(true)
-
-  local csScrollChild = CreateFrame("Frame", nil, csScrollFrame)
-  csScrollChild:SetWidth(480)
-  csScrollChild:SetHeight(1)
-  csScrollFrame:SetScrollChild(csScrollChild)
-
-  csScrollFrame:SetScript("OnMouseWheel", function()
-    local cur = csScrollFrame:GetVerticalScroll()
-    local maxS = csScrollFrame:GetVerticalScrollRange()
-    local new = cur - (arg1 * 20)
-    if new < 0 then new = 0 end
-    if new > maxS then new = maxS end
-    csScrollFrame:SetVerticalScroll(new)
-  end)
-
-  local csText = csScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  csText:SetPoint("TOPLEFT", csScrollChild, "TOPLEFT", 0, -2)
-  csText:SetWidth(470)
-  csText:SetJustifyH("LEFT")
-  csText:SetText("|cFF888888Loading...|r")
-  panel.charStatsText = csText
-  panel.charStatsScrollChild = csScrollChild
-end
-
--- Refresh the BCS-backed character stats block in the "me" panel.
-local function RefreshCharStats(panel)
-  if not panel or not panel.charStatsText then return end
-
-  if not BCS or not BCS.RunScans then
-    panel.charStatsText:SetText("|cFF888888(character stats unavailable)|r")
-    return
-  end
-
-  -- Ensure flags are initialised at least once.
-  if BCS.needScanGear == nil     then BCS.needScanGear     = true end
-  if BCS.needScanTalents == nil  then BCS.needScanTalents  = true end
-  if BCS.needScanAuras == nil    then BCS.needScanAuras    = true end
-  if BCS.needScanSkills == nil   then BCS.needScanSkills   = true end
-
-  BCS:RunScans()
-  -- Clear dirty flags after consuming scans (mirrors BCS:UpdateStats() pattern).
-  -- Any event that fires after this point will re-set the flags for the next refresh.
-  BCS.needScanGear     = false
-  BCS.needScanTalents  = false
-  BCS.needScanAuras    = false
-  BCS.needScanSkills   = false
-
-  -- Base stats
-  local _, str = UnitStat("player", 1)
-  local _, agi = UnitStat("player", 2)
-  local _, sta = UnitStat("player", 3)
-  local _, int = UnitStat("player", 4)
-  local _, spi = UnitStat("player", 5)
-  local _, armor = UnitArmor("player")  -- effectiveArmor is second return value
-  str = str or 0; agi = agi or 0; sta = sta or 0
-  int = int or 0; spi = spi or 0; armor = armor or 0
-
-  -- Melee / Ranged
-  local apBase, apPos, apNeg = UnitAttackPower("player")
-  local ap = (apBase or 0) + (apPos or 0) + (apNeg or 0)
-  local rapBase, rapPos, rapNeg = 0, 0, 0
-  if UnitRangedAttackPower then
-    rapBase, rapPos, rapNeg = UnitRangedAttackPower("player")
-    rapBase = rapBase or 0; rapPos = rapPos or 0; rapNeg = rapNeg or 0
-  end
-  local rap = rapBase + rapPos + rapNeg
-  local hit      = BCS:GetHitRating() or 0
-  local rcrit    = BCS:GetRangedCritChance() or 0
-  local rangedHit = BCS:GetRangedHitRating() or 0
-  local mhSkill  = BCS:GetMHWeaponSkill() or 0
-  local rangedSkill = BCS:GetRangedWeaponSkill() or 0
-  -- Melee crit via spellbook (BCS:GetCritChance reads "X% chance to crit" text)
-  local mcrit = BCS:GetCritChance() or 0
-
-  -- Spell stats (only the first return value is used from each getter)
-  local spellPower = BCS:GetSpellPower() or 0   -- first return: dmgAndHealing
-  local spellHit   = BCS:GetSpellHitRating() or 0   -- first return: overall spell hit %
-  local spellCrit  = BCS:GetSpellCritChance() or 0
-  local healing    = BCS:GetHealingPower() or 0   -- first return: gear/talent healing bonus
-  local manaBase, manaCasting, manaMP5 = BCS:GetManaRegen()
-  manaBase = manaBase or 0; manaMP5 = manaMP5 or 0
-  local haste, spellHaste = BCS:GetHaste()
-  haste = haste or 0; spellHaste = spellHaste or 0
-
-  -- Defense
-  local dodge  = GetDodgeChance and GetDodgeChance() or 0
-  local parry  = GetParryChance and GetParryChance() or 0
-  local block  = GetBlockChance and GetBlockChance() or 0
-  local defBase, defMod = 0, 0
-  if UnitDefense then
-    defBase, defMod = UnitDefense("player")
-    defBase = defBase or 0; defMod = defMod or 0
-  end
-  local defense = defBase + defMod
-
-  local C = "|cFF2DD35C"  -- green for labels
-  local G = "|cFFFFD700"  -- gold for category headers
-  local E = "|r"
-
-  local lines = {}
-  table.insert(lines, string.format(
-    G.."Base Stats"..E.."  "..C.."STR"..E.." %d  "..C.."AGI"..E.." %d  "..C.."STA"..E.." %d  "..C.."INT"..E.." %d  "..C.."SPI"..E.." %d",
-    str, agi, sta, int, spi))
-  table.insert(lines, string.format(
-    G.."Melee"..E.."  "..C.."AP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
-    ap, hit, mcrit, mhSkill))
-  table.insert(lines, string.format(
-    G.."Ranged"..E.."  "..C.."RAP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
-    rap, rangedHit, rcrit, rangedSkill))
-  table.insert(lines, string.format(
-    G.."Spell"..E.."  "..C.."SP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Haste:"..E.." %d%%",
-    spellPower, spellHit, spellCrit, spellHaste))
-  table.insert(lines, string.format(
-    G.."Healing"..E.."  "..C.."Heal:"..E.." %d  "..C.."MP5:"..E.." %d  "..C.."MRegen:"..E.." %.0f/5s",
-    healing, manaMP5, manaBase * 2.5))
-  table.insert(lines, string.format(
-    G.."Defense"..E.."  "..C.."Arm:"..E.." %d  "..C.."Def:"..E.." %d  "..C.."Dodge:"..E.." %.1f%%  "..C.."Parry:"..E.." %.1f%%  "..C.."Block:"..E.." %.1f%%",
-    armor, defense, dodge, parry, block))
-
-  local text = table.concat(lines, "\n")
-  panel.charStatsText:SetText(text)
-
-  -- Resize scroll child to fit text
-  if panel.charStatsScrollChild then
-    local textH = panel.charStatsText:GetStringHeight()
-    panel.charStatsScrollChild:SetHeight(math.max(1, (textH or 80) + 10))
-  end
 end
 
 local function BuildShoutoutsPanel(panel)
@@ -9030,10 +8959,6 @@ function LeafVE.UI:Refresh()
         end
       end
     end
-
-    -- Refresh BCS-backed character stats display
-    RefreshCharStats(self.panels.me)
-
   elseif self.activeTab == "shoutouts" and self.panels.shoutouts then
     self.panels.shoutouts:Show()
     local me = ShortName(UnitName("player"))
@@ -9323,7 +9248,6 @@ ef:SetScript("OnEvent", function()
   
   if event == "PLAYER_LOGIN" then
     Print("Loaded v"..LeafVE.version)
-    Print("Auto-tracking: Login & Group points enabled!")
     EnsureDB()
     LeafVE:RecordActivity()
     -- Initialise BCS scan dirty flags so stats are computed on first tab open
