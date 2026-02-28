@@ -1,7 +1,7 @@
 ## Interface: 11200
 ## Title: Leaf Village Legends
 ## Notes: Track guild contributions and leaderboards
-## Author: YourName
+## Author: Methl
 ## Version: 7.9
 ## SavedVariables: LeafVE_GlobalDB
 ## SavedVariablesPerCharacter: LeafVE_DB
