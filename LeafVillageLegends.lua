@@ -1954,7 +1954,7 @@ function LeafVE:BroadcastBadgeProgress()
   SendAddonMessage("LeafVE", payload, "GUILD")
 end
 
-
+function LeafVE:BroadcastLeaderboardData()
   local me = ShortName(UnitName("player"))
   if not me then return end
   
