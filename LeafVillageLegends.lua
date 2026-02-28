@@ -929,7 +929,7 @@ function LeafVE:GetHistory(playerName, limit)
 end
 
 function LeafVE:ShowNotification(title, message, icon, color)
-  if not LeafVE_DB.options.enableNotifications then return end
+  if LeafVE_DB.options.enableNotifications == false then return end
   table.insert(self.notificationQueue, {title = title, message = message, icon = icon or LEAF_EMBLEM, color = color or THEME.leaf, timestamp = Now()})
 end
 
@@ -1625,6 +1625,7 @@ function LeafVE:OnBossKillChat(msg)
     end
     if table.getn(alsoAwarded) > 0 then
       Print(string.format("Boss slain: %s! +%d G (also awarded to: %s)", bossName, awarded, table.concat(alsoAwarded, ", ")))
+      SendAddonMessage("LeafVE", "BOSSKILL:"..bossName..":"..awarded..":"..table.concat(alsoAwarded, ","), "GUILD")
     else
       Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
     end
@@ -2227,6 +2228,36 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     end
     if LeafVE.UI and LeafVE.UI.Refresh then
       LeafVE.UI:Refresh()
+    end
+    return
+  end
+
+  -- Handle boss kill notification for party guildies awarded by the killer
+  if string.sub(message, 1, 9) == "BOSSKILL:" then
+    local bossName, pts, awardedList = string.match(message, "^BOSSKILL:([^:]+):(%d+):(.+)$")
+    pts = tonumber(pts)
+    if bossName and pts and awardedList then
+      local me = ShortName(UnitName("player"))
+      if me then
+        local startPos = 1
+        while startPos <= string.len(awardedList) do
+          local commaPos = string.find(awardedList, ",", startPos)
+          local name
+          if commaPos then
+            name = string.sub(awardedList, startPos, commaPos - 1)
+            startPos = commaPos + 1
+          else
+            name = string.sub(awardedList, startPos)
+            startPos = string.len(awardedList) + 1
+          end
+          if Lower(name) == Lower(me) then
+            if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
+              self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, pts), LEAF_EMBLEM, THEME.gold)
+            end
+            break
+          end
+        end
+      end
     end
     return
   end
