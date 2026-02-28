@@ -39,6 +39,21 @@ local LBOARD_RESPOND_COOLDOWN = 30 -- seconds between responses to LBOARDREQ
 local SHOUT_SYNC_RESPOND_COOLDOWN = 30 -- seconds between shoutout history sync responses
 local DEFAULT_ACHIEVEMENT_POINTS = 10  -- fallback points per achievement when metadata is unavailable
 
+local GEAR_BROADCAST_THROTTLE = 10  -- seconds between gear broadcasts
+local GEAR_SLOT_NAMES = {
+  "HeadSlot", "NeckSlot", "ShoulderSlot", "BackSlot", "ChestSlot",
+  "WristSlot", "HandsSlot", "WaistSlot", "LegsSlot", "FeetSlot",
+  "Finger0Slot", "Finger1Slot", "Trinket0Slot", "Trinket1Slot",
+  "MainHandSlot", "SecondaryHandSlot", "RangedSlot",
+}
+local GEAR_SLOT_LABELS = {
+  HeadSlot = "Head", NeckSlot = "Neck", ShoulderSlot = "Shoulder", BackSlot = "Back",
+  ChestSlot = "Chest", WristSlot = "Wrist", HandsSlot = "Hands", WaistSlot = "Waist",
+  LegsSlot = "Legs", FeetSlot = "Feet", Finger0Slot = "Ring 1", Finger1Slot = "Ring 2",
+  Trinket0Slot = "Trinket 1", Trinket1Slot = "Trinket 2", MainHandSlot = "Main Hand",
+  SecondaryHandSlot = "Off Hand", RangedSlot = "Ranged",
+}
+
 local INSTANCE_BOSS_POINTS = 10       -- dungeon boss
 local RAID_BOSS_POINTS = 25           -- raid boss
 local BOSS_KILL_DEDUP_WINDOW = 10     -- seconds to suppress duplicate boss-kill awards
@@ -668,6 +683,7 @@ local function EnsureDB()
   if not LeafVE_GlobalDB.altLinks then LeafVE_GlobalDB.altLinks = {} end
   if not LeafVE_GlobalDB.registeredChars then LeafVE_GlobalDB.registeredChars = {} end
   if not LeafVE_GlobalDB.guildAltLinks then LeafVE_GlobalDB.guildAltLinks = {} end
+  if not LeafVE_GlobalDB.gearCache then LeafVE_GlobalDB.gearCache = {} end
   -- leaderChar stores the display name to show on the leaderboard (nil = use effective name)
   if LeafVE_DB.options.groupPoints == nil then LeafVE_DB.options.groupPoints = GROUP_POINTS end
   if LeafVE_DB.options.loginPoints == nil then LeafVE_DB.options.loginPoints = 20 end
@@ -2111,6 +2127,115 @@ function LeafVE:BroadcastPlayerNote(noteText)
   end
 end
 
+-------------------------------------------------
+-- GEAR CACHING & BROADCAST
+-------------------------------------------------
+LeafVE.lastGearBroadcast = 0
+
+function LeafVE:ParseItemIDFromLink(link)
+  if not link then return nil end
+  local s = string.find(link, "|Hitem:")
+  if not s then return nil end
+  local rest = string.sub(link, s + 7)
+  local colonPos = string.find(rest, ":")
+  local idStr
+  if colonPos then
+    idStr = string.sub(rest, 1, colonPos - 1)
+  else
+    idStr = rest
+  end
+  local id = tonumber(idStr)
+  if id and id > 0 then return id end
+  return nil
+end
+
+function LeafVE:CaptureGearForUnit(unitToken)
+  if not unitToken then return {} end
+  local slots = {}
+  for i = 1, table.getn(GEAR_SLOT_NAMES) do
+    local slotName = GEAR_SLOT_NAMES[i]
+    local slotId = GetInventorySlotInfo(slotName)
+    if slotId then
+      local link = GetInventoryItemLink(unitToken, slotId)
+      local itemId = self:ParseItemIDFromLink(link)
+      if itemId then
+        slots[slotName] = itemId
+      end
+    end
+  end
+  return slots
+end
+
+function LeafVE:CaptureAndCacheMyGear()
+  EnsureDB()
+  local me = ShortName(UnitName("player"))
+  if not me then return end
+  local nameLower = Lower(me)
+  if not LeafVE_GlobalDB.gearCache[nameLower] then
+    LeafVE_GlobalDB.gearCache[nameLower] = {}
+  end
+  local slots = self:CaptureGearForUnit("player")
+  LeafVE_GlobalDB.gearCache[nameLower].broadcast = {
+    updatedAt = Now(),
+    slots = slots,
+  }
+end
+
+function LeafVE:CaptureAndCacheInspectedGear(playerName, unitToken)
+  if not playerName or not unitToken then return end
+  EnsureDB()
+  local nameLower = Lower(ShortName(playerName) or playerName)
+  if not LeafVE_GlobalDB.gearCache[nameLower] then
+    LeafVE_GlobalDB.gearCache[nameLower] = {}
+  end
+  local slots = self:CaptureGearForUnit(unitToken)
+  LeafVE_GlobalDB.gearCache[nameLower].inspected = {
+    updatedAt = Now(),
+    slots = slots,
+  }
+end
+
+function LeafVE:BroadcastMyGear()
+  if not InGuild() then return end
+  local now = Now()
+  if (now - self.lastGearBroadcast) < GEAR_BROADCAST_THROTTLE then return end
+  self.lastGearBroadcast = now
+
+  self:CaptureAndCacheMyGear()
+
+  local me = ShortName(UnitName("player"))
+  if not me then return end
+  local cache = LeafVE_GlobalDB.gearCache and LeafVE_GlobalDB.gearCache[Lower(me)]
+  local snapshot = cache and cache.broadcast
+  if not snapshot or not snapshot.slots then return end
+
+  local header = "GEAR:" .. me .. ":" .. tostring(snapshot.updatedAt) .. ":"
+  local maxPayload = 200
+
+  local chunk = {}
+  local chunkLen = 0
+  for i = 1, table.getn(GEAR_SLOT_NAMES) do
+    local slotName = GEAR_SLOT_NAMES[i]
+    local itemId = snapshot.slots[slotName]
+    if itemId then
+      local entry = slotName .. "=" .. tostring(itemId)
+      local entryLen = string.len(entry)
+      local sepLen = chunkLen > 0 and 1 or 0
+      if chunkLen > 0 and chunkLen + sepLen + entryLen > maxPayload then
+        SendAddonMessage("LeafVE", header .. table.concat(chunk, ","), "GUILD")
+        chunk = {}
+        chunkLen = 0
+        sepLen = 0
+      end
+      table.insert(chunk, entry)
+      chunkLen = chunkLen + sepLen + entryLen
+    end
+  end
+  if table.getn(chunk) > 0 then
+    SendAddonMessage("LeafVE", header .. table.concat(chunk, ","), "GUILD")
+  end
+end
+
 -- Helper: compare two "major.minor" version strings numerically
 local function VersionLessThan(a, b)
   local amaj, amin = string.match(a or "0.0", "(%d+)%.(%d+)")
@@ -2586,6 +2711,62 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         if LeafVE.UI.panels.leaderWeek and LeafVE.UI.panels.leaderWeek:IsVisible() then
           LeafVE.UI:RefreshLeaderboard("leaderWeek")
         end
+      end
+    end
+    return
+
+  -- Handle gear cache broadcast from a guild member
+  elseif string.sub(message, 1, 5) == "GEAR:" then
+    local rest = string.sub(message, 6)
+    -- Format: GEAR:<playerName>:<updatedAt>:<slotName>=<itemID>,...
+    local firstColon = string.find(rest, ":")
+    if not firstColon then return end
+    local declaredName = string.sub(rest, 1, firstColon - 1)
+    -- Basic spoof prevention: sender must match declared name (case-insensitive)
+    if Lower(sender) ~= Lower(ShortName(declaredName) or declaredName) then return end
+    rest = string.sub(rest, firstColon + 1)
+    local secondColon = string.find(rest, ":")
+    if not secondColon then return end
+    local updatedAt = tonumber(string.sub(rest, 1, secondColon - 1)) or Now()
+    local slotData = string.sub(rest, secondColon + 1)
+
+    EnsureDB()
+    if not LeafVE_GlobalDB.gearCache then LeafVE_GlobalDB.gearCache = {} end
+    local nameLower = Lower(sender)
+    if not LeafVE_GlobalDB.gearCache[nameLower] then
+      LeafVE_GlobalDB.gearCache[nameLower] = {}
+    end
+    if not LeafVE_GlobalDB.gearCache[nameLower].broadcast then
+      LeafVE_GlobalDB.gearCache[nameLower].broadcast = { updatedAt = 0, slots = {} }
+    end
+    -- Merge slot entries (accept if message timestamp >= cached timestamp)
+    if updatedAt >= LeafVE_GlobalDB.gearCache[nameLower].broadcast.updatedAt then
+      LeafVE_GlobalDB.gearCache[nameLower].broadcast.updatedAt = updatedAt
+      local startPos = 1
+      while startPos <= string.len(slotData) do
+        local commaPos = string.find(slotData, ",", startPos)
+        local entry
+        if commaPos then
+          entry = string.sub(slotData, startPos, commaPos - 1)
+          startPos = commaPos + 1
+        else
+          entry = string.sub(slotData, startPos)
+          startPos = string.len(slotData) + 1
+        end
+        local eqPos = string.find(entry, "=")
+        if eqPos then
+          local slotName = string.sub(entry, 1, eqPos - 1)
+          local itemId = tonumber(string.sub(entry, eqPos + 1))
+          if slotName ~= "" and itemId then
+            LeafVE_GlobalDB.gearCache[nameLower].broadcast.slots[slotName] = itemId
+          end
+        end
+      end
+    end
+    -- Refresh gear popup if the viewed player is this sender
+    if LeafVE.UI and LeafVE.UI.gearPopup and LeafVE.UI.gearPopup:IsVisible() then
+      if LeafVE.UI.cardCurrentPlayer and Lower(LeafVE.UI.cardCurrentPlayer) == nameLower then
+        LeafVE.UI:RefreshGearPopup(LeafVE.UI.cardCurrentPlayer)
       end
     end
     return
@@ -3093,6 +3274,27 @@ viewAllBadgesBtn:SetScript("OnClick", function()
   end
 end)
 self.viewAllBadgesBtn = viewAllBadgesBtn
+
+-- Gear Button (between View All Badges and View All Achievements)
+local gearBtn = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+gearBtn:SetWidth(140)
+gearBtn:SetHeight(22)
+gearBtn:SetPoint("TOPLEFT", viewAllBadgesBtn, "BOTTOMLEFT", 0, -5)
+gearBtn:SetText("Gear")
+SkinButtonAccent(gearBtn)
+gearBtn:SetScript("OnClick", function()
+  if not LeafVE.UI.cardCurrentPlayer then return end
+  if not LeafVE.UI.gearPopup then
+    LeafVE.UI:CreateGearPopup()
+  end
+  if LeafVE.UI.gearPopup:IsVisible() then
+    LeafVE.UI.gearPopup:Hide()
+  else
+    LeafVE.UI:RefreshGearPopup(LeafVE.UI.cardCurrentPlayer)
+    LeafVE.UI.gearPopup:Show()
+  end
+end)
+self.cardGearBtn = gearBtn
 
 -- Achievements Section
   local achLabel = c:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -3970,6 +4172,411 @@ function LeafVE.UI:ShowAchievementPopup(achId, achData)
   
   -- Play sound
   PlaySound("LevelUp")
+end
+
+-------------------------------------------------
+-- GEAR POPUP UI
+-------------------------------------------------
+
+-- Hidden tooltip used for stat scanning
+local leafScanTip
+
+local function GetOrCreateScanTip()
+  if not leafScanTip then
+    leafScanTip = CreateFrame("GameTooltip", "LeafVE_StatScanTip", UIParent, "GameTooltipTemplate")
+    leafScanTip:SetOwner(UIParent, "ANCHOR_NONE")
+  end
+  return leafScanTip
+end
+
+local function ParseStatLine(line, stats)
+  if not line or line == "" then return end
+  -- Strip color codes
+  line = string.gsub(line, "|c%x%x%x%x%x%x%x%x", "")
+  line = string.gsub(line, "|r", "")
+
+  local val
+  -- Primary stats (+X StatName)
+  val = tonumber(string.match(line, "%+(%d+) Strength"))
+  if val then stats.str = (stats.str or 0) + val end
+
+  val = tonumber(string.match(line, "%+(%d+) Agility"))
+  if val then stats.agi = (stats.agi or 0) + val end
+
+  val = tonumber(string.match(line, "%+(%d+) Stamina"))
+  if val then stats.sta = (stats.sta or 0) + val end
+
+  val = tonumber(string.match(line, "%+(%d+) Intellect"))
+  if val then stats.int_ = (stats.int_ or 0) + val end
+
+  val = tonumber(string.match(line, "%+(%d+) Spirit"))
+  if val then stats.spi = (stats.spi or 0) + val end
+
+  val = tonumber(string.match(line, "%+(%d+) Attack Power"))
+  if val then stats.ap = (stats.ap or 0) + val end
+
+  -- Hit chance
+  if string.find(line, "chance to hit") then
+    val = tonumber(string.match(line, "by (%d+)%%"))
+    if val then stats.hit = (stats.hit or 0) + val end
+  end
+
+  -- Melee Crit (not spell crit)
+  if string.find(line, "chance to get a critical strike") and not string.find(line, "with spells") then
+    val = tonumber(string.match(line, "by (%d+)%%"))
+    if val then stats.crit = (stats.crit or 0) + val end
+  end
+
+  -- Spell Crit
+  if string.find(line, "critical strike with spells") then
+    val = tonumber(string.match(line, "by (%d+)%%"))
+    if val then stats.spellcrit = (stats.spellcrit or 0) + val end
+  end
+
+  -- Spell Damage + Healing combined
+  if string.find(line, "Increases damage and healing done by magical spells") then
+    val = tonumber(string.match(line, "up to (%d+)"))
+    if val then
+      stats.spelldmg = (stats.spelldmg or 0) + val
+      stats.healing = (stats.healing or 0) + val
+    end
+  -- Spell Damage only
+  elseif string.find(line, "Increases damage done by magical spells") then
+    val = tonumber(string.match(line, "up to (%d+)"))
+    if val then stats.spelldmg = (stats.spelldmg or 0) + val end
+  -- Healing only
+  elseif string.find(line, "Increases healing done by spells") then
+    val = tonumber(string.match(line, "up to (%d+)"))
+    if val then stats.healing = (stats.healing or 0) + val end
+  end
+end
+
+local function ComputeGearStats(slots)
+  local stats = {}
+  local tip = GetOrCreateScanTip()
+  for slotName, itemId in pairs(slots) do
+    tip:ClearLines()
+    tip:SetHyperlink("item:" .. tostring(itemId) .. ":0:0:0")
+    local numLines = tip:NumLines()
+    if numLines and numLines > 0 then
+      for i = 1, numLines do
+        local leftObj = getglobal("LeafVE_StatScanTipTextLeft" .. i)
+        if leftObj then
+          ParseStatLine(leftObj:GetText() or "", stats)
+        end
+      end
+    end
+  end
+  tip:Hide()
+  return stats
+end
+
+local function AddStatLine(lines, label, val, color)
+  if not val or val <= 0 then return end
+  local valStr = tostring(val)
+  if color then
+    table.insert(lines, "|cFF" .. color .. label .. ": " .. valStr .. "|r")
+  else
+    table.insert(lines, label .. ": " .. valStr)
+  end
+end
+
+local function FormatGearStats(stats, class)
+  local lines = {}
+  local classUpper = string.upper(class or "")
+  local isCaster = (classUpper == "MAGE" or classUpper == "WARLOCK" or classUpper == "PRIEST")
+  local isMelee  = (classUpper == "WARRIOR" or classUpper == "ROGUE" or classUpper == "HUNTER")
+
+  if isCaster then
+    AddStatLine(lines, "Spell Damage", stats.spelldmg, "88AAFF")
+    AddStatLine(lines, "Healing",      stats.healing,  "88FFAA")
+    AddStatLine(lines, "Spell Crit %", stats.spellcrit,"FFAA44")
+    AddStatLine(lines, "Intellect",    stats.int_,     "AAAAFF")
+    AddStatLine(lines, "Spirit",       stats.spi,      "AAFFAA")
+    AddStatLine(lines, "Stamina",      stats.sta,      "CCCCCC")
+    AddStatLine(lines, "Strength",     stats.str,      "CCCCCC")
+    AddStatLine(lines, "Agility",      stats.agi,      "CCCCCC")
+    AddStatLine(lines, "Attack Power", stats.ap,       "FFAA44")
+    AddStatLine(lines, "Hit %",        stats.hit,      "88FF88")
+    AddStatLine(lines, "Crit %",       stats.crit,     "FFCC44")
+  elseif isMelee then
+    AddStatLine(lines, "Attack Power", stats.ap,       "FFAA44")
+    AddStatLine(lines, "Hit %",        stats.hit,      "88FF88")
+    AddStatLine(lines, "Crit %",       stats.crit,     "FFCC44")
+    AddStatLine(lines, "Strength",     stats.str,      "CCCCCC")
+    AddStatLine(lines, "Agility",      stats.agi,      "CCCCCC")
+    AddStatLine(lines, "Stamina",      stats.sta,      "CCCCCC")
+    AddStatLine(lines, "Spell Damage", stats.spelldmg, "88AAFF")
+    AddStatLine(lines, "Healing",      stats.healing,  "88FFAA")
+    AddStatLine(lines, "Intellect",    stats.int_,     "AAAAFF")
+    AddStatLine(lines, "Spirit",       stats.spi,      "AAFFAA")
+  else -- Hybrid: DRUID, PALADIN, SHAMAN, or unknown
+    AddStatLine(lines, "Spell Damage", stats.spelldmg, "88AAFF")
+    AddStatLine(lines, "Healing",      stats.healing,  "88FFAA")
+    AddStatLine(lines, "Spell Crit %", stats.spellcrit,"FFAA44")
+    AddStatLine(lines, "Attack Power", stats.ap,       "FFAA44")
+    AddStatLine(lines, "Hit %",        stats.hit,      "88FF88")
+    AddStatLine(lines, "Crit %",       stats.crit,     "FFCC44")
+    AddStatLine(lines, "Strength",     stats.str,      "CCCCCC")
+    AddStatLine(lines, "Agility",      stats.agi,      "CCCCCC")
+    AddStatLine(lines, "Stamina",      stats.sta,      "CCCCCC")
+    AddStatLine(lines, "Intellect",    stats.int_,     "AAAAFF")
+    AddStatLine(lines, "Spirit",       stats.spi,      "AAFFAA")
+  end
+
+  if table.getn(lines) == 0 then
+    return "|cFF888888No stats parsed|r"
+  end
+  return table.concat(lines, "\n")
+end
+
+function LeafVE.UI:CreateGearPopup()
+  if self.gearPopup then return end
+
+  local popup = CreateFrame("Frame", "LeafVE_GearPopup", UIParent)
+  popup:SetWidth(560)
+  popup:SetFrameStrata("DIALOG")
+  popup:EnableMouse(true)
+
+  if LeafVE.UI.frame then
+    popup:SetPoint("TOPLEFT", LeafVE.UI.frame, "TOPRIGHT", 5, 0)
+    popup:SetHeight(LeafVE.UI.frame:GetHeight())
+  else
+    popup:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    popup:SetHeight(560)
+  end
+
+  popup:SetBackdrop({
+    bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 }
+  })
+  popup:SetBackdropColor(0, 0, 0, 0.95)
+  popup:Hide()
+
+  -- Title
+  local titleText = popup:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  titleText:SetPoint("TOP", popup, "TOP", 0, -15)
+  titleText:SetTextColor(THEME.gold[1], THEME.gold[2], THEME.gold[3])
+  popup.titleText = titleText
+
+  -- Source / timestamp info
+  local sourceText = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  sourceText:SetPoint("TOP", titleText, "BOTTOM", 0, -3)
+  popup.sourceText = sourceText
+
+  -- Close button
+  local closeBtn = CreateFrame("Button", nil, popup, "UIPanelCloseButton")
+  closeBtn:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -5, -5)
+  closeBtn:SetScript("OnClick", function() popup:Hide() end)
+
+  -- Refresh button
+  local refreshBtn = CreateFrame("Button", nil, popup, "UIPanelButtonTemplate")
+  refreshBtn:SetWidth(80)
+  refreshBtn:SetHeight(22)
+  refreshBtn:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -30, -42)
+  refreshBtn:SetText("Refresh")
+  SkinButtonAccent(refreshBtn)
+  refreshBtn:SetScript("OnClick", function()
+    if LeafVE.UI.cardCurrentPlayer then
+      LeafVE.UI:RefreshGearPopup(LeafVE.UI.cardCurrentPlayer)
+    end
+  end)
+  popup.refreshBtn = refreshBtn
+
+  -- Left column label
+  local slotLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  slotLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 15, -68)
+  slotLabel:SetText("|cFFFFD700Equipment|r")
+
+  -- Slot scroll frame
+  local slotScroll = CreateFrame("ScrollFrame", "LeafVE_GearSlotScroll", popup, "UIPanelScrollFrameTemplate")
+  slotScroll:SetPoint("TOPLEFT",    slotLabel, "BOTTOMLEFT", 0,   -5)
+  slotScroll:SetPoint("BOTTOMLEFT", popup,     "BOTTOMLEFT", 15,  15)
+  slotScroll:SetWidth(290)
+  popup.slotScroll = slotScroll
+
+  local slotChild = CreateFrame("Frame", nil, slotScroll)
+  slotChild:SetWidth(268)
+  slotChild:SetHeight(1)
+  slotScroll:SetScrollChild(slotChild)
+  popup.slotChild = slotChild
+
+  -- Right column label
+  local statLabel = popup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  statLabel:SetPoint("TOPLEFT", popup, "TOPLEFT", 325, -68)
+  statLabel:SetText("|cFFFFD700Important Stats|r")
+
+  -- Stats text
+  local statsText = popup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  statsText:SetPoint("TOPLEFT", statLabel, "BOTTOMLEFT", 0, -8)
+  statsText:SetWidth(210)
+  statsText:SetJustifyH("LEFT")
+  statsText:SetText("")
+  popup.statsText = statsText
+
+  -- Slot entry frames (pre-allocated)
+  popup.slotEntries = {}
+
+  self.gearPopup = popup
+end
+
+function LeafVE.UI:RefreshGearPopup(playerName)
+  if not self.gearPopup then return end
+  playerName = ShortName(playerName)
+  if not playerName then return end
+
+  self.gearPopup.titleText:SetText(playerName .. "'s Gear")
+
+  EnsureDB()
+  local nameLower = Lower(playerName)
+  local cache = LeafVE_GlobalDB.gearCache and LeafVE_GlobalDB.gearCache[nameLower]
+
+  -- Prefer inspected snapshot; fall back to broadcast
+  local snapshot  = nil
+  local sourceLabel = ""
+  if cache then
+    if cache.inspected and cache.inspected.slots then
+      snapshot    = cache.inspected
+      sourceLabel = "Source: |cFF88FF88Inspected|r"
+    elseif cache.broadcast and cache.broadcast.slots then
+      snapshot    = cache.broadcast
+      sourceLabel = "Source: |cFFAAAA88Broadcast|r"
+    end
+  end
+
+  if snapshot then
+    local timeAgo = Now() - (snapshot.updatedAt or 0)
+    local timeStr
+    if timeAgo < 60 then
+      timeStr = timeAgo .. "s ago"
+    elseif timeAgo < 3600 then
+      timeStr = math.floor(timeAgo / 60) .. "m ago"
+    else
+      timeStr = math.floor(timeAgo / 3600) .. "h ago"
+    end
+    self.gearPopup.sourceText:SetText(sourceLabel .. "  |cFF888888" .. timeStr .. "|r")
+  else
+    self.gearPopup.sourceText:SetText("|cFF888888No gear data cached|r")
+  end
+
+  -- Hide existing slot entry frames
+  for i = 1, table.getn(self.gearPopup.slotEntries) do
+    self.gearPopup.slotEntries[i]:Hide()
+  end
+
+  local scrollChild = self.gearPopup.slotChild
+  local yOffset     = -5
+  local entryH      = 20
+
+  if snapshot and snapshot.slots then
+    for i = 1, table.getn(GEAR_SLOT_NAMES) do
+      local slotName = GEAR_SLOT_NAMES[i]
+      local label    = GEAR_SLOT_LABELS[slotName] or slotName
+      local itemId   = snapshot.slots[slotName]
+
+      local entry = self.gearPopup.slotEntries[i]
+      if not entry then
+        entry = CreateFrame("Frame", nil, scrollChild)
+        entry:SetHeight(entryH)
+        entry:SetWidth(265)
+
+        local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        labelFS:SetPoint("LEFT", entry, "LEFT", 2, 0)
+        labelFS:SetWidth(78)
+        labelFS:SetJustifyH("LEFT")
+        entry.labelFS = labelFS
+
+        local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        itemFS:SetPoint("LEFT", labelFS, "RIGHT", 4, 0)
+        itemFS:SetWidth(180)
+        itemFS:SetJustifyH("LEFT")
+        entry.itemFS = itemFS
+
+        entry:EnableMouse(true)
+        entry:SetScript("OnEnter", function()
+          if this.itemId then
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink("item:" .. tostring(this.itemId) .. ":0:0:0")
+            GameTooltip:Show()
+          end
+        end)
+        entry:SetScript("OnLeave", function()
+          GameTooltip:Hide()
+        end)
+
+        self.gearPopup.slotEntries[i] = entry
+      end
+
+      entry:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 2, yOffset)
+      entry.itemId = itemId
+      entry.labelFS:SetText("|cFFAAAAAA" .. label .. ":|r")
+
+      if itemId then
+        local itemName, _, itemRarity = GetItemInfo(itemId)
+        local displayText
+        if itemName then
+          local r, g, b
+          if GetItemQualityColor and itemRarity then
+            r, g, b = GetItemQualityColor(itemRarity)
+          end
+          if r then
+            local hex = string.format("%02X%02X%02X",
+              math.floor(r * 255), math.floor(g * 255), math.floor(b * 255))
+            displayText = "|cFF" .. hex .. itemName .. "|r"
+          else
+            displayText = itemName
+          end
+        else
+          displayText = "|cFF888888#" .. tostring(itemId) .. "|r"
+        end
+        entry.itemFS:SetText(displayText)
+      else
+        entry.itemFS:SetText("|cFF444444--empty--|r")
+        entry.itemId = nil
+      end
+
+      entry:Show()
+      yOffset = yOffset - entryH - 2
+    end
+  else
+    local entry = self.gearPopup.slotEntries[1]
+    if not entry then
+      entry = CreateFrame("Frame", nil, scrollChild)
+      entry:SetHeight(entryH)
+      entry:SetWidth(265)
+      local labelFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      labelFS:SetPoint("LEFT", entry, "LEFT", 2, 0)
+      labelFS:SetWidth(78)
+      labelFS:SetJustifyH("LEFT")
+      entry.labelFS = labelFS
+      local itemFS = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      itemFS:SetPoint("LEFT", labelFS, "RIGHT", 4, 0)
+      itemFS:SetWidth(180)
+      itemFS:SetJustifyH("LEFT")
+      entry.itemFS = itemFS
+      self.gearPopup.slotEntries[1] = entry
+    end
+    entry:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 2, yOffset)
+    entry.labelFS:SetText("")
+    entry.itemFS:SetText("|cFF888888No gear data available|r")
+    entry.itemId = nil
+    entry:Show()
+    yOffset = yOffset - entryH - 2
+  end
+
+  scrollChild:SetHeight(math.max(1, math.abs(yOffset) + 20))
+
+  -- Compute and display class-aware stats
+  local statsText = "|cFF888888No stats available|r"
+  if snapshot and snapshot.slots then
+    local guildInfo = LeafVE:GetGuildInfo(playerName)
+    local class     = guildInfo and guildInfo.class or "Unknown"
+    local stats     = ComputeGearStats(snapshot.slots)
+    statsText       = FormatGearStats(stats, class)
+  end
+  self.gearPopup.statsText:SetText(statsText)
 end
 
 function LeafVE.UI:CreateAchievementListPopup()
@@ -5111,6 +5718,9 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
             if LeafVE.UI.achPopup and LeafVE.UI.achPopup:IsVisible() then
               LeafVE.UI.achPopup:Hide()
             end
+            if LeafVE.UI.gearPopup and LeafVE.UI.gearPopup:IsVisible() then
+              LeafVE.UI.gearPopup:Hide()
+            end
             LeafVE.UI.inspectedPlayer = this.playerName
             LeafVE.UI:ShowPlayerCard(this.playerName)
           end
@@ -5388,6 +5998,11 @@ btn:SetScript("OnClick", function()
   -- Close achievement popup when switching players
   if LeafVE.UI.achPopup and LeafVE.UI.achPopup:IsVisible() then
     LeafVE.UI.achPopup:Hide()
+  end
+  
+  -- Close gear popup when switching players
+  if LeafVE.UI.gearPopup and LeafVE.UI.gearPopup:IsVisible() then
+    LeafVE.UI.gearPopup:Hide()
   end
   
   if LeafVE.UI.cardCurrentPlayer ~= this.playerName then
@@ -7637,6 +8252,9 @@ function LeafVE.UI:RefreshAchievementsLeaderboard()
             if LeafVE.UI.achPopup and LeafVE.UI.achPopup:IsVisible() then
               LeafVE.UI.achPopup:Hide()
             end
+            if LeafVE.UI.gearPopup and LeafVE.UI.gearPopup:IsVisible() then
+              LeafVE.UI.gearPopup:Hide()
+            end
             LeafVE.UI.inspectedPlayer = this.playerName
             LeafVE.UI:ShowPlayerCard(this.playerName)
           end
@@ -7733,6 +8351,7 @@ function LeafVE.UI:Build()
     f:HookScript("OnHide", function()
       if LeafVE.UI.allBadgesFrame then LeafVE.UI.allBadgesFrame:Hide() end
       if LeafVE.UI.achPopup then LeafVE.UI.achPopup:Hide() end
+      if LeafVE.UI.gearPopup then LeafVE.UI.gearPopup:Hide() end
     end)
   else
     local _prevOnHide = f:GetScript("OnHide")
@@ -7740,6 +8359,7 @@ function LeafVE.UI:Build()
       if _prevOnHide then _prevOnHide(f) end
       if LeafVE.UI.allBadgesFrame then LeafVE.UI.allBadgesFrame:Hide() end
       if LeafVE.UI.achPopup then LeafVE.UI.achPopup:Hide() end
+      if LeafVE.UI.gearPopup then LeafVE.UI.gearPopup:Hide() end
     end)
   end
   
@@ -8530,6 +9150,7 @@ ef:RegisterEvent("CHAT_MSG_PARTY")
 ef:RegisterEvent("CHAT_MSG_GUILD")
 ef:RegisterEvent("CHAT_MSG_WHISPER")
 ef:RegisterEvent("CHAT_MSG_COMBAT_HOSTILE_DEATH")
+ef:RegisterEvent("UNIT_INVENTORY_CHANGED")
 
 local groupCheckTimer = 0
 local notificationTimer = 0
@@ -8612,6 +9233,9 @@ ef:SetScript("OnEvent", function()
           if bme and LeafVE_GlobalDB.altLinks and LeafVE_GlobalDB.altLinks[bme] then
             SendAddonMessage("LeafVE", "ALTLINK:"..bme..":"..LeafVE_GlobalDB.altLinks[bme], "GUILD")
           end
+          -- Broadcast gear so guildmates can cache it
+          LeafVE.lastGearBroadcast = 0  -- bypass throttle for login broadcast
+          LeafVE:BroadcastMyGear()
         end
         broadcastFrame:SetScript("OnUpdate", nil)
       end
@@ -8680,6 +9304,13 @@ ef:SetScript("OnEvent", function()
 
   if event == "CHAT_MSG_COMBAT_HOSTILE_DEATH" then
     LeafVE:OnBossKillChat(arg1 or "")
+    return
+  end
+
+  if event == "UNIT_INVENTORY_CHANGED" then
+    if arg1 == "player" then
+      LeafVE:BroadcastMyGear()
+    end
     return
   end
 end)
