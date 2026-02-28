@@ -7,4 +7,6 @@
 ## SavedVariablesPerCharacter: LeafVE_DB
 ## OptionalDeps: 
 
+stats/Localization.lua
+stats/helper.lua
 LeafVillageLegends.lua
