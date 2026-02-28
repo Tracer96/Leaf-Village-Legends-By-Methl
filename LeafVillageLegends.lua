@@ -41,6 +41,7 @@ local DEFAULT_ACHIEVEMENT_POINTS = 10  -- fallback points per achievement when m
 
 local INSTANCE_BOSS_POINTS = 10       -- dungeon boss
 local RAID_BOSS_POINTS = 25           -- raid boss
+local BOSS_KILL_DEDUP_WINDOW = 10     -- seconds to suppress duplicate boss-kill awards
 local INSTANCE_COMPLETION_POINTS = 10 -- dungeon completion (flat)
 local RAID_COMPLETION_POINTS = 25     -- raid completion (flat)
 local INSTANCE_MIN_PRESENCE_PCT = 0.5  -- must be present for ≥50% of run time
@@ -420,6 +421,7 @@ LeafVE.instanceJoinedAt = nil
 LeafVE.instanceZone = nil
 LeafVE.instanceHasGuildie = false
 LeafVE.instanceBossesKilledThisRun = 0
+LeafVE.recentBossKills = {}  -- bossName -> timestamp, for dedup within a short window
 LeafVE.lastGroupAwardTick = nil
 LeafVE.lastCombatAt = 0
 LeafVE.lastActivityTime = 0
@@ -1606,13 +1608,20 @@ function LeafVE:OnInstanceExit()
 end
 
 function LeafVE:OnBossKillChat(msg)
-  if not self.instanceJoinedAt then return end
-  local bossName = string.match(msg, "^(.+) dies%.$")
+  -- Match "BossName is slain by PlayerName." (primary Classic WoW combat log format)
+  local bossName = string.match(msg, "^(.+) is slain by .+%.$")
+  -- Fallback: match "BossName dies." (environmental or alternate death messages)
+  if not bossName then bossName = string.match(msg, "^(.+) dies%.$") end
   if not bossName then return end
   if not KNOWN_BOSSES[bossName] then return end
   local me = ShortName(UnitName("player"))
   if not me then return end
   EnsureDB()
+
+  -- Dedup: ignore if this boss was already awarded within the last 10 seconds
+  local now = Now()
+  if self.recentBossKills[bossName] and (now - self.recentBossKills[bossName]) < BOSS_KILL_DEDUP_WINDOW then return end
+  self.recentBossKills[bossName] = now
 
   -- Require at least one other guildie in the group (solo runs don't count)
   local guildies = self:GetGroupGuildies()
