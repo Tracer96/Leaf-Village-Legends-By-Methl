@@ -39,7 +39,8 @@ local LBOARD_RESPOND_COOLDOWN = 30 -- seconds between responses to LBOARDREQ
 local SHOUT_SYNC_RESPOND_COOLDOWN = 30 -- seconds between shoutout history sync responses
 local DEFAULT_ACHIEVEMENT_POINTS = 10  -- fallback points per achievement when metadata is unavailable
 
-local GEAR_BROADCAST_THROTTLE = 10  -- seconds between gear broadcasts
+local GEAR_BROADCAST_THROTTLE  = 10  -- seconds between gear broadcasts
+local STATS_BROADCAST_THROTTLE = 30  -- seconds between BCS stats broadcasts
 local GEAR_SLOT_NAMES = {
   "HeadSlot", "NeckSlot", "ShoulderSlot", "BackSlot", "ChestSlot",
   "WristSlot", "HandsSlot", "WaistSlot", "LegsSlot", "FeetSlot",
@@ -684,6 +685,7 @@ local function EnsureDB()
   if not LeafVE_GlobalDB.registeredChars then LeafVE_GlobalDB.registeredChars = {} end
   if not LeafVE_GlobalDB.guildAltLinks then LeafVE_GlobalDB.guildAltLinks = {} end
   if not LeafVE_GlobalDB.gearCache then LeafVE_GlobalDB.gearCache = {} end
+  if not LeafVE_GlobalDB.gearStatsCache then LeafVE_GlobalDB.gearStatsCache = {} end
   -- leaderChar stores the display name to show on the leaderboard (nil = use effective name)
   if LeafVE_DB.options.groupPoints == nil then LeafVE_DB.options.groupPoints = GROUP_POINTS end
   if LeafVE_DB.options.loginPoints == nil then LeafVE_DB.options.loginPoints = 20 end
@@ -2130,7 +2132,8 @@ end
 -------------------------------------------------
 -- GEAR CACHING & BROADCAST
 -------------------------------------------------
-LeafVE.lastGearBroadcast = 0
+LeafVE.lastGearBroadcast  = 0
+LeafVE.lastStatsBroadcast = 0
 
 function LeafVE:ParseItemIDFromLink(link)
   if not link then return nil end
@@ -2236,7 +2239,129 @@ function LeafVE:BroadcastMyGear()
   end
 end
 
--- Helper: compare two "major.minor" version strings numerically
+-------------------------------------------------
+-- BCS STATS COMPUTE & BROADCAST
+-------------------------------------------------
+
+-- Compute all BCS-based stats for the local player and return a key/value table.
+-- Short keys are used so the serialized payload fits in one 255-byte message.
+function LeafVE:ComputeMyBCSStats()
+  if not BCS then return nil end
+  BCS.needScanGear    = true
+  BCS.needScanTalents = true
+  BCS.needScanAuras   = true
+  BCS.needScanSkills  = true
+  BCS:RunScans()
+  BCS.needScanGear    = false
+  BCS.needScanTalents = false
+  BCS.needScanAuras   = false
+  BCS.needScanSkills  = false
+
+  local apBase, apPos, apNeg = UnitAttackPower("player")
+  local ap = (apBase or 0) + (apPos or 0) + (apNeg or 0)
+  local rap = 0
+  if UnitRangedAttackPower then
+    local rb, rp, rn = UnitRangedAttackPower("player")
+    rap = (rb or 0) + (rp or 0) + (rn or 0)
+  end
+
+  local hit          = BCS:GetHitRating() or 0
+  local mcrit        = BCS:GetCritChance() or 0
+  local rhit         = BCS:GetRangedHitRating() or 0
+  local rcrit        = BCS:GetRangedCritChance() or 0
+  local mhsk         = BCS:GetMHWeaponSkill() or 0
+  local rsk          = BCS:GetRangedWeaponSkill() or 0
+  local sp           = BCS:GetSpellPower() or 0
+  local shit         = BCS:GetSpellHitRating() or 0
+  local scrit        = BCS:GetSpellCritChance() or 0
+  local heal         = BCS:GetHealingPower() or 0
+  local manaBase, _, mp5 = BCS:GetManaRegen()
+  manaBase = manaBase or 0; mp5 = mp5 or 0
+  local _, spellHaste = BCS:GetHaste()
+  spellHaste = spellHaste or 0
+  local dodge  = GetDodgeChance and GetDodgeChance() or 0
+  local parry  = GetParryChance and GetParryChance() or 0
+  local block  = GetBlockChance and GetBlockChance() or 0
+  local defBase, defMod = 0, 0
+  if UnitDefense then
+    defBase, defMod = UnitDefense("player")
+    defBase = defBase or 0; defMod = defMod or 0
+  end
+  local defense = defBase + defMod
+  local _, armor = UnitArmor("player")
+  armor = armor or 0
+  local _, str  = UnitStat("player", 1)
+  local _, agi  = UnitStat("player", 2)
+  local _, sta  = UnitStat("player", 3)
+  local _, int_ = UnitStat("player", 4)
+  local _, spi  = UnitStat("player", 5)
+
+  return {
+    ap = ap,   hi = hit,  mc = mcrit,
+    ra = rap,  rh = rhit, rc = rcrit,
+    ms = mhsk, rs = rsk,
+    sp = sp,   sh = shit, sc = scrit, ss = spellHaste,
+    he = heal, m5 = mp5,  mr = manaBase,
+    st = str or 0,  ag = agi or 0,  sa = sta or 0,
+    ["in"] = int_ or 0, si = spi or 0,
+    ar = armor, de = defense, dg = dodge, pa = parry, bl = block,
+  }
+end
+
+-- Serialize a stats table (from ComputeMyBCSStats) and broadcast it over the
+-- guild addon channel so guildmates can cache and display it.
+function LeafVE:BroadcastMyStats()
+  if not InGuild() then return end
+  if not BCS then return end
+  local now = Now()
+  if (now - self.lastStatsBroadcast) < STATS_BROADCAST_THROTTLE then return end
+  self.lastStatsBroadcast = now
+
+  local me = ShortName(UnitName("player"))
+  if not me then return end
+
+  local s = self:ComputeMyBCSStats()
+  if not s then return end
+
+  EnsureDB()
+  LeafVE_GlobalDB.gearStatsCache[Lower(me)] = { stats = s, updatedAt = now }
+
+  -- Serialize non-zero values with short keys; floats get 1 decimal place
+  local parts = {}
+  local function addStat(key, val, fmt)
+    if val and val ~= 0 then
+      table.insert(parts, key .. "=" .. string.format(fmt, val))
+    end
+  end
+  addStat("ap", s.ap,  "%d")
+  addStat("hi", s.hi,  "%d")
+  addStat("mc", s.mc,  "%.1f")
+  addStat("ra", s.ra,  "%d")
+  addStat("rh", s.rh,  "%d")
+  addStat("rc", s.rc,  "%.1f")
+  addStat("ms", s.ms,  "%d")
+  addStat("rs", s.rs,  "%d")
+  addStat("sp", s.sp,  "%d")
+  addStat("sh", s.sh,  "%d")
+  addStat("sc", s.sc,  "%.1f")
+  addStat("ss", s.ss,  "%d")
+  addStat("he", s.he,  "%d")
+  addStat("m5", s.m5,  "%d")
+  addStat("mr", s.mr,  "%.0f")
+  addStat("st", s.st,  "%d")
+  addStat("ag", s.ag,  "%d")
+  addStat("sa", s.sa,  "%d")
+  addStat("in", s["in"], "%d")
+  addStat("si", s.si,  "%d")
+  addStat("ar", s.ar,  "%d")
+  addStat("de", s.de,  "%d")
+  addStat("dg", s.dg,  "%.1f")
+  addStat("pa", s.pa,  "%.1f")
+  addStat("bl", s.bl,  "%.1f")
+
+  local payload = "STATS:" .. me .. ":" .. tostring(now) .. ":" .. table.concat(parts, ",")
+  SendAddonMessage("LeafVE", payload, "GUILD")
+end
 local function VersionLessThan(a, b)
   local amaj, amin = string.match(a or "0.0", "(%d+)%.(%d+)")
   local bmaj, bmin = string.match(b or "0.0", "(%d+)%.(%d+)")
@@ -2711,6 +2836,56 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         if LeafVE.UI.panels.leaderWeek and LeafVE.UI.panels.leaderWeek:IsVisible() then
           LeafVE.UI:RefreshLeaderboard("leaderWeek")
         end
+      end
+    end
+    return
+
+  -- Handle BCS stats broadcast from a guild member
+  elseif string.sub(message, 1, 6) == "STATS:" then
+    local rest = string.sub(message, 7)
+    -- Format: STATS:<playerName>:<updatedAt>:<key>=<val>,...
+    local firstColon = string.find(rest, ":")
+    if not firstColon then return end
+    local declaredName = string.sub(rest, 1, firstColon - 1)
+    if Lower(sender) ~= Lower(ShortName(declaredName) or declaredName) then return end
+    rest = string.sub(rest, firstColon + 1)
+    local secondColon = string.find(rest, ":")
+    if not secondColon then return end
+    local updatedAt = tonumber(string.sub(rest, 1, secondColon - 1)) or Now()
+    local statData = string.sub(rest, secondColon + 1)
+
+    EnsureDB()
+    local nameLower = Lower(sender)
+    local cached = LeafVE_GlobalDB.gearStatsCache[nameLower]
+    if cached and cached.updatedAt and updatedAt < cached.updatedAt then return end
+
+    local stats = {}
+    local startPos = 1
+    local statDataLen = string.len(statData)
+    while startPos <= statDataLen do
+      local commaPos = string.find(statData, ",", startPos)
+      local entry
+      if commaPos then
+        entry = string.sub(statData, startPos, commaPos - 1)
+        startPos = commaPos + 1
+      else
+        entry = string.sub(statData, startPos)
+        startPos = statDataLen + 1
+      end
+      local eqPos = string.find(entry, "=")
+      if eqPos then
+        local k = string.sub(entry, 1, eqPos - 1)
+        local v = tonumber(string.sub(entry, eqPos + 1))
+        if k ~= "" and v then stats[k] = v end
+      end
+    end
+
+    LeafVE_GlobalDB.gearStatsCache[nameLower] = { stats = stats, updatedAt = updatedAt }
+
+    -- Refresh gear popup if currently viewing this sender
+    if LeafVE.UI and LeafVE.UI.gearPopup and LeafVE.UI.gearPopup:IsVisible() then
+      if LeafVE.UI.cardCurrentPlayer and Lower(LeafVE.UI.cardCurrentPlayer) == nameLower then
+        LeafVE.UI:RefreshGearPopup(LeafVE.UI.cardCurrentPlayer)
       end
     end
     return
@@ -4330,6 +4505,44 @@ local function FormatGearStats(stats, class)
   return table.concat(lines, "\n")
 end
 
+-- Format a cached BCS stats table (short-key format from BroadcastMyStats) into
+-- the same multi-line display used for live BCS stats in RefreshGearPopup.
+local function FormatBCSStats(s)
+  if not s then return "|cFF888888No stats available|r" end
+  local C = "|cFF2DD35C"
+  local G = "|cFFFFD700"
+  local E = "|r"
+  local lines = {}
+  local ap   = s.ap  or 0;  local hi  = s.hi  or 0;  local mc  = s.mc  or 0
+  local ra   = s.ra  or 0;  local rh  = s.rh  or 0;  local rc  = s.rc  or 0
+  local ms   = s.ms  or 0;  local rs  = s.rs  or 0
+  local sp   = s.sp  or 0;  local sh  = s.sh  or 0;  local sc  = s.sc  or 0;  local ss = s.ss or 0
+  local he   = s.he  or 0;  local m5  = s.m5  or 0;  local mr  = s.mr  or 0
+  local str  = s.st  or 0;  local agi = s.ag  or 0;  local sta = s.sa  or 0
+  local int_ = s["in"] or 0; local spi = s.si or 0
+  local ar   = s.ar  or 0;  local de  = s.de  or 0
+  local dg   = s.dg  or 0;  local pa  = s.pa  or 0;  local bl  = s.bl  or 0
+  table.insert(lines, string.format(
+    G.."Melee"..E.."  "..C.."AP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
+    ap, hi, mc, ms))
+  table.insert(lines, string.format(
+    G.."Ranged"..E.."  "..C.."RAP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Skill:"..E.." %d",
+    ra, rh, rc, rs))
+  table.insert(lines, string.format(
+    G.."Spell"..E.."  "..C.."SP:"..E.." %d  "..C.."Hit:"..E.." %d%%  "..C.."Crit:"..E.." %.1f%%  "..C.."Haste:"..E.." %d%%",
+    sp, sh, sc, ss))
+  table.insert(lines, string.format(
+    G.."Healing"..E.."  "..C.."Heal:"..E.." %d  "..C.."MP5:"..E.." %d  "..C.."MRegen:"..E.." %.0f/5s",
+    he, m5, mr * 2.5))  -- mr is per-2s tick; *2.5 converts to per-5s display
+  table.insert(lines, string.format(
+    G.."Base"..E.."  "..C.."Str:"..E.." %d  "..C.."Agi:"..E.." %d  "..C.."Sta:"..E.." %d  "..C.."Int:"..E.." %d  "..C.."Spi:"..E.." %d",
+    str, agi, sta, int_, spi))
+  table.insert(lines, string.format(
+    G.."Defense"..E.."  "..C.."Arm:"..E.." %d  "..C.."Def:"..E.." %d  "..C.."Dodge:"..E.." %.1f%%  "..C.."Parry:"..E.." %.1f%%  "..C.."Block:"..E.." %.1f%%",
+    ar, de, dg, pa, bl))
+  return table.concat(lines, "\n")
+end
+
 function LeafVE.UI:CreateGearPopup()
   if self.gearPopup then return end
 
@@ -4638,10 +4851,18 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       armor, defense, dodge, parry, block))
     statsText = table.concat(lines, "\n")
   elseif snapshot and snapshot.slots then
-    local guildInfo = LeafVE:GetGuildInfo(playerName)
-    local class     = guildInfo and guildInfo.class or "Unknown"
-    local stats     = ComputeGearStats(snapshot.slots)
-    statsText       = FormatGearStats(stats, class)
+    -- Check for cached BCS stats from broadcast first
+    EnsureDB()
+    local cachedBCS = LeafVE_GlobalDB.gearStatsCache and LeafVE_GlobalDB.gearStatsCache[nameLower]
+    if cachedBCS and cachedBCS.stats then
+      statsText = FormatBCSStats(cachedBCS.stats)
+    else
+      -- Fall back to tooltip-parsed gear stats
+      local guildInfo = LeafVE:GetGuildInfo(playerName)
+      local class     = guildInfo and guildInfo.class or "Unknown"
+      local stats     = ComputeGearStats(snapshot.slots)
+      statsText       = FormatGearStats(stats, class)
+    end
   end
   self.gearPopup.statsText:SetText(statsText)
 end
@@ -9312,6 +9533,9 @@ ef:SetScript("OnEvent", function()
           -- Broadcast gear so guildmates can cache it
           LeafVE.lastGearBroadcast = 0  -- bypass throttle for login broadcast
           LeafVE:BroadcastMyGear()
+          -- Broadcast BCS stats so guildmates can display them
+          LeafVE.lastStatsBroadcast = 0  -- bypass throttle for login broadcast
+          LeafVE:BroadcastMyStats()
         end
         broadcastFrame:SetScript("OnUpdate", nil)
       end
@@ -9390,6 +9614,7 @@ ef:SetScript("OnEvent", function()
       if BCS then
         LeafVE.bcsInventoryDebounceTimer   = 0.2
         LeafVE.bcsInventoryDebouncePending = true
+        LeafVE.statsBroadcastPending       = true
       end
     end
     return
@@ -9426,6 +9651,11 @@ updateFrame:SetScript("OnUpdate", function()
       LeafVE.bcsInventoryDebouncePending = false
       BCS.needScanGear   = true
       BCS.needScanSkills = true
+      -- Broadcast updated BCS stats after gear debounce settles
+      if LeafVE.statsBroadcastPending then
+        LeafVE.statsBroadcastPending = false
+        LeafVE:BroadcastMyStats()
+      end
     end
   end
 
