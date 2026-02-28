@@ -1625,7 +1625,12 @@ function LeafVE:OnBossKillChat(msg)
     end
     if table.getn(alsoAwarded) > 0 then
       Print(string.format("Boss slain: %s! +%d G (also awarded to: %s)", bossName, awarded, table.concat(alsoAwarded, ", ")))
-      SendAddonMessage("LeafVE", "BOSSKILL:"..bossName..":"..awarded..":"..table.concat(alsoAwarded, ","), "GUILD")
+      local bossMsg = "BOSSKILL:"..bossName..":"..bossPts..":"..table.concat(alsoAwarded, ",")
+      if IsInRaid() then
+        SendAddonMessage("LeafVE", bossMsg, "RAID")
+      elseif IsInGroup() then
+        SendAddonMessage("LeafVE", bossMsg, "PARTY")
+      end
     else
       Print(string.format("Boss slain: %s! +%d G", bossName, awarded))
     end
@@ -2113,7 +2118,7 @@ end
 
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   if prefix ~= "LeafVE" then return end
-  if channel ~= "GUILD" then return end
+  if channel ~= "GUILD" and channel ~= "PARTY" and channel ~= "RAID" then return end
   
   sender = ShortName(sender)
   if not sender then return end
@@ -2251,12 +2256,13 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
             startPos = string.len(awardedList) + 1
           end
           if Lower(name) == Lower(me) then
-            -- Actually award the points on the receiving guildie's client
-            EnsureDB()
-            local awarded = self:AddPoints(me, "G", pts)
-            if awarded and awarded > 0 then
-              self:AddToHistory(me, "G", awarded, bossName.." slain by "..sender.." (party)")
+            -- Award LP locally on this client (the killer's client already awarded it server-side,
+            -- but we need to update our own saved variables)
+            local localAwarded = self:AddPoints(me, "G", pts)
+            if localAwarded and localAwarded > 0 then
+              self:AddToHistory(me, "G", localAwarded, bossName.." slain (party)")
             end
+            -- Show toast notification
             if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
               self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, pts), LEAF_EMBLEM, THEME.gold)
             end
