@@ -92,6 +92,16 @@ local ACCESS_RANKS = {
   ["academy student"] = true,
 }
 
+local VALID_GUILD_RANKS = {
+  ["Academy Student"] = true,
+  ["Genin"] = true,
+  ["Chunin"] = true,
+  ["Jonin"] = true,
+  ["Anbu"] = true,
+  ["Sannin"] = true,
+  ["Hokage"] = true,
+}
+
 local LEAF_EMBLEM = "Interface\\Icons\\Spell_Nature_ResistNature"
 local LEAF_FALLBACK = "Interface\\Icons\\Spell_Nature_ResistNature"
 local QUEST_ICON = "Interface\\Icons\\INV_Misc_Book_09"
@@ -1435,6 +1445,12 @@ function LeafVE:IsKnownGuildie(name)
     or (LeafVE_DB and LeafVE_DB.persistentRoster and LeafVE_DB.persistentRoster[lname] ~= nil)
 end
 
+function LeafVE:GetMemberGuildRank(name)
+  if not name then return nil end
+  local data = self.guildRosterCache[Lower(name)]
+  return data and data.rank or nil
+end
+
 function LeafVE:GetGroupGuildies()
   local myGuild = GetGuildInfo("player")  -- may be nil early in the session
   self:UpdateGuildRosterCache()
@@ -1448,7 +1464,12 @@ function LeafVE:GetGroupGuildies()
       local unitGuild = GetGuildInfo(unit)
       local isGuildie = (myGuild and unitGuild and unitGuild == myGuild)
         or self:IsKnownGuildie(name)
-      if name and isGuildie then table.insert(guildies, name) end
+      if name and isGuildie then
+        local rank = self:GetMemberGuildRank(name)
+        if rank and VALID_GUILD_RANKS[rank] then
+          table.insert(guildies, name)
+        end
+      end
     end
   end
   return guildies
