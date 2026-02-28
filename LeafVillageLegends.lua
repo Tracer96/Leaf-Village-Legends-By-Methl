@@ -1608,8 +1608,8 @@ function LeafVE:OnInstanceExit()
 end
 
 function LeafVE:OnBossKillChat(msg)
-  -- Match "BossName is slain by PlayerName." (primary Classic WoW combat log format)
-  local bossName = string.match(msg, "^(.+) is slain by .+%.$")
+  -- Match "BossName is slain by PlayerName." or "BossName is slain by PlayerName!"
+  local bossName = string.match(msg, "^(.+) is slain by .+[%.!]$")
   -- Fallback: match "BossName dies." (environmental or alternate death messages)
   if not bossName then bossName = string.match(msg, "^(.+) dies%.$") end
   if not bossName then return end
