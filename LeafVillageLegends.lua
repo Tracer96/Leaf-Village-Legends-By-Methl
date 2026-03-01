@@ -86,6 +86,12 @@ local SEASON_REWARD_3 = 3
 local SEASON_REWARD_4 = 2
 local SEASON_REWARD_5 = 1
 
+-- Shoutout V2 constants
+local SHOUTOUT_V2_POINTS = 10
+local SHOUTOUT_GIVER_COOLDOWN = 3600   -- 1 hour between shoutouts from same giver
+local SHOUTOUT_TARGET_COOLDOWN = 3600  -- 1 hour between receiving from same source
+local SHOUTOUT_V2_MAX_PER_DAY = 3      -- max shoutouts a giver can give per day
+
 -- Guild ranks that can access the Admin tab
 local ADMIN_RANKS = { anbu = true, sannin = true, hokage = true }
 local ACCESS_RANKS = {
@@ -708,9 +714,56 @@ local function EnsureDB()
   if not LeafVE_GlobalDB.gearStatsCache then LeafVE_GlobalDB.gearStatsCache = {} end
   if LeafVE_DB.options.groupPoints == nil then LeafVE_DB.options.groupPoints = GROUP_POINTS end
   if LeafVE_DB.options.loginPoints == nil then LeafVE_DB.options.loginPoints = 20 end
+  -- Alt linking tables
+  if not LeafVE_DB.links then LeafVE_DB.links = {} end
+  if not LeafVE_DB.pendingMerge then LeafVE_DB.pendingMerge = {} end
+  if not LeafVE_DB.lastDeposit then LeafVE_DB.lastDeposit = {} end
+  if not LeafVE_DB.lastLinkChange then LeafVE_DB.lastLinkChange = {} end
+  -- Shoutout V2 table
+  if not LeafVE_DB.shoutouts_v2 then
+    LeafVE_DB.shoutouts_v2 = { given = {}, received = {}, daily = { dateKey = "", awards = {} } }
+  end
+  if not LeafVE_DB.shoutouts_v2.given then LeafVE_DB.shoutouts_v2.given = {} end
+  if not LeafVE_DB.shoutouts_v2.received then LeafVE_DB.shoutouts_v2.received = {} end
+  if not LeafVE_DB.shoutouts_v2.daily then LeafVE_DB.shoutouts_v2.daily = { dateKey = "", awards = {} } end
+  -- Meta table for guild-wide wipe tracking
+  if not LeafVE_DB.meta then LeafVE_DB.meta = {} end
+  if LeafVE_DB.meta.lastWipeId == nil then LeafVE_DB.meta.lastWipeId = "" end
 end
 
-function LeafVE:AddToHistory(playerName, pointType, amount, reason)
+-------------------------------------------------
+-- ALT LINKING HELPER FUNCTIONS
+-------------------------------------------------
+
+function LVL_GetCharKey()
+  return ShortName(UnitName("player")) or ""
+end
+
+function LVL_IsAltLinked(key)
+  return LeafVE_DB.links and LeafVE_DB.links[key] ~= nil
+end
+
+function LVL_GetMainKey(key)
+  return (LeafVE_DB.links and LeafVE_DB.links[key]) or key
+end
+
+function LVL_FormatTime(secs)
+  local h = math.floor(secs / 3600)
+  local m = math.floor((secs % 3600) / 60)
+  return h .. "h " .. m .. "m"
+end
+
+function LVL_Remain(last, window)
+  return math.max(0, window - (Now() - (last or 0)))
+end
+
+-- Check if a short player name is a linked alt (uses current player's realm)
+function LVL_IsAltByName(shortName)
+  if not shortName or not LeafVE_DB.links then return false end
+  return LeafVE_DB.links[shortName] ~= nil
+end
+
+
   EnsureDB() playerName = ShortName(playerName) if not playerName then return end
   if not LeafVE_DB.pointHistory[playerName] then LeafVE_DB.pointHistory[playerName] = {} end
   table.insert(LeafVE_DB.pointHistory[playerName], {timestamp = Now(), type = pointType, amount = amount, reason = reason or "Unknown"})
@@ -921,6 +974,107 @@ function LeafVE:HardResetLeafPoints_Local()
   end
   Print("|cFFFF4444All Leaf Points have been wiped (daily/weekly/season/all-time).|r")
 end
+
+-------------------------------------------------
+-- GUILD-WIDE FULL WIPE (FEATURE E)
+-------------------------------------------------
+
+-- Full local DB wipe preserving the wipeId so we don't reapply the same wipe twice.
+function LVL_FullWipeLocal()
+  EnsureDB()
+  local lastId = (LeafVE_DB.meta and LeafVE_DB.meta.lastWipeId) or ""
+  LeafVE_DB = {}
+  LeafVE_DB.meta = { lastWipeId = lastId }
+  -- Re-init all required tables
+  LeafVE_DB.options = {}
+  LeafVE_DB.ui = {}
+  LeafVE_DB.global = {}
+  LeafVE_DB.alltime = {}
+  LeafVE_DB.season = {}
+  LeafVE_DB.loginTracking = {}
+  LeafVE_DB.groupCooldowns = {}
+  LeafVE_DB.shoutouts = {}
+  LeafVE_DB.pointHistory = {}
+  LeafVE_DB.badges = {}
+  LeafVE_DB.attendance = {}
+  LeafVE_DB.weeklyRecap = {}
+  LeafVE_DB.loginStreaks = {}
+  LeafVE_DB.persistentRoster = {}
+  LeafVE_DB.instanceTracking = {}
+  LeafVE_DB.questTracking = {}
+  LeafVE_DB.questCompletions = {}
+  LeafVE_DB.groupSessions = {}
+  LeafVE_DB.groupPointsToday = {}
+  LeafVE_DB.peerProgress = {}
+  LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+  LeafVE_DB.links = {}
+  LeafVE_DB.pendingMerge = {}
+  LeafVE_DB.lastDeposit = {}
+  LeafVE_DB.lastLinkChange = {}
+  LeafVE_DB.shoutouts_v2 = { given = {}, received = {}, daily = { dateKey = "", awards = {} } }
+  EnsureDB()
+  if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
+  end
+end
+
+-- Returns true only if sender's guild rank is Hokage, Sannin, or Anbu.
+function LVL_IsAuthorizedSender(sender)
+  if not sender then return false end
+  local info = LeafVE.guildRosterCache and LeafVE.guildRosterCache[Lower(sender)]
+  if not info then
+    info = LeafVE_DB and LeafVE_DB.persistentRoster and LeafVE_DB.persistentRoster[Lower(sender)]
+  end
+  if info and info.rank then
+    return ADMIN_RANKS[Lower(Trim(info.rank))] == true
+  end
+  return false
+end
+
+-- Officer initiates a guild-wide wipe; broadcasts via LVL prefix and writes bulletin token.
+function LVL_AdminResetAll()
+  if not LeafVE:IsAdminRank() then
+    Print("|cFFFF4444You do not have permission to perform a guild-wide reset.|r")
+    return
+  end
+  EnsureDB()
+  local me = ShortName(UnitName("player")) or "unknown"
+  local wipeId = tostring(time()) .. "-" .. me
+  LeafVE_DB.meta.lastWipeId = wipeId
+  LVL_FullWipeLocal()
+  if InGuild() then
+    SendAddonMessage("LVL", "WIPE_ALL|" .. wipeId, "GUILD")
+  end
+  -- Attempt to embed a wipe token in guild info text so offline members catch it on login
+  if SetGuildInfoText then
+    local current = GetGuildInfoText and GetGuildInfoText() or ""
+    -- Remove any previous token
+    current = string.gsub(current, "%s*LVL_WIPE:[^%s]+", "")
+    local token = " LVL_WIPE:" .. wipeId
+    if string.len(current) + string.len(token) <= 500 then
+      SetGuildInfoText(current .. token)
+    end
+  end
+  Print("|cFFFF4444Guild-wide point reset initiated. All online members will be wiped.|r")
+end
+
+-- Called on PLAYER_LOGIN and GUILD_ROSTER_UPDATE: check guild info for a wipe bulletin.
+function LVL_CheckGuildWipeBulletin()
+  EnsureDB()
+  local info = GetGuildInfoText and GetGuildInfoText() or ""
+  local wipeId = info and string.match(info, "LVL_WIPE:([^%s]+)")
+  if wipeId and wipeId ~= "" then
+    local stored = (LeafVE_DB.meta and LeafVE_DB.meta.lastWipeId) or ""
+    if wipeId ~= stored then
+      LeafVE_DB.meta = LeafVE_DB.meta or {}
+      LeafVE_DB.meta.lastWipeId = wipeId
+      LVL_FullWipeLocal()
+      DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[LVL]|r Guild-wide point reset detected from guild info. All data cleared.")
+    end
+  end
+end
+
+
 
 -- Hard-wipes the achievement leaderboard cache locally.
 -- Called by the admin UI button and by the guild broadcast handler.
@@ -1843,7 +1997,89 @@ function LeafVE:GiveShoutout(targetName, reason)
   return true
 end
 
-function LeafVE:BroadcastMyAchievements()
+-------------------------------------------------
+-- SHOUTOUT V2 (FEATURE D)
+-------------------------------------------------
+
+-- Check if a giver can award a shoutout to a target.
+-- Returns: canAward (bool), reason (string or nil).
+function LVL_CanShoutout(giverKey, targetKey)
+  EnsureDB()
+  if not giverKey or not targetKey then return false, "Invalid names" end
+  if Lower(giverKey) == Lower(targetKey) then return false, "Cannot shoutout yourself" end
+  local sv2 = LeafVE_DB.shoutouts_v2
+  local today = DayKey()
+  -- Reset daily table if the date has changed
+  if sv2.daily.dateKey ~= today then
+    sv2.daily.dateKey = today
+    sv2.daily.awards = {}
+  end
+  -- Daily limit per giver
+  local awardsToday = sv2.daily.awards[giverKey] or 0
+  if awardsToday >= SHOUTOUT_V2_MAX_PER_DAY then
+    return false, string.format("Daily limit reached (%d/%d)", awardsToday, SHOUTOUT_V2_MAX_PER_DAY)
+  end
+  -- Giver cooldown: check last time this giver gave to this specific target today
+  local givenToTarget = sv2.given[giverKey] and sv2.given[giverKey][targetKey]
+  if givenToTarget then
+    local elapsed = Now() - givenToTarget
+    if elapsed < SHOUTOUT_GIVER_COOLDOWN then
+      local rem = SHOUTOUT_GIVER_COOLDOWN - elapsed
+      return false, string.format("Giver cooldown: %s remaining", LVL_FormatTime(rem))
+    end
+  end
+  -- Target cooldown: check last time this target received from this giver
+  local rcvFromGiver = sv2.received[targetKey] and sv2.received[targetKey][giverKey]
+  if rcvFromGiver then
+    local elapsed = Now() - rcvFromGiver
+    if elapsed < SHOUTOUT_TARGET_COOLDOWN then
+      local rem = SHOUTOUT_TARGET_COOLDOWN - elapsed
+      return false, string.format("Target cooldown: %s remaining", LVL_FormatTime(rem))
+    end
+  end
+  return true, nil
+end
+
+-- Award a shoutout from giverKey to targetKey using the V2 system.
+function LVL_AwardShoutout(giverKey, targetKey)
+  EnsureDB()
+  local canAward, reason = LVL_CanShoutout(giverKey, targetKey)
+  if not canAward then
+    Print("|cff00ff00[LVL]|r Cannot give shoutout: " .. (reason or "unknown"))
+    return false
+  end
+  local sv2 = LeafVE_DB.shoutouts_v2
+  local now = Now()
+  local today = DayKey()
+  -- Reset daily table if the date has changed
+  if sv2.daily.dateKey ~= today then
+    sv2.daily.dateKey = today
+    sv2.daily.awards = {}
+  end
+  -- Record in given table
+  if not sv2.given[giverKey] then sv2.given[giverKey] = {} end
+  sv2.given[giverKey][targetKey] = now
+  -- Record in received table
+  if not sv2.received[targetKey] then sv2.received[targetKey] = {} end
+  sv2.received[targetKey][giverKey] = now
+  -- Increment daily count
+  sv2.daily.awards[giverKey] = (sv2.daily.awards[giverKey] or 0) + 1
+  -- Award points to target
+  local awarded = LeafVE:AddPoints(targetKey, "S", SHOUTOUT_V2_POINTS)
+  if awarded and awarded > 0 then
+    LeafVE:AddToHistory(targetKey, "S", awarded, "Shoutout V2 from " .. giverKey)
+  end
+  LeafVE:CheckAndAwardBadge(giverKey, "first_shoutout_given")
+  local remaining = SHOUTOUT_V2_MAX_PER_DAY - sv2.daily.awards[giverKey]
+  Print(string.format("|cff00ff00[LVL]|r Shoutout sent to %s! +%d LP (%d remaining today)", targetKey, SHOUTOUT_V2_POINTS, remaining))
+  -- Broadcast via guild channel
+  if InGuild() then
+    SendAddonMessage("LeafVE", "SHOUTOUT:" .. giverKey .. ":" .. targetKey, "GUILD")
+  end
+  return true
+end
+
+
   EnsureDB()
 
   if not LeafVE_AchTest_DB or not LeafVE_AchTest_DB.achievements then return end
@@ -2386,6 +2622,75 @@ local function IsSenderCompatible(sender)
 end
 
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
+  -- Handle LVL prefix messages (alt linking and guild-wide wipes)
+  if prefix == "LVL" then
+    if channel ~= "GUILD" and channel ~= "PARTY" and channel ~= "RAID" then return end
+    sender = ShortName(sender)
+    if not sender then return end
+    local me = ShortName(UnitName("player"))
+
+    -- MERGE_REQ|altKey|mainKey|altPoints
+    if string.sub(message, 1, 10) == "MERGE_REQ|" then
+      local rest = string.sub(message, 11)
+      local p1 = string.find(rest, "|")
+      if not p1 then return end
+      local altKey = string.sub(rest, 1, p1 - 1)
+      rest = string.sub(rest, p1 + 1)
+      local p2 = string.find(rest, "|")
+      local mainKey, altPtsStr
+      if p2 then
+        mainKey = string.sub(rest, 1, p2 - 1)
+        altPtsStr = string.sub(rest, p2 + 1)
+      else
+        mainKey = rest
+        altPtsStr = "0"
+      end
+      -- Officers see the merge request
+      if LeafVE:IsAdminRank() then
+        EnsureDB()
+        if not LeafVE_DB.pendingMerge then LeafVE_DB.pendingMerge = {} end
+        LeafVE_DB.pendingMerge[altKey] = { main = mainKey, t = Now() }
+        Print(string.format("|cff00ff00[LVL]|r Merge request: %s wants to link to %s (%s pts). Use /lve altapprove %s %s", altKey, mainKey, altPtsStr, altKey, mainKey))
+      end
+      return
+    end
+
+    -- MERGE_APPROVE|altKey|mainKey
+    if string.sub(message, 1, 14) == "MERGE_APPROVE|" then
+      if not LVL_IsAuthorizedSender(sender) then return end
+      local rest = string.sub(message, 15)
+      local p1 = string.find(rest, "|")
+      if not p1 then return end
+      local altKey = string.sub(rest, 1, p1 - 1)
+      local mainKey = string.sub(rest, p1 + 1)
+      EnsureDB()
+      LeafVE_DB.links[altKey] = mainKey
+      LeafVE_DB.lastLinkChange[altKey] = Now()
+      if LeafVE_DB.pendingMerge then LeafVE_DB.pendingMerge[altKey] = nil end
+      if me and Lower(me) == Lower(altKey) then
+        Print(string.format("|cff00ff00[LVL]|r Your alt has been linked to %s by %s!", mainKey, sender))
+        if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.alt and LeafVE.UI.panels.alt:IsVisible() then
+          LeafVE.UI:RefreshAltPanel()
+        end
+      end
+      return
+    end
+
+    -- WIPE_ALL|wipeId
+    if string.sub(message, 1, 9) == "WIPE_ALL|" then
+      if not LVL_IsAuthorizedSender(sender) then return end
+      local wipeId = string.sub(message, 10)
+      EnsureDB()
+      local stored = (LeafVE_DB.meta and LeafVE_DB.meta.lastWipeId) or ""
+      if wipeId == stored then return end  -- already processed
+      if LeafVE_DB.meta then LeafVE_DB.meta.lastWipeId = wipeId end
+      LVL_FullWipeLocal()
+      DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[LVL]|r Guild-wide point reset received from " .. sender .. ". All data cleared.")
+      return
+    end
+    return
+  end
+
   if prefix ~= "LeafVE" then return end
   if channel ~= "GUILD" and channel ~= "PARTY" and channel ~= "RAID" then return end
   
@@ -5762,7 +6067,191 @@ local function CreateScrollablePanel(panel, title, desc)
   panel.scrollBar = scrollBar
 end
 
-local function BuildLeaderboardPanel(panel, isWeekly)
+-------------------------------------------------
+-- ALT LINKING PANEL (FEATURE A)
+-------------------------------------------------
+
+local function BuildAltPanel(panel)
+  -- Header background
+  local headerBG = panel:CreateTexture(nil, "BACKGROUND")
+  headerBG:SetPoint("TOP", panel, "TOP", -15, -10)
+  headerBG:SetWidth(420)
+  headerBG:SetHeight(50)
+  headerBG:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  headerBG:SetVertexColor(0.15, 0.15, 0.18, 0.9)
+
+  local accentTop = panel:CreateTexture(nil, "BORDER")
+  accentTop:SetPoint("TOPLEFT", headerBG, "TOPLEFT", 0, 0)
+  accentTop:SetPoint("TOPRIGHT", headerBG, "TOPRIGHT", 0, 0)
+  accentTop:SetHeight(3)
+  accentTop:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  accentTop:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
+
+  local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  h:SetPoint("TOP", headerBG, "TOP", 0, -10)
+  h:SetText("|cFFFFD700Alt Linking|r")
+
+  local subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  subtitle:SetPoint("TOP", h, "BOTTOM", 0, -3)
+  subtitle:SetText("|cFF888888Link an alt to deposit points to your main character.|r")
+
+  -- Status text
+  local statusText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  statusText:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -80)
+  statusText:SetWidth(380)
+  statusText:SetJustifyH("LEFT")
+  statusText:SetText("|cFFAAAAAA Not linked|r")
+  panel.altStatusText = statusText
+
+  -- Main name input (visible when not linked)
+  local inputLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  inputLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -110)
+  inputLabel:SetText("Main character name:")
+  panel.altInputLabel = inputLabel
+
+  local mainInput = CreateFrame("EditBox", nil, panel)
+  mainInput:SetPoint("TOPLEFT", inputLabel, "BOTTOMLEFT", 0, -4)
+  mainInput:SetWidth(200)
+  mainInput:SetHeight(20)
+  mainInput:SetAutoFocus(false)
+  mainInput:SetFontObject(GameFontHighlight)
+  mainInput:SetMaxLetters(50)
+  local inputBG = CreateFrame("Frame", nil, panel)
+  inputBG:SetPoint("TOPLEFT", mainInput, "TOPLEFT", -4, 4)
+  inputBG:SetPoint("BOTTOMRIGHT", mainInput, "BOTTOMRIGHT", 4, -4)
+  inputBG:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 12,
+    insets = {left = 3, right = 3, top = 3, bottom = 3}
+  })
+  inputBG:SetBackdropColor(0, 0, 0, 0.5)
+  inputBG:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+  inputBG:SetFrameLevel(mainInput:GetFrameLevel() - 1)
+  panel.altMainInput = mainInput
+
+  -- Link/Unlink button
+  local linkBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  linkBtn:SetWidth(130)
+  linkBtn:SetHeight(22)
+  linkBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -150)
+  linkBtn:SetText("Link Points")
+  SkinButtonAccent(linkBtn)
+  linkBtn:SetScript("OnClick", function()
+    EnsureDB()
+    local myKey = LVL_GetCharKey()
+    if LVL_IsAltLinked(myKey) then
+      -- Unlink
+      local remain = LVL_Remain(LeafVE_DB.lastLinkChange[myKey], SECONDS_PER_DAY)
+      if remain > 0 then
+        Print("|cff00ff00[LVL]|r Cannot unlink yet. " .. LVL_FormatTime(remain) .. " remaining.")
+        return
+      end
+      LeafVE_DB.links[myKey] = nil
+      LeafVE_DB.lastLinkChange[myKey] = Now()
+      Print("|cff00ff00[LVL]|r Unlinked successfully.")
+      if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.alt then
+        LeafVE.UI:RefreshAltPanel()
+      end
+    else
+      -- Link: check cooldown
+      local remain = LVL_Remain(LeafVE_DB.lastLinkChange[myKey], SECONDS_PER_DAY)
+      if remain > 0 then
+        Print("|cff00ff00[LVL]|r Cannot link yet. " .. LVL_FormatTime(remain) .. " remaining.")
+        return
+      end
+      local mainName = Trim(panel.altMainInput:GetText() or "")
+      if not mainName or mainName == "" then
+        Print("|cff00ff00[LVL]|r Please enter a main character name.")
+        return
+      end
+      -- Send merge request to guild
+      local myPts = 0
+      local allT = LeafVE_DB.alltime and LeafVE_DB.alltime[myKey] or {L=0,G=0,S=0}
+      myPts = (allT.G or 0) + (allT.S or 0)
+      EnsureDB()
+      if not LeafVE_DB.pendingMerge then LeafVE_DB.pendingMerge = {} end
+      LeafVE_DB.pendingMerge[myKey] = { main = mainName, t = Now() }
+      if InGuild() then
+        SendAddonMessage("LVL", "MERGE_REQ|" .. myKey .. "|" .. mainName .. "|" .. myPts, "GUILD")
+      end
+      Print("|cff00ff00[LVL]|r Link request sent for " .. myKey .. " → " .. mainName .. ". Awaiting officer approval.")
+    end
+  end)
+  panel.altLinkBtn = linkBtn
+
+  -- Deposit Now button (visible only when linked)
+  local depositBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  depositBtn:SetWidth(130)
+  depositBtn:SetHeight(22)
+  depositBtn:SetPoint("LEFT", linkBtn, "RIGHT", 8, 0)
+  depositBtn:SetText("Deposit Now")
+  SkinButtonAccent(depositBtn)
+  depositBtn:SetScript("OnClick", function()
+    EnsureDB()
+    local myKey = LVL_GetCharKey()
+    if not LVL_IsAltLinked(myKey) then
+      Print("|cff00ff00[LVL]|r Not linked to a main character.")
+      return
+    end
+    local remain = LVL_Remain(LeafVE_DB.lastDeposit[myKey], SECONDS_PER_DAY)
+    if remain > 0 then
+      Print("|cff00ff00[LVL]|r Deposit on cooldown. " .. LVL_FormatTime(remain) .. " remaining.")
+      return
+    end
+    local mainKey = LVL_GetMainKey(myKey)
+    local altAlltime = LeafVE_DB.alltime and LeafVE_DB.alltime[myKey] or {L=0, G=0, S=0}
+    local amtG = altAlltime.G or 0
+    local amtS = altAlltime.S or 0
+    local amt = amtG + amtS
+    if amt > 0 then
+      altAlltime.G = 0
+      altAlltime.S = 0
+      LeafVE_DB.alltime[myKey] = altAlltime
+      local mainAlltime = LeafVE_DB.alltime[mainKey] or {L=0, G=0, S=0}
+      mainAlltime.G = (mainAlltime.G or 0) + amtG
+      mainAlltime.S = (mainAlltime.S or 0) + amtS
+      LeafVE_DB.alltime[mainKey] = mainAlltime
+    end
+    LeafVE_DB.lastDeposit[myKey] = Now()
+    Print(string.format("|cff00ff00[LVL]|r Deposited %d points to %s. (24h cooldown started)", amt, mainKey))
+    if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.alt then
+      LeafVE.UI:RefreshAltPanel()
+    end
+  end)
+  panel.altDepositBtn = depositBtn
+
+  -- Cooldown display text
+  local cdText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  cdText:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -185)
+  cdText:SetWidth(420)
+  cdText:SetJustifyH("LEFT")
+  cdText:SetText("")
+  panel.altCooldownText = cdText
+
+  -- OnShow / OnHide: drive a per-second timer only while this panel is visible
+  local tickElapsed = 0
+  panel:SetScript("OnShow", function()
+    tickElapsed = 0
+    panel:SetScript("OnUpdate", function()
+      tickElapsed = tickElapsed + arg1
+      if tickElapsed >= 1 then
+        tickElapsed = 0
+        if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.alt then
+          LeafVE.UI:RefreshAltPanel()
+        end
+      end
+    end)
+    if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.alt then
+      LeafVE.UI:RefreshAltPanel()
+    end
+  end)
+  panel:SetScript("OnHide", function()
+    panel:SetScript("OnUpdate", nil)
+  end)
+end
+
+
   -- Block header background
   local headerBG = panel:CreateTexture(nil, "BACKGROUND")
   headerBG:SetPoint("TOP", panel, "TOP", -15, -10)
@@ -5890,6 +6379,10 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
     
     for _, guildInfo in pairs(memberSet) do
       local name = guildInfo.name
+      -- Feature C: linked alts never appear on the leaderboard
+      if LVL_IsAltByName(name) then
+        -- skip
+      else
       local pts
       local localPts = localWeek[name]
       local syncedPts = syncedWeek and syncedWeek[name]
@@ -5911,10 +6404,15 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
         L = totL, G = totG, S = totS,
         class = guildInfo.class or "Unknown"
       })
+      end
     end
   else
     for _, guildInfo in pairs(memberSet) do
       local name = guildInfo.name
+      -- Feature C: linked alts never appear on the leaderboard
+      if LVL_IsAltByName(name) then
+        -- skip
+      else
       local pts
       local localPts = LeafVE_DB.alltime[name]
       local syncedPts = LeafVE_DB.lboard.alltime[name]
@@ -5936,8 +6434,10 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
         L = totL, G = totG, S = totS,
         class = guildInfo.class or "Unknown"
       })
+      end
     end
   end
+
   
   table.sort(leaders, function(a, b)
     if a.total == b.total then
@@ -7137,7 +7637,8 @@ local function BuildAdminPanel(panel)
         local ts = time()
         EnsureDB()
         LeafVE_GlobalDB.lastAdminResetTS = ts
-        LeafVE:HardResetLeafPoints_Local()
+        -- Use LVL_AdminResetAll for the new guild-wide wipe (Feature E)
+        LVL_AdminResetAll()
         if InGuild() then
           SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..ts, "GUILD")
           SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..ts, "GUILD")
@@ -7611,7 +8112,78 @@ function LeafVE.UI:RefreshHistory()
   panel.scrollBar:SetValue(0)
 end
 
-function LeafVE.UI:RefreshShoutoutsPanel()
+-------------------------------------------------
+-- ALT PANEL REFRESH (FEATURE A)
+-------------------------------------------------
+
+function LeafVE.UI:RefreshAltPanel()
+  if not self.panels or not self.panels.alt then return end
+  local p = self.panels.alt
+  EnsureDB()
+  local myKey = LVL_GetCharKey()
+  local isLinked = LVL_IsAltLinked(myKey)
+
+  -- Update status text
+  if p.altStatusText then
+    if isLinked then
+      p.altStatusText:SetText("|cFF00FF00Linked to: " .. LVL_GetMainKey(myKey) .. "|r")
+    else
+      local pending = LeafVE_DB.pendingMerge and LeafVE_DB.pendingMerge[myKey]
+      if pending then
+        p.altStatusText:SetText("|cFFFFAA00Pending approval: " .. (pending.main or "?") .. "|r")
+      else
+        p.altStatusText:SetText("|cFFAAAAAA Not linked|r")
+      end
+    end
+  end
+
+  -- Show/hide input box
+  if p.altMainInput then
+    if isLinked then
+      p.altMainInput:Hide()
+      if p.altInputLabel then p.altInputLabel:Hide() end
+    else
+      p.altMainInput:Show()
+      if p.altInputLabel then p.altInputLabel:Show() end
+    end
+  end
+
+  -- Update link/unlink button text
+  if p.altLinkBtn then
+    p.altLinkBtn:SetText(isLinked and "Unlink" or "Link Points")
+  end
+
+  -- Show/hide deposit button
+  if p.altDepositBtn then
+    if isLinked then
+      p.altDepositBtn:Show()
+    else
+      p.altDepositBtn:Hide()
+    end
+  end
+
+  -- Update cooldown text
+  if p.altCooldownText then
+    local lc = LeafVE_DB.lastLinkChange and LeafVE_DB.lastLinkChange[myKey]
+    local ld = LeafVE_DB.lastDeposit and LeafVE_DB.lastDeposit[myKey]
+    local linkRemain = LVL_Remain(lc, SECONDS_PER_DAY)
+    local depositRemain = LVL_Remain(ld, SECONDS_PER_DAY)
+    local parts = {}
+    if linkRemain > 0 then
+      table.insert(parts, (isLinked and "Unlink: " or "Link: ") .. LVL_FormatTime(linkRemain))
+    end
+    if isLinked and depositRemain > 0 then
+      table.insert(parts, "Deposit: " .. LVL_FormatTime(depositRemain))
+    end
+    if table.getn(parts) > 0 then
+      p.altCooldownText:SetText("|cFFAAAAAA" .. table.concat(parts, " | ") .. "|r")
+    else
+      p.altCooldownText:SetText("")
+    end
+  end
+end
+
+
   if not self.panels or not self.panels.shoutouts then return end
   local panel = self.panels.shoutouts
   if not panel.shoutScrollChild then return end
@@ -8277,6 +8849,10 @@ function LeafVE.UI:Build()
   else
     self.tabAdmin:Hide()
   end
+
+  self.tabAlt = TabButton(f, "Alts", "LeafVE_TabAlt")
+  self.tabAlt:SetPoint("LEFT", self.tabAdmin, "RIGHT", 4, 0)
+  self.tabAlt:SetWidth(45)
   
   self.inset = CreateInset(f)
   self.inset:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -80)
@@ -8332,6 +8908,10 @@ function LeafVE.UI:Build()
   self.panels.admin = CreateFrame("Frame", nil, self.left)
   self.panels.admin:SetAllPoints(self.left)
   BuildAdminPanel(self.panels.admin)
+
+  self.panels.alt = CreateFrame("Frame", nil, self.left)
+  self.panels.alt:SetAllPoints(self.left)
+  BuildAltPanel(self.panels.alt)
 
   self.panels.welcome = CreateFrame("Frame", nil, self.left)
   self.panels.welcome:SetAllPoints(self.left)
@@ -8392,6 +8972,11 @@ function LeafVE.UI:Build()
     self:Refresh()
   end)
 
+  self.tabAlt:SetScript("OnClick", function()
+    self.activeTab = "alt"
+    self:Refresh()
+  end)
+
   self.tabWelcome:SetScript("OnClick", function()
     self.activeTab = "welcome"
     self:Refresh()
@@ -8416,6 +9001,7 @@ function LeafVE.UI:Build()
   self.panels.admin:Hide()
   self.panels.welcome:Hide()
   self.panels.join:Hide()
+  self.panels.alt:Hide()
   
   self.panels.me:Show()
   
@@ -8448,7 +9034,7 @@ function LeafVE.UI:Refresh()
     self.activeTab = "me"
   end
 
-  local accessTabs = {self.tabWelcome, self.tabMe, self.tabShout, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabHistory, self.tabOptions}
+  local accessTabs = {self.tabWelcome, self.tabMe, self.tabShout, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabHistory, self.tabOptions, self.tabAlt}
   if hasAccess then
     for _, tab in ipairs(accessTabs) do
       if tab then tab:Show() end
@@ -8488,7 +9074,7 @@ function LeafVE.UI:Refresh()
   end
   
   -- Hide all panels safely
-  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "welcome", "join"}
+  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "welcome", "join", "alt"}
   for _, name in ipairs(panelNames) do
     if self.panels[name] and self.panels[name].Hide then
       self.panels[name]:Hide()
@@ -8766,6 +9352,10 @@ function LeafVE.UI:Refresh()
   elseif self.activeTab == "welcome" and self.panels.welcome then
     self.panels.welcome:Show()
     self:RefreshWelcome()
+
+  elseif self.activeTab == "alt" and self.panels.alt then
+    self.panels.alt:Show()
+    -- RefreshAltPanel is called by the OnShow script of the alt panel
   end
 end
 
@@ -8873,6 +9463,7 @@ ef:SetScript("OnEvent", function()
     if RegisterAddonMessagePrefix then
       RegisterAddonMessagePrefix("LeafVE")
       RegisterAddonMessagePrefix("LeafVEAch")
+      RegisterAddonMessagePrefix("LVL")
       Print("Registered addon message prefixes")
     else
       Print("Warning: RegisterAddonMessagePrefix not available!")
@@ -8912,6 +9503,13 @@ ef:SetScript("OnEvent", function()
       end
       LeafVE_DB.migratedTriggerHistory = true
     end
+    -- One-time migration: wipe old shoutout data and migrate to V2
+    if not LeafVE_DB.shoutout_v2_migrated then
+      LeafVE_DB.shoutouts = {}
+      LeafVE_DB.shoutout_v2_migrated = true
+    end
+    -- Check guild info bulletin for a pending guild-wide wipe (Feature E: offline catch-up)
+    LVL_CheckGuildWipeBulletin()
     LeafVE:CheckDailyLogin()
     LeafVE:PurgeStaleWeeklyData()
     -- Seed the quest log cache so we can diff on the first QUEST_LOG_UPDATE
@@ -8960,6 +9558,8 @@ ef:SetScript("OnEvent", function()
     -- Invalidate the roster cache so the next GetGroupGuildies() call rebuilds it
     -- from the fresh server data (without triggering another GuildRoster() request).
     LeafVE.guildRosterCacheTime = 0
+    -- Check guild bulletin for pending wipe (Feature E: offline catch-up on roster update)
+    LVL_CheckGuildWipeBulletin()
     return
   end
 
@@ -9224,6 +9824,41 @@ SlashCmdList["LEAFVE"] = function(msg)
     end
     LeafVE.UI = { activeTab = "me" }
     LeafVE:ToggleUI()
+
+  elseif string.sub(trimmedMsg, 1, 6) == "shout " then
+    -- /lve shout <name>  (Shoutout V2 slash command)
+    local targetName = Trim(string.sub(msg, 7))
+    if not targetName or targetName == "" then
+      Print("Usage: /lve shout PlayerName")
+    else
+      EnsureDB()
+      local myKey = LVL_GetCharKey()
+      local targetKey = ShortName(targetName) or targetName
+      LVL_AwardShoutout(myKey, targetKey)
+    end
+
+  elseif string.sub(trimmedMsg, 1, 11) == "altapprove " then
+    -- /lve altapprove altKey mainKey  (officer approves a link request)
+    if not LeafVE:IsAdminRank() then
+      Print("|cFFFF4444You must be an officer to approve alt links.|r")
+    else
+      local rest = Trim(string.sub(msg, 12))
+      local spacePos = string.find(rest, " ")
+      if not spacePos then
+        Print("Usage: /lve altapprove <altName> <mainName>")
+      else
+        local altKey = Trim(string.sub(rest, 1, spacePos - 1))
+        local mainKey = Trim(string.sub(rest, spacePos + 1))
+        EnsureDB()
+        LeafVE_DB.links[altKey] = mainKey
+        LeafVE_DB.lastLinkChange[altKey] = Now()
+        if LeafVE_DB.pendingMerge then LeafVE_DB.pendingMerge[altKey] = nil end
+        if InGuild() then
+          SendAddonMessage("LVL", "MERGE_APPROVE|" .. altKey .. "|" .. mainKey, "GUILD")
+        end
+        Print(string.format("|cff00ff00[LVL]|r Approved: %s linked to %s. Broadcast sent.", altKey, mainKey))
+      end
+    end
 
   else
     LeafVE:ToggleUI()
