@@ -53,6 +53,25 @@ local GEAR_SLOT_LABELS = {
   Trinket0Slot = "Trinket 1", Trinket1Slot = "Trinket 2", MainHandSlot = "Main Hand",
   SecondaryHandSlot = "Off Hand", RangedSlot = "Ranged",
 }
+local EMPTY_SLOT_TEXTURES = {
+  HeadSlot          = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Head",
+  NeckSlot          = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Neck",
+  ShoulderSlot      = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Shoulder",
+  BackSlot          = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Back",
+  ChestSlot         = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Chest",
+  WristSlot         = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Wrist",
+  HandsSlot         = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Hands",
+  WaistSlot         = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Waist",
+  LegsSlot          = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Legs",
+  FeetSlot          = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Feet",
+  Finger0Slot       = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger",
+  Finger1Slot       = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger",
+  Trinket0Slot      = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket",
+  Trinket1Slot      = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket",
+  MainHandSlot      = "Interface\\PaperDoll\\UI-PaperDoll-Slot-MainHand",
+  SecondaryHandSlot = "Interface\\PaperDoll\\UI-PaperDoll-Slot-SecondaryHand",
+  RangedSlot        = "Interface\\PaperDoll\\UI-PaperDoll-Slot-Ranged",
+}
 
 local INSTANCE_BOSS_POINTS = 10       -- dungeon boss
 local RAID_BOSS_POINTS = 25           -- raid boss
@@ -108,6 +127,19 @@ local CLASS_ICONS = {
   MAGE = "Interface\\Icons\\Spell_Frost_IceStorm",
   WARLOCK = "Interface\\Icons\\Spell_Shadow_ShadowBolt",
   DRUID = "Interface\\Icons\\Spell_Nature_Regeneration",
+}
+
+-- TexCoords for Interface\\TargetingFrame\\UI-Classes-Circles (vanilla 1.12 atlas)
+local CLASS_CIRCLE_COORDS = {
+  WARRIOR = {0,    0.25, 0,    0.25},
+  MAGE    = {0.25, 0.5,  0,    0.25},
+  ROGUE   = {0.5,  0.75, 0,    0.25},
+  DRUID   = {0.75, 1.0,  0,    0.25},
+  HUNTER  = {0,    0.25, 0.25, 0.5},
+  SHAMAN  = {0.25, 0.5,  0.25, 0.5},
+  PRIEST  = {0.5,  0.75, 0.25, 0.5},
+  WARLOCK = {0.75, 1.0,  0.25, 0.5},
+  PALADIN = {0,    0.25, 0.5,  0.75},
 }
 
 local CLASS_COLORS = {
@@ -4087,7 +4119,7 @@ function LeafVE.UI:ShowPlayerCard(playerName)
   self.cardClassLevelRank:SetText(string.format("Lvl %s %s\n%s", tostring(level), class, rank))
 
   local unitToken = FindUnitToken(playerName)
-  local useModel = unitToken ~= nil
+  local useModel = unitToken ~= nil and CheckInteractDistance(unitToken, 1)
   
   if useModel then
     local modelOk = pcall(function()
@@ -4124,8 +4156,14 @@ function LeafVE.UI:ShowPlayerCard(playerName)
   else
     self.cardModel:Hide()
     self.cardClassIconFrame:Show()
-    local classIconPath = CLASS_ICONS[class] or LEAF_FALLBACK
-    self.cardClassIcon:SetTexture(classIconPath)
+    local coords = CLASS_CIRCLE_COORDS[class]
+    if coords then
+      self.cardClassIcon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
+      self.cardClassIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+    else
+      self.cardClassIcon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+      self.cardClassIcon:SetTexCoord(0, 1, 0, 1)
+    end
     self.cardClassIcon:SetVertexColor(1, 1, 1, 1)
     if self.cardPortraitTypeText then
       self.cardPortraitTypeText:SetText("|cFFFFAA00"..class.."|r")
@@ -4626,6 +4664,7 @@ function LeafVE.UI:RefreshGearPopup(playerName)
   local entryH      = 26
 
   if snapshot and snapshot.slots then
+    local unitToken = FindUnitToken(playerName)
     for i = 1, table.getn(GEAR_SLOT_NAMES) do
       local slotName = GEAR_SLOT_NAMES[i]
       local label    = GEAR_SLOT_LABELS[slotName] or slotName
@@ -4675,9 +4714,11 @@ function LeafVE.UI:RefreshGearPopup(playerName)
       entry.labelFS:SetText("|cFFAAAAAA" .. label .. ":|r")
 
       if itemId then
+        local slotId = GetInventorySlotInfo(slotName)
         local itemName, _, itemRarity, _, _, _, _, _, _, itemTexture = GetItemInfo(itemId)
-        if itemTexture then
-          entry.icon:SetTexture(itemTexture)
+        local iconTex = (unitToken and slotId and GetInventoryItemTexture(unitToken, slotId)) or itemTexture
+        if iconTex then
+          entry.icon:SetTexture(iconTex)
           entry.icon:SetVertexColor(1, 1, 1, 1)
         else
           entry.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
@@ -4701,7 +4742,9 @@ function LeafVE.UI:RefreshGearPopup(playerName)
         end
         entry.itemFS:SetText(displayText)
       else
-        entry.icon:SetTexture("")
+        local emptyTex = EMPTY_SLOT_TEXTURES[slotName] or "Interface\\Icons\\INV_Misc_QuestionMark"
+        entry.icon:SetTexture(emptyTex)
+        entry.icon:SetVertexColor(0.5, 0.5, 0.5, 1)
         entry.itemFS:SetText("|cFF444444--empty--|r")
         entry.itemId = nil
       end
