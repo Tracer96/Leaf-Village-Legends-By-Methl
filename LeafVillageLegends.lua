@@ -932,7 +932,17 @@ function LeafVE:HardResetLeafPoints_Local()
   LeafVE_DB.questCompletions = {}
   LeafVE_DB.groupSessions = {}
   LeafVE_DB.groupCooldowns = {}
+  LeafVE_DB.groupPointsToday = {}
+  LeafVE_DB.loginStreaks  = {}
+  LeafVE_DB.loginTracking = {}
+  LeafVE_DB.shoutouts    = {}
+  LeafVE_DB.attendance   = {}
+  LeafVE_DB.badges       = {}
+  LeafVE_DB.badgesAnnounced = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+  if LeafVE_GlobalDB then
+    LeafVE_GlobalDB.achievementCache = {}
+  end
   -- Record reset timestamp so offline characters on the same account are also wiped on login
   LeafVE_DB.lastLeafResetAt = resetNow
   if LeafVE_GlobalDB then LeafVE_GlobalDB.globalLeafResetAt = resetNow end
@@ -5732,31 +5742,15 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
 
   if isWeekly then
     -- Always prefer authoritative local aggregation over peer-synced cache.
-    -- Fall back to synced data only for remote players not witnessed locally.
+    -- Fall back to synced data only for remote members not witnessed locally.
     local wk = WeekKey()
     local syncedWeek = (type(LeafVE_DB.lboard.weekly[wk]) == "table") and LeafVE_DB.lboard.weekly[wk] or {}
     local localWeek = AggForThisWeek()
 
-    -- Build a union of guild members and any extra players present only in data tables.
-    local displayPlayers = {}  -- Lower(name) -> guildInfo-like table
     for _, guildInfo in pairs(memberSet) do
-      displayPlayers[Lower(guildInfo.name)] = guildInfo
-    end
-    for name, _ in pairs(localWeek) do
-      if not displayPlayers[Lower(name)] then
-        displayPlayers[Lower(name)] = {name = name, class = "Unknown"}
-      end
-    end
-    for name, _ in pairs(syncedWeek) do
-      if not displayPlayers[Lower(name)] then
-        displayPlayers[Lower(name)] = {name = name, class = "Unknown"}
-      end
-    end
-
-    for _, guildInfo in pairs(displayPlayers) do
       local name = guildInfo.name
       -- LOCAL first: prefer AggForThisWeek(); fall back to lboard cache for
-      -- remote members not witnessed locally this week.
+      -- guild members not witnessed locally this week.
       local wData = localWeek[name] or syncedWeek[name]
       local wL = wData and (wData.L or 0) or 0
       local wG = wData and (wData.G or 0) or 0
@@ -5769,26 +5763,10 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
       })
     end
   else
-    -- Build a union of guild members and any extra players present only in data tables.
-    local displayPlayers = {}  -- Lower(name) -> guildInfo-like table
     for _, guildInfo in pairs(memberSet) do
-      displayPlayers[Lower(guildInfo.name)] = guildInfo
-    end
-    for name, _ in pairs(LeafVE_DB.alltime) do
-      if not displayPlayers[Lower(name)] then
-        displayPlayers[Lower(name)] = {name = name, class = "Unknown"}
-      end
-    end
-    for name, _ in pairs(LeafVE_DB.lboard.alltime) do
-      if not displayPlayers[Lower(name)] then
-        displayPlayers[Lower(name)] = {name = name, class = "Unknown"}
-      end
-    end
-
-    for _, guildInfo in pairs(displayPlayers) do
       local name = guildInfo.name
       -- LOCAL first: prefer LeafVE_DB.alltime; fall back to lboard cache for
-      -- remote members whose lifetime data was only received via sync.
+      -- guild members whose lifetime data was only received via sync.
       local lData = LeafVE_DB.alltime[name] or LeafVE_DB.lboard.alltime[name]
       local lL = lData and (lData.L or 0) or 0
       local lG = lData and (lData.G or 0) or 0
