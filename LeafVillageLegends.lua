@@ -8951,9 +8951,18 @@ ef:SetScript("OnEvent", function()
       LeafVE_DB.migratedTriggerHistory = true
     end
     -- Apply any pending admin reset that occurred while this character was offline
-    if (LeafVE_GlobalDB.globalLeafResetAt or 0) > (LeafVE_DB.lastLeafResetAt or 0) then
+    local pendingEpoch = (LeafVE_GlobalDB.globalLeafResetAt or 0)
+    if pendingEpoch > (LeafVE_DB.lastLeafResetAt or 0) then
       LeafVE:HardResetLeafPoints_Local()
       Print("|cFFFF4444Leaf Points were reset by an admin while you were offline. Your data has been wiped.|r")
+      -- HardResetLeafPoints_Local() internally generates a fresh resetNow=time() and
+      -- writes it to both lastLeafResetAt and globalLeafResetAt.  That would bump
+      -- globalLeafResetAt above every other character's lastLeafResetAt, causing an
+      -- infinite wipe cascade across logins.  Overwrite both fields with the original
+      -- admin-reset epoch so: (a) this character's lastLeafResetAt matches the global
+      -- and won't re-trigger, and (b) other characters are not falsely re-triggered.
+      LeafVE_DB.lastLeafResetAt = pendingEpoch
+      LeafVE_GlobalDB.globalLeafResetAt = pendingEpoch
     end
     LeafVE:CheckDailyLogin()
     LeafVE:PurgeStaleWeeklyData()
