@@ -460,7 +460,7 @@ LeafVE.instanceZone = nil
 LeafVE.instanceHasGuildie = false
 LeafVE.instanceBossesKilledThisRun = 0
 LeafVE.recentBossKills = {}  -- bossName -> timestamp, for dedup within a short window
-LeafVE.lastGroupAwardTick = nil
+LeafVE.lastGroupAwardTime = nil
 LeafVE.lastCombatAt = 0
 LeafVE.lastActivityTime = 0
 local AFK_TIMEOUT = 600  -- 10 minutes of inactivity = considered AFK
@@ -950,7 +950,12 @@ function LeafVE:HardResetLeafPoints_Local()
   LeafVE_DB.questCompletions = {}
   LeafVE_DB.groupSessions = {}
   LeafVE_DB.groupCooldowns = {}
+  LeafVE_DB.shoutouts = {}
+  LeafVE_DB.groupPointsToday = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+  self.lastGroupAwardTime = nil
+  self.currentGroupStart = nil
+  self.currentGroupMembers = {}
   -- Refresh all visible panels (handles me, leaderWeek, leaderLife, etc.)
   if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.Refresh then
     LeafVE.UI:Refresh()
@@ -1527,23 +1532,23 @@ function LeafVE:GetGroupHash(members) table.sort(members) return table.concat(me
 
 function LeafVE:OnGroupUpdate()
   local guildies = self:GetGroupGuildies() local numGuildies = table.getn(guildies)
-  if numGuildies == 0 then self.currentGroupStart = nil self.currentGroupMembers = {} self.lastGroupAwardTick = nil return end
+  if numGuildies == 0 then self.currentGroupStart = nil self.currentGroupMembers = {} self.lastGroupAwardTime = nil return end
   local groupHash = self:GetGroupHash(guildies)
   if not self.currentGroupStart or groupHash ~= self:GetGroupHash(self.currentGroupMembers) then
-    self.currentGroupStart = Now() self.currentGroupMembers = guildies self.lastGroupAwardTick = nil
+    self.currentGroupStart = Now() self.currentGroupMembers = guildies self.lastGroupAwardTime = nil
     Print("Group leaf points are now active! (grouped with: "..table.concat(guildies, ", ")..")")
     return
   end
   EnsureDB()
   local groupInterval = GROUP_POINT_INTERVAL
-  local currentTick = math.floor(Now() / groupInterval)
-  local lastAwardedTick = self.lastGroupAwardTick or -1
-  if currentTick > lastAwardedTick and self.currentGroupStart and (Now() - self.currentGroupStart) >= groupInterval then
+  local now = Now()
+  local nextAwardTime = (self.lastGroupAwardTime or self.currentGroupStart) + groupInterval
+  if self.currentGroupStart and now >= nextAwardTime then
     local playerName = ShortName(UnitName("player"))
     if playerName then
       -- AFK / inactivity check
       if self:IsPlayerInactive() then
-        self.lastGroupAwardTick = currentTick
+        self.lastGroupAwardTime = now
         Print("|cFFFF4444Group points skipped — you appear to be AFK or inactive!|r")
         return
       end
@@ -1565,7 +1570,7 @@ function LeafVE:OnGroupUpdate()
         LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
         self:CheckBadgeMilestones(playerName)
       end
-      self.lastGroupAwardTick = currentTick
+      self.lastGroupAwardTime = now
       if awarded and awarded > 0 then
         Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", awarded, pointsPerGuildie, numGuildies))
       end
@@ -2159,19 +2164,10 @@ function LeafVE:MergeShoutoutHistory(payload)
             end
             local existing = LeafVE_DB.shoutouts[giver][target]
             if not existing then
-              -- New entry: record it and award the shoutout point under the actual shoutout date
-              -- (not today) so prior-week syncs don't inflate the current week's AggForThisWeek total.
+              -- New entry: record it for history/badge tracking only.
+              -- Points for shoutouts are awarded in real-time via the SHOUTOUT: handler.
               LeafVE_DB.shoutouts[giver][target] = timestamp
-              local actualDay = DayKeyFromTS(timestamp)
-              if not LeafVE_DB.global[actualDay] then LeafVE_DB.global[actualDay] = {} end
-              if not LeafVE_DB.global[actualDay][target] then LeafVE_DB.global[actualDay][target] = {L=0, G=0, S=0} end
-              LeafVE_DB.global[actualDay][target].S = (LeafVE_DB.global[actualDay][target].S or 0) + 10
-              if not LeafVE_DB.alltime[target] then LeafVE_DB.alltime[target] = {L=0, G=0, S=0} end
-              LeafVE_DB.alltime[target].S = (LeafVE_DB.alltime[target].S or 0) + 10
-              if not LeafVE_DB.season[target] then LeafVE_DB.season[target] = {L=0, G=0, S=0} end
-              LeafVE_DB.season[target].S = (LeafVE_DB.season[target].S or 0) + 10
               self:CheckBadgeMilestones(target)
-              self:AddToHistory(target, "S", 10, "Shoutout from "..giver.." (synced)")
               self:CheckAndAwardBadge(giver, "first_shoutout_given")
               self:CheckAndAwardBadge(target, "first_shoutout_received")
               updated = true
@@ -6486,96 +6482,6 @@ end)
   self.panels.roster.scrollBar:SetValue(0)
 end
 
-local function BuildLiveHistoryPanel(panel)
-  -- Block header background
-  local headerBG = panel:CreateTexture(nil, "BACKGROUND")
-  headerBG:SetPoint("TOP", panel, "TOP", -15, -10)
-  headerBG:SetWidth(420)
-  headerBG:SetHeight(50)
-  headerBG:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  headerBG:SetVertexColor(0.15, 0.15, 0.18, 0.9)
-
-  local accentTop = panel:CreateTexture(nil, "BORDER")
-  accentTop:SetPoint("TOPLEFT", headerBG, "TOPLEFT", 0, 0)
-  accentTop:SetPoint("TOPRIGHT", headerBG, "TOPRIGHT", 0, 0)
-  accentTop:SetHeight(3)
-  accentTop:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  accentTop:SetVertexColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 1)
-
-  local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-  h:SetPoint("TOP", headerBG, "TOP", 0, -10)
-  h:SetText("|cFFFFD700Guild Point History|r")
-
-  local subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  subtitle:SetPoint("TOP", h, "BOTTOM", 0, -3)
-  subtitle:SetText("|cFF888888Live feed of all guild member point transactions|r")
-
-  local scrollFrame = CreateFrame("ScrollFrame", nil, panel)
-  scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -75)
-  scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -30, 12)
-  scrollFrame:EnableMouse(true)
-  scrollFrame:EnableMouseWheel(true)
-
-  local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-  scrollChild:SetWidth(500)
-  scrollChild:SetHeight(1)
-  scrollFrame:SetScrollChild(scrollChild)
-
-  scrollFrame:SetScript("OnMouseWheel", function()
-    local current = scrollFrame:GetVerticalScroll()
-    local maxScroll = scrollFrame:GetVerticalScrollRange()
-    local newScroll = current - (arg1 * 40)
-    if newScroll < 0 then newScroll = 0 end
-    if newScroll > maxScroll then newScroll = maxScroll end
-    scrollFrame:SetVerticalScroll(newScroll)
-  end)
-
-  local scrollBar = CreateFrame("Slider", nil, panel)
-  scrollBar:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -75)
-  scrollBar:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, 12)
-  scrollBar:SetWidth(16)
-  scrollBar:SetOrientation("VERTICAL")
-  scrollBar:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
-  scrollBar:SetMinMaxValues(0, 100)
-  scrollBar:SetValue(0)
-
-  local thumb = scrollBar:GetThumbTexture()
-  thumb:SetWidth(16)
-  thumb:SetHeight(24)
-
-  scrollBar:SetBackdrop({
-    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    tile = true, tileSize = 8, edgeSize = 8,
-    insets = {left = 2, right = 2, top = 2, bottom = 2}
-  })
-  scrollBar:SetBackdropColor(0, 0, 0, 0.3)
-  scrollBar:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.8)
-
-  scrollBar:SetScript("OnValueChanged", function()
-    local value = scrollBar:GetValue()
-    local maxScroll = scrollFrame:GetVerticalScrollRange()
-    if maxScroll > 0 then
-      scrollFrame:SetVerticalScroll((value / 100) * maxScroll)
-    end
-  end)
-
-  scrollFrame:SetScript("OnVerticalScroll", function()
-    local maxScroll = scrollFrame:GetVerticalScrollRange()
-    if maxScroll > 0 then
-      local current = scrollFrame:GetVerticalScroll()
-      scrollBar:SetValue((current / maxScroll) * 100)
-    else
-      scrollBar:SetValue(0)
-    end
-  end)
-
-  panel.scrollFrame = scrollFrame
-  panel.scrollChild = scrollChild
-  panel.scrollBar = scrollBar
-  panel.historyEntries = {}
-end
-
 local function BuildHistoryPanel(panel)
   -- Block header background
   local headerBG = panel:CreateTexture(nil, "BACKGROUND")
@@ -8939,12 +8845,8 @@ function LeafVE.UI:Build()
   self.tabHistory:SetPoint("LEFT", self.tabAlts, "RIGHT", 4, 0)
   self.tabHistory:SetWidth(60)
 
-  self.tabLiveHistory = TabButton(f, "Live History", "LeafVE_TabLiveHistory")
-  self.tabLiveHistory:SetPoint("LEFT", self.tabHistory, "RIGHT", 4, 0)
-  self.tabLiveHistory:SetWidth(80)
-
   self.tabOptions = TabButton(f, "Options", "LeafVE_TabOptions")
-  self.tabOptions:SetPoint("LEFT", self.tabLiveHistory, "RIGHT", 4, 0)
+  self.tabOptions:SetPoint("LEFT", self.tabHistory, "RIGHT", 4, 0)
   self.tabOptions:SetWidth(60)
 
   self.tabAdmin = TabButton(f, "Admin", "LeafVE_TabAdmin")
@@ -9016,10 +8918,6 @@ function LeafVE.UI:Build()
   self.panels.alts:SetAllPoints(self.left)
   BuildAltsPanel(self.panels.alts)
 
-  self.panels.liveHistory = CreateFrame("Frame", nil, self.left)
-  self.panels.liveHistory:SetAllPoints(self.left)
-  BuildLiveHistoryPanel(self.panels.liveHistory)
-
   self.panels.welcome = CreateFrame("Frame", nil, self.left)
   self.panels.welcome:SetAllPoints(self.left)
   BuildWelcomePanel(self.panels.welcome)
@@ -9084,11 +8982,6 @@ function LeafVE.UI:Build()
     self:Refresh()
   end)
 
-  self.tabLiveHistory:SetScript("OnClick", function()
-    self.activeTab = "liveHistory"
-    self:Refresh()
-  end)
-
   self.tabWelcome:SetScript("OnClick", function()
     self.activeTab = "welcome"
     self:Refresh()
@@ -9112,7 +9005,6 @@ function LeafVE.UI:Build()
   self.panels.options:Hide()
   self.panels.admin:Hide()
   self.panels.alts:Hide()
-  self.panels.liveHistory:Hide()
   self.panels.welcome:Hide()
   self.panels.join:Hide()
   
@@ -9147,7 +9039,7 @@ function LeafVE.UI:Refresh()
     self.activeTab = "me"
   end
 
-  local accessTabs = {self.tabWelcome, self.tabMe, self.tabShout, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabAlts, self.tabHistory, self.tabLiveHistory, self.tabOptions}
+  local accessTabs = {self.tabWelcome, self.tabMe, self.tabShout, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabAlts, self.tabHistory, self.tabOptions}
   if hasAccess then
     for _, tab in ipairs(accessTabs) do
       if tab then tab:Show() end
@@ -9187,7 +9079,7 @@ function LeafVE.UI:Refresh()
   end
   
   -- Hide all panels safely
-  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "alts", "liveHistory", "welcome", "join"}
+  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "alts", "welcome", "join"}
   for _, name in ipairs(panelNames) do
     if self.panels[name] and self.panels[name].Hide then
       self.panels[name]:Hide()
@@ -9466,113 +9358,10 @@ function LeafVE.UI:Refresh()
     self.panels.alts:Show()
     self:RefreshAlts()
 
-  elseif self.activeTab == "liveHistory" and self.panels.liveHistory then
-    self.panels.liveHistory:Show()
-    self:RefreshLiveHistory()
-
   elseif self.activeTab == "welcome" and self.panels.welcome then
     self.panels.welcome:Show()
     self:RefreshWelcome()
   end
-end
-
-function LeafVE.UI:RefreshLiveHistory()
-  EnsureDB()
-  local p = self.panels.liveHistory
-  if not p then return end
-  local scrollChild = p.scrollChild
-  if not scrollChild then return end
-
-  -- Collect all entries from all players, merged
-  local allEntries = {}
-  for pName, entries in pairs(LeafVE_DB.pointHistory) do
-    if type(entries) == "table" then
-      for _, entry in ipairs(entries) do
-        local merged = {}
-        merged.playerName = pName
-        merged.timestamp = entry.timestamp or 0
-        merged.amount = entry.amount or 0
-        merged.reason = entry.reason or ""
-        merged.dateStr = entry.dateStr or ""
-        table.insert(allEntries, merged)
-      end
-    end
-  end
-
-  -- Sort by timestamp descending (newest first)
-  table.sort(allEntries, function(a, b) return a.timestamp > b.timestamp end)
-
-  -- Cap at 500 entries
-  local maxEntries = 500
-  local count = table.getn(allEntries)
-  if count > maxEntries then count = maxEntries end
-
-  -- Clear existing rows
-  if p.historyEntries then
-    for _, row in ipairs(p.historyEntries) do
-      row:Hide()
-    end
-  end
-  p.historyEntries = {}
-
-  local rowH = 18
-  local yOff = -4
-  local totalHeight = 0
-  local altRow = false
-
-  for i = 1, count do
-    local entry = allEntries[i]
-    local row = CreateFrame("Frame", nil, scrollChild)
-    row:SetWidth(scrollChild:GetWidth() or 500)
-    row:SetHeight(rowH)
-    row:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, yOff)
-
-    -- Alternating row background
-    altRow = not altRow
-    if altRow then
-      local bg = row:CreateTexture(nil, "BACKGROUND")
-      bg:SetAllPoints(row)
-      bg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-      bg:SetVertexColor(0.1, 0.1, 0.12, 0.5)
-    end
-
-    -- Date/time
-    local dateFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    dateFS:SetPoint("LEFT", row, "LEFT", 4, 0)
-    dateFS:SetWidth(90)
-    dateFS:SetJustifyH("LEFT")
-    dateFS:SetText("|cFF888888"..(entry.dateStr or "").."  |r")
-
-    -- Player name
-    local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    nameFS:SetPoint("LEFT", row, "LEFT", 98, 0)
-    nameFS:SetWidth(80)
-    nameFS:SetJustifyH("LEFT")
-    nameFS:SetText("|cFF00CCFF"..(entry.playerName or "").."  |r")
-
-    -- Amount
-    local amtFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    amtFS:SetPoint("LEFT", row, "LEFT", 182, 0)
-    amtFS:SetWidth(55)
-    amtFS:SetJustifyH("LEFT")
-    local amtColor = (entry.amount and entry.amount > 0) and "|cFF2DD35C" or "|cFFFF4444"
-    amtFS:SetText(amtColor.."+"..tostring(entry.amount or 0).." LP|r")
-
-    -- Reason
-    local reasonFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    reasonFS:SetPoint("LEFT", row, "LEFT", 240, 0)
-    reasonFS:SetWidth(230)
-    reasonFS:SetJustifyH("LEFT")
-    reasonFS:SetText(entry.reason or "")
-
-    table.insert(p.historyEntries, row)
-    yOff = yOff - rowH
-    totalHeight = totalHeight + rowH
-  end
-
-  scrollChild:SetHeight(math.max(totalHeight + 8, 1))
-  p.scrollFrame:SetVerticalScroll(0)
-  if p.scrollBar then p.scrollBar:SetValue(0) end
 end
 
 function LeafVE.UI:RefreshWelcome()
