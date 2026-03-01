@@ -2001,6 +2001,15 @@ end
 -- SHOUTOUT V2 (FEATURE D)
 -------------------------------------------------
 
+-- Helper: ensure shoutouts_v2 daily table is current (resets when the date changes).
+local function LVL_EnsureShoutoutDailyReset(sv2)
+  local today = DayKey()
+  if sv2.daily.dateKey ~= today then
+    sv2.daily.dateKey = today
+    sv2.daily.awards = {}
+  end
+end
+
 -- Check if a giver can award a shoutout to a target.
 -- Returns: canAward (bool), reason (string or nil).
 function LVL_CanShoutout(giverKey, targetKey)
@@ -2008,12 +2017,7 @@ function LVL_CanShoutout(giverKey, targetKey)
   if not giverKey or not targetKey then return false, "Invalid names" end
   if Lower(giverKey) == Lower(targetKey) then return false, "Cannot shoutout yourself" end
   local sv2 = LeafVE_DB.shoutouts_v2
-  local today = DayKey()
-  -- Reset daily table if the date has changed
-  if sv2.daily.dateKey ~= today then
-    sv2.daily.dateKey = today
-    sv2.daily.awards = {}
-  end
+  LVL_EnsureShoutoutDailyReset(sv2)
   -- Daily limit per giver
   local awardsToday = sv2.daily.awards[giverKey] or 0
   if awardsToday >= SHOUTOUT_V2_MAX_PER_DAY then
@@ -2050,12 +2054,7 @@ function LVL_AwardShoutout(giverKey, targetKey)
   end
   local sv2 = LeafVE_DB.shoutouts_v2
   local now = Now()
-  local today = DayKey()
-  -- Reset daily table if the date has changed
-  if sv2.daily.dateKey ~= today then
-    sv2.daily.dateKey = today
-    sv2.daily.awards = {}
-  end
+  LVL_EnsureShoutoutDailyReset(sv2)
   -- Record in given table
   if not sv2.given[giverKey] then sv2.given[giverKey] = {} end
   sv2.given[giverKey][targetKey] = now
@@ -6380,60 +6379,56 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
     for _, guildInfo in pairs(memberSet) do
       local name = guildInfo.name
       -- Feature C: linked alts never appear on the leaderboard
-      if LVL_IsAltByName(name) then
-        -- skip
-      else
-      local pts
-      local localPts = localWeek[name]
-      local syncedPts = syncedWeek and syncedWeek[name]
-      if localPts and syncedPts then
-        local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
-        local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
-        pts = localTotal >= syncedTotal and localPts or syncedPts
-      elseif localPts then
-        pts = localPts
-      else
-        pts = syncedPts or {L = 0, G = 0, S = 0}
-      end
-      local totL = pts.L or 0
-      local totG = pts.G or 0
-      local totS = pts.S or 0
-      local total = totL + totG + totS
-      table.insert(leaders, {
-        name = name, total = total,
-        L = totL, G = totG, S = totS,
-        class = guildInfo.class or "Unknown"
-      })
+      if not LVL_IsAltByName(name) then
+        local pts
+        local localPts = localWeek[name]
+        local syncedPts = syncedWeek and syncedWeek[name]
+        if localPts and syncedPts then
+          local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
+          local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
+          pts = localTotal >= syncedTotal and localPts or syncedPts
+        elseif localPts then
+          pts = localPts
+        else
+          pts = syncedPts or {L = 0, G = 0, S = 0}
+        end
+        local totL = pts.L or 0
+        local totG = pts.G or 0
+        local totS = pts.S or 0
+        local total = totL + totG + totS
+        table.insert(leaders, {
+          name = name, total = total,
+          L = totL, G = totG, S = totS,
+          class = guildInfo.class or "Unknown"
+        })
       end
     end
   else
     for _, guildInfo in pairs(memberSet) do
       local name = guildInfo.name
       -- Feature C: linked alts never appear on the leaderboard
-      if LVL_IsAltByName(name) then
-        -- skip
-      else
-      local pts
-      local localPts = LeafVE_DB.alltime[name]
-      local syncedPts = LeafVE_DB.lboard.alltime[name]
-      if localPts and syncedPts then
-        local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
-        local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
-        pts = localTotal >= syncedTotal and localPts or syncedPts
-      elseif localPts then
-        pts = localPts
-      else
-        pts = syncedPts or {L = 0, G = 0, S = 0}
-      end
-      local totL = pts.L or 0
-      local totG = pts.G or 0
-      local totS = pts.S or 0
-      local total = totL + totG + totS
-      table.insert(leaders, {
-        name = name, total = total,
-        L = totL, G = totG, S = totS,
-        class = guildInfo.class or "Unknown"
-      })
+      if not LVL_IsAltByName(name) then
+        local pts
+        local localPts = LeafVE_DB.alltime[name]
+        local syncedPts = LeafVE_DB.lboard.alltime[name]
+        if localPts and syncedPts then
+          local localTotal = (localPts.L or 0) + (localPts.G or 0) + (localPts.S or 0)
+          local syncedTotal = (syncedPts.L or 0) + (syncedPts.G or 0) + (syncedPts.S or 0)
+          pts = localTotal >= syncedTotal and localPts or syncedPts
+        elseif localPts then
+          pts = localPts
+        else
+          pts = syncedPts or {L = 0, G = 0, S = 0}
+        end
+        local totL = pts.L or 0
+        local totG = pts.G or 0
+        local totS = pts.S or 0
+        local total = totL + totG + totS
+        table.insert(leaders, {
+          name = name, total = total,
+          L = totL, G = totG, S = totS,
+          class = guildInfo.class or "Unknown"
+        })
       end
     end
   end
@@ -9504,9 +9499,9 @@ ef:SetScript("OnEvent", function()
       LeafVE_DB.migratedTriggerHistory = true
     end
     -- One-time migration: wipe old shoutout data and migrate to V2
-    if not LeafVE_DB.shoutout_v2_migrated then
+    if not LeafVE_DB.shoutouts_v2_migrated then
       LeafVE_DB.shoutouts = {}
-      LeafVE_DB.shoutout_v2_migrated = true
+      LeafVE_DB.shoutouts_v2_migrated = true
     end
     -- Check guild info bulletin for a pending guild-wide wipe (Feature E: offline catch-up)
     LVL_CheckGuildWipeBulletin()
