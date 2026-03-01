@@ -2000,7 +2000,7 @@ function LeafVE:GiveShoutout(targetName, reason)
     end
     
     message = message .. " (+"..shoutPts.." Leaf Points each)"
-    SendChatMessage(message, "GUILD")
+    SendChatMessage(StripColorCodes(message), "GUILD")
     SendAddonMessage("LeafVE", "SHOUTOUT:"..giverName..":"..targetName, "GUILD")
   end
   
