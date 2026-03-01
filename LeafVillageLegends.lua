@@ -749,7 +749,7 @@ end
 
 function LVL_FormatTime(secs)
   local h = math.floor(secs / 3600)
-  local m = math.floor((secs % 3600) / 60)
+  local m = math.floor(math.mod(secs, 3600) / 60)
   return h .. "h " .. m .. "m"
 end
 
