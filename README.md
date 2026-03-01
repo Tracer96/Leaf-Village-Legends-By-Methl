@@ -24,11 +24,11 @@ Over 20 collectible badges across 6 categories, each with WoW-style quality tier
 
 | Quality | Color | Examples |
 |---------|-------|----------|
-| ⬜ **Common** | Gray | First Steps, Team Player, Generous Soul |
-| 🟩 **Uncommon** | Green | Dedicated, Groupie, Raider, Well Known |
-| 🟦 **Rare** | Blue | Truly Dedicated, Social Butterfly, Core Member, Raid Veteran |
-| 🟪 **Epic** | Purple | Guild Hero, Guild Elite |
-| 🟧 **Legendary** | Orange | Hokage Legend, One Year Legend |
+| ⬜ **Common** | Gray | First Steps, Guildie Group Hours I, Generous Soul |
+| 🟩 **Uncommon** | Green | Dedicated, Guildie Group Hours II, Guildie Group Hours III, Raider, Well Known |
+| 🟦 **Rare** | Blue | Truly Dedicated, Guildie Group Hours IV, Guildie Group Hours V, Core Member, Raid Veteran |
+| 🟪 **Epic** | Purple | Guildie Group Hours VI, Guild Elite |
+| 🟧 **Legendary** | Orange | Guildie Group Hours VII, Hokage Legend, One Year Legend |
 
 **Badge categories include:**
 - **Activity** — Login streaks and consistency.
@@ -160,7 +160,7 @@ Only **Hokage**, **Sannin**, and **Anbu** ranks can access the Admin panel.
 | Quest Completion | G (Gameplay) | 10 LP per quest turn-in (requires guildie in group, no daily cap) |
 | Boss Kill | G (Gameplay) | Points per recognized boss kill in dungeons/raids |
 | Dungeon Completion | G (Gameplay) | Scaled by number of bosses killed in the run |
-| Guild Grouping | G (Gameplay) | 10 LP per guildie every 20 min (AFK detection prevents passive farming) |
+| Guild Grouping | G (Gameplay) | 5 LP per guildie every 60 min (AFK detection prevents passive farming) |
 | Shoutout Received | S (Social) | 10 LP when a guildie gives you a shoutout (max 2 per day) |
 
 **Daily Total LP Cap: 700** (hard-coded across all point types combined).
@@ -186,7 +186,7 @@ Only **Hokage**, **Sannin**, and **Anbu** ranks can access the Admin panel.
 | Raid Boss | 25 LP |
 | Dungeon Complete | 10 LP |
 | Raid Complete | 25 LP |
-| Group Time | 10 LP per guildie every 20 min |
+| Group Time | 5 LP per guildie every 60 min |
 | Shoutout | 10 LP (2 per day) |
 | Daily Total LP Cap | 700 LP |
 | AFK Timeout | 10 minutes |

@@ -31,7 +31,7 @@ local SECONDS_PER_DAY = 86400
 local SECONDS_PER_HOUR = 3600
 local GROUP_MIN_TIME = 300
 local GROUP_COOLDOWN = 900
-local GROUP_POINT_INTERVAL = 1200
+local GROUP_POINT_INTERVAL = 3600
 local GUILD_ROSTER_CACHE_DURATION = 30
 local SHOUTOUT_MAX_PER_DAY = 2
 local LBOARD_RESYNC_COOLDOWN = 30  -- seconds between outgoing LBOARDREQ messages
@@ -83,7 +83,7 @@ local INSTANCE_MAX_DAILY = 20
 local QUEST_POINTS = 10
 local QUEST_MAX_DAILY = 0
 local LEAF_POINT_DAILY_CAP = 0
-local GROUP_POINTS = 10               -- points awarded per guild group tick per guildie
+local GROUP_POINTS = 5                -- points awarded per guild group tick per guildie
 local GROUP_POINTS_DAILY_CAP = 500    -- daily cap for group tick points only
 local GRPAWARD_GRACE_PERIOD = 60      -- seconds non-broadcasters wait for the guildie broadcaster before self-awarding
 
@@ -196,10 +196,13 @@ BADGES = {
   {id = "total_logins_100", name = "Regular",        desc = "Earn 100 login points",         icon = "Interface\\Icons\\Spell_Arcane_TeleportIronForge", category = "Activity",   quality = BADGE_QUALITY.UNCOMMON},
   
   -- Group Content (AUTO-TRACKED)
-  {id = "first_group", name = "Team Player",     desc = "Complete your first guild group", icon = "Interface\\Icons\\INV_Banner_02",   category = "Social", quality = BADGE_QUALITY.COMMON},
-  {id = "group_10",    name = "Groupie",         desc = "Complete 10 guild groups",        icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
-  {id = "group_50",    name = "Social Butterfly", desc = "Complete 50 guild groups",       icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
-  {id = "group_100",   name = "Guild Hero",      desc = "Complete 100 guild groups",       icon = "Interface\\Icons\\INV_Crown_01",    category = "Social", quality = BADGE_QUALITY.EPIC},
+  {id = "guildie_hours_1",     name = "Guildie Group Hours I",   desc = "Spend 1 guildie group hour",       icon = "Interface\\Icons\\INV_Banner_02",   category = "Social", quality = BADGE_QUALITY.COMMON},
+  {id = "guildie_hours_10",    name = "Guildie Group Hours II",  desc = "Spend 10 guildie group hours",     icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
+  {id = "guildie_hours_25",    name = "Guildie Group Hours III", desc = "Spend 25 guildie group hours",     icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
+  {id = "guildie_hours_50",    name = "Guildie Group Hours IV",  desc = "Spend 50 guildie group hours",     icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
+  {id = "guildie_hours_100",   name = "Guildie Group Hours V",   desc = "Spend 100 guildie group hours",    icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
+  {id = "guildie_hours_1000",  name = "Guildie Group Hours VI",  desc = "Spend 1000 guildie group hours",   icon = "Interface\\Icons\\INV_Crown_01",    category = "Social", quality = BADGE_QUALITY.EPIC},
+  {id = "guildie_hours_10000", name = "Guildie Group Hours VII", desc = "Spend 10000 guildie group hours",  icon = "Interface\\Icons\\INV_Crown_02",    category = "Social", quality = BADGE_QUALITY.LEGENDARY},
   
   -- Shoutouts (AUTO-TRACKED)
   {id = "first_shoutout_given",    name = "Generous Soul",   desc = "Give your first shoutout",    icon = "Interface\\Icons\\INV_Letter_15",                    category = "Recognition", quality = BADGE_QUALITY.COMMON},
@@ -677,6 +680,7 @@ local function EnsureDB()
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
+  if not LeafVE_DB.guildieGroupHours then LeafVE_DB.guildieGroupHours = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
   if not LeafVE_DB.lboard.alltime then LeafVE_DB.lboard.alltime = {} end
@@ -1097,18 +1101,27 @@ function LeafVE:CheckBadgeMilestones(playerName)
   end
   
   -- === GROUP CONTENT ===
-  local groupCount = LeafVE_DB.groupSessions[playerName] or 0
-  if groupCount >= 1 then 
-    self:CheckAndAwardBadge(playerName, "first_group") 
+  local groupHours = LeafVE_DB.guildieGroupHours[playerName] or 0
+  if groupHours >= 1 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_1") 
   end
-  if groupCount >= 10 then 
-    self:CheckAndAwardBadge(playerName, "group_10") 
+  if groupHours >= 10 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_10") 
   end
-  if groupCount >= 50 then 
-    self:CheckAndAwardBadge(playerName, "group_50") 
+  if groupHours >= 25 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_25") 
   end
-  if groupCount >= 100 then 
-    self:CheckAndAwardBadge(playerName, "group_100") 
+  if groupHours >= 50 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_50") 
+  end
+  if groupHours >= 100 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_100") 
+  end
+  if groupHours >= 1000 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_1000") 
+  end
+  if groupHours >= 10000 then 
+    self:CheckAndAwardBadge(playerName, "guildie_hours_10000") 
   end
   
   -- === POINT MILESTONES ===
@@ -1172,14 +1185,20 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
   elseif badgeId == "login_streak_30" then
     local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[name] and LeafVE_DB.loginStreaks[name].current) or 0
     return streak, 30
-  elseif badgeId == "first_group" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 1
-  elseif badgeId == "group_10" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 10
-  elseif badgeId == "group_50" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 50
-  elseif badgeId == "group_100" then
-    return (LeafVE_DB.groupSessions and LeafVE_DB.groupSessions[name]) or 0, 100
+  elseif badgeId == "guildie_hours_1" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 1
+  elseif badgeId == "guildie_hours_10" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 10
+  elseif badgeId == "guildie_hours_25" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 25
+  elseif badgeId == "guildie_hours_50" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 50
+  elseif badgeId == "guildie_hours_100" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 100
+  elseif badgeId == "guildie_hours_1000" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 1000
+  elseif badgeId == "guildie_hours_10000" then
+    return (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[name]) or 0, 10000
   elseif badgeId == "shoutout_received_10" or badgeId == "shoutout_received_50" then
     local count = 0
     for _, targets in pairs(LeafVE_DB.shoutouts or {}) do
@@ -1495,6 +1514,7 @@ function LeafVE:ApplyGroupPointAward(playerName, pointsPerGuildie, numGuildies, 
     todayData.earned = (todayData.earned or 0) + awarded
     self:AddToHistory(playerName, "G", awarded, "Grouped with "..numGuildies.." guildies: "..guildieList)
     LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
+    LeafVE_DB.guildieGroupHours[playerName] = (LeafVE_DB.guildieGroupHours[playerName] or 0) + 1
     self:CheckBadgeMilestones(playerName)
     Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", awarded, pointsPerGuildie, numGuildies))
     LeafVE.UI:Refresh()
@@ -6857,7 +6877,7 @@ local function BuildAdminPanel(panel)
     "• Quest Turn-In: 10 LP (requires guildie in group, no daily cap)",
     "• Dungeon Boss: 10 LP  |  Raid Boss: 25 LP",
     "• Dungeon Complete: 10 LP  |  Raid Complete: 25 LP",
-    "• Group Time: 10 LP per guildie every 20 min",
+    "• Group Time: 5 LP per guildie every 60 min",
     "• Shoutout: 10 LP (2 per day)",
     "• Daily Total LP Cap: 700",
   }
@@ -7302,8 +7322,8 @@ local function BuildWelcomePanel(panel)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
   yOffset = yOffset - 4
 
-  panel.welcomeGroupHeader = AddLine("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes, cap: 500/day, AFK detection active)", 10)
-  panel.welcomeGroupDetail = AddLine("Spend time in a party or raid with online guildmates. Earn 10 LP", 20)
+  panel.welcomeGroupHeader = AddLine("|cFFFFD700Group Time|r  (+5 LP per online guildie every 60 minutes, cap: 500/day, AFK detection active)", 10)
+  panel.welcomeGroupDetail = AddLine("Spend time in a party or raid with online guildmates. Earn 5 LP", 20)
   AddLine("per online guildie per session. Offline and AFK members do not count.", 20)
   yOffset = yOffset - 4
 
@@ -8807,10 +8827,10 @@ function LeafVE.UI:RefreshWelcome()
     p.welcomeLoginLine:SetText("|cFFFFD700Daily Login|r  (+20 LP)")
   end
   if p.welcomeGroupHeader then
-    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+10 LP per online guildie every 20 minutes, cap: 500/day, AFK detection active)")
+    p.welcomeGroupHeader:SetText("|cFFFFD700Group Time|r  (+5 LP per online guildie every 60 minutes, cap: 500/day, AFK detection active)")
   end
   if p.welcomeGroupDetail then
-    p.welcomeGroupDetail:SetText("Spend time in a party or raid with online guildmates. Earn 10 LP")
+    p.welcomeGroupDetail:SetText("Spend time in a party or raid with online guildmates. Earn 5 LP")
   end
   if p.welcomeSOHeader then
     p.welcomeSOHeader:SetText(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPts))
