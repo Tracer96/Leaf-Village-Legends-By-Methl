@@ -2140,9 +2140,10 @@ function LeafVE:MergeShoutoutHistory(payload)
             end
             local existing = LeafVE_DB.shoutouts[giver][target]
             if not existing then
-              -- New entry: record it and award the shoutout point under the actual shoutout date
-              -- (not today) so prior-week syncs don't inflate the current week's AggForThisWeek total.
+              -- Always record dedup entry so this shoutout is not reprocessed in future merges.
               LeafVE_DB.shoutouts[giver][target] = timestamp
+              -- Only award S points if the shoutout postdates the last hard reset.
+              if timestamp > (LeafVE_DB.lastLeafResetAt or 0) then
               local actualDay = DayKeyFromTS(timestamp)
               if not LeafVE_DB.global[actualDay] then LeafVE_DB.global[actualDay] = {} end
               if not LeafVE_DB.global[actualDay][target] then LeafVE_DB.global[actualDay][target] = {L=0, G=0, S=0} end
@@ -2156,6 +2157,7 @@ function LeafVE:MergeShoutoutHistory(payload)
               self:CheckAndAwardBadge(giver, "first_shoutout_given")
               self:CheckAndAwardBadge(target, "first_shoutout_received")
               updated = true
+              end
             elseif timestamp > existing then
               -- Newer timestamp for an already-known entry: update only, no extra point
               LeafVE_DB.shoutouts[giver][target] = timestamp
@@ -4166,14 +4168,13 @@ function LeafVE.UI:ShowPlayerCard(playerName)
   else
     self.cardModel:Hide()
     self.cardClassIconFrame:Show()
-    local coords = CLASS_CIRCLE_COORDS[class]
-    if coords then
-      self.cardClassIcon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
-      self.cardClassIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+    local classIconTex = CLASS_ICONS[class]
+    if classIconTex then
+      self.cardClassIcon:SetTexture(classIconTex)
     else
       self.cardClassIcon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-      self.cardClassIcon:SetTexCoord(0, 1, 0, 1)
     end
+    self.cardClassIcon:SetTexCoord(0, 1, 0, 1)
     self.cardClassIcon:SetVertexColor(1, 1, 1, 1)
     if self.cardPortraitTypeText then
       self.cardPortraitTypeText:SetText("|cFFFFAA00"..class.."|r")
