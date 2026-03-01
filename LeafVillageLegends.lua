@@ -66,7 +66,7 @@ local QUEST_MAX_DAILY = 0
 local LEAF_POINT_DAILY_CAP = 0
 local GROUP_POINTS = 5                -- points awarded per guild group tick per guildie
 local GROUP_POINTS_DAILY_CAP = 500    -- daily cap for group tick points only
-local GRPAWARD_GRACE_PERIOD = 60      -- seconds non-leaders wait for leader broadcast before self-awarding
+local GRPAWARD_GRACE_PERIOD = 60      -- seconds non-broadcasters wait for the guildie broadcaster before self-awarding
 
 local SEASON_REWARD_1 = 10
 local SEASON_REWARD_2 = 5
@@ -1472,42 +1472,47 @@ function LeafVE:OnGroupUpdate()
   local currentTick = math.floor(Now() / groupInterval)
   local lastAwardedTick = self.lastGroupAwardTick or -1
   if currentTick > lastAwardedTick and self.currentGroupStart and (Now() - self.currentGroupStart) >= groupInterval then
-    local amLeader = UnitIsPartyLeader and UnitIsPartyLeader("player")
-    if amLeader then
-      -- LEADER: calculate points, award self, then broadcast to party/raid
-      local playerName = ShortName(UnitName("player"))
-      if playerName then
-        -- AFK / inactivity check
-        if self:IsPlayerInactive() then
-          self.lastGroupAwardTick = currentTick
-          Print("|cFFFF4444Group points skipped — you appear to be AFK or inactive!|r")
-          return
-        end
-        -- Require at least one party member with a valid Leaf Village rank
-        local hasValidRank = false
-        for _, guildieName in ipairs(guildies) do
-          local info = self.guildRosterCache[Lower(guildieName)]
-          if info and info.rank and ACCESS_RANKS[Lower(Trim(info.rank))] then
-            hasValidRank = true
-            break
-          end
-        end
-        if not hasValidRank then
-          self.lastGroupAwardTick = currentTick
-          return
-        end
-        self:ApplyGroupPointAward(playerName, GROUP_POINTS, numGuildies, table.concat(guildies, ", "))
+    local playerName = ShortName(UnitName("player"))
+    if not playerName then return end
+    -- Elect the "guildie broadcaster": alphabetically-first among all guildies including self.
+    -- This is deterministic for every client regardless of who the WoW party leader is, so
+    -- even when the party leader is not a guild member the award is still broadcast by a guildie.
+    local broadcasterCandidates = {playerName}
+    for _, g in ipairs(guildies) do table.insert(broadcasterCandidates, g) end
+    table.sort(broadcasterCandidates)
+    local amBroadcaster = (Lower(playerName) == Lower(broadcasterCandidates[1]))
+    if amBroadcaster then
+      -- GUILDIE BROADCASTER: calculate points, award self, then broadcast to party/raid
+      -- AFK / inactivity check
+      if self:IsPlayerInactive() then
         self.lastGroupAwardTick = currentTick
-        -- Broadcast the award to all other party/raid members so they all get the same result
-        local channel = isRaid and "RAID" or "PARTY"
-        SendAddonMessage("LeafVE", "GRPAWARD:"..GROUP_POINTS.."|"..numGuildies.."|"..table.concat(guildies, ","), channel)
+        Print("|cFFFF4444Group points skipped — you appear to be AFK or inactive!|r")
+        return
       end
+      -- Require at least one party member with a valid Leaf Village rank
+      local hasValidRank = false
+      for _, guildieName in ipairs(guildies) do
+        local info = self.guildRosterCache[Lower(guildieName)]
+        if info and info.rank and ACCESS_RANKS[Lower(Trim(info.rank))] then
+          hasValidRank = true
+          break
+        end
+      end
+      if not hasValidRank then
+        self.lastGroupAwardTick = currentTick
+        return
+      end
+      self:ApplyGroupPointAward(playerName, GROUP_POINTS, numGuildies, table.concat(guildies, ", "))
+      self.lastGroupAwardTick = currentTick
+      -- Broadcast the award to all other party/raid members so they all get the same result
+      local channel = isRaid and "RAID" or "PARTY"
+      SendAddonMessage("LeafVE", "GRPAWARD:"..GROUP_POINTS.."|"..numGuildies.."|"..table.concat(guildies, ","), channel)
     else
-      -- NON-LEADER: wait for the leader's GRPAWARD broadcast; fall back after grace period
+      -- NON-BROADCASTER: wait for the guildie broadcaster's GRPAWARD; fall back after grace period
       if not self.grpAwardFallbackAt then
         self.grpAwardFallbackAt = Now() + GRPAWARD_GRACE_PERIOD
       elseif Now() >= self.grpAwardFallbackAt then
-        -- Grace period elapsed — leader may not have the addon; self-award as fallback
+        -- Grace period elapsed — guildie broadcaster may not have the addon; self-award as fallback
         self.grpAwardFallbackAt = nil
         local playerName = ShortName(UnitName("player"))
         if playerName then
@@ -1532,7 +1537,7 @@ function LeafVE:OnGroupUpdate()
           self.lastGroupAwardTick = currentTick
         end
       end
-      -- else: within grace period, wait for leader's broadcast
+      -- else: within grace period, wait for guildie broadcaster's GRPAWARD
     end
   end
 end
@@ -2869,30 +2874,8 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     end
     return
 
-  -- Handle group award broadcast from party/raid leader
+  -- Handle group award broadcast from guildie broadcaster
   elseif string.sub(message, 1, 9) == "GRPAWARD:" then
-    -- Ignore if we are the leader (we already awarded ourselves in OnGroupUpdate)
-    if UnitIsPartyLeader and UnitIsPartyLeader("player") then return end
-    -- Verify the sender is the actual party/raid leader
-    local isFromLeader = false
-    local numRaid = GetNumRaidMembers()
-    if numRaid > 0 then
-      for i = 1, numRaid do
-        local raidName = UnitName("raid"..i)
-        if raidName and Lower(ShortName(raidName)) == Lower(sender) then
-          if UnitIsPartyLeader("raid"..i) then isFromLeader = true break end
-        end
-      end
-    else
-      local numParty = GetNumPartyMembers()
-      for i = 1, numParty do
-        local partyName = UnitName("party"..i)
-        if partyName and Lower(ShortName(partyName)) == Lower(sender) then
-          if UnitIsPartyLeader("party"..i) then isFromLeader = true break end
-        end
-      end
-    end
-    if not isFromLeader then return end
     -- Parse "GRPAWARD:pointsPerGuildie|numGuildies|guildie1,guildie2,..."
     local rest = string.sub(message, 10)
     local p1 = string.find(rest, "|")
@@ -2904,9 +2887,24 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     local numGuildies = tonumber(string.sub(rest2, 1, p2 - 1))
     local guildieNames = string.sub(rest2, p2 + 1)
     if not pointsPerGuildie or not numGuildies then return end
+    -- Verify sender is the expected guildie broadcaster: alphabetically-first among
+    -- {sender} ∪ {guildies in message}.  This mirrors the election in OnGroupUpdate.
+    local broadcasterCandidates = {sender}
+    local bpos = 1
+    local bsearch = guildieNames .. ","
+    while bpos <= string.len(bsearch) do
+      local bcomma = string.find(bsearch, ",", bpos)
+      if not bcomma then break end
+      table.insert(broadcasterCandidates, string.sub(bsearch, bpos, bcomma - 1))
+      bpos = bcomma + 1
+    end
+    table.sort(broadcasterCandidates)
+    if Lower(sender) ~= Lower(broadcasterCandidates[1]) then return end
     local playerName = ShortName(UnitName("player"))
     if not playerName then return end
-    -- Verify this player is in the guildie list broadcast by the leader
+    -- Ignore if we are the broadcaster (we already awarded ourselves in OnGroupUpdate)
+    if Lower(playerName) == Lower(sender) then return end
+    -- Verify this player is in the guildie list broadcast by the guildie broadcaster
     local inList = false
     local pos = 1
     local searchStr = guildieNames .. ","
