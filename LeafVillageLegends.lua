@@ -196,13 +196,13 @@ BADGES = {
   {id = "total_logins_100", name = "Regular",        desc = "Earn 100 login points",         icon = "Interface\\Icons\\Spell_Arcane_TeleportIronForge", category = "Activity",   quality = BADGE_QUALITY.UNCOMMON},
   
   -- Group Content (AUTO-TRACKED)
-  {id = "guildie_hours_1",     name = "Guildie Group Hours I",   desc = "Spend 1 guildie group hour",       icon = "Interface\\Icons\\INV_Banner_02",   category = "Social", quality = BADGE_QUALITY.COMMON},
-  {id = "guildie_hours_10",    name = "Guildie Group Hours II",  desc = "Spend 10 guildie group hours",     icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
-  {id = "guildie_hours_25",    name = "Guildie Group Hours III", desc = "Spend 25 guildie group hours",     icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
-  {id = "guildie_hours_50",    name = "Guildie Group Hours IV",  desc = "Spend 50 guildie group hours",     icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
-  {id = "guildie_hours_100",   name = "Guildie Group Hours V",   desc = "Spend 100 guildie group hours",    icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
-  {id = "guildie_hours_1000",  name = "Guildie Group Hours VI",  desc = "Spend 1000 guildie group hours",   icon = "Interface\\Icons\\INV_Crown_01",    category = "Social", quality = BADGE_QUALITY.EPIC},
-  {id = "guildie_hours_10000", name = "Guildie Group Hours VII", desc = "Spend 10000 guildie group hours",  icon = "Interface\\Icons\\INV_Crown_02",    category = "Social", quality = BADGE_QUALITY.LEGENDARY},
+  {id = "guildie_hours_1",     name = "Guildie Group Hours I",   desc = "Obtain 1 guildie group hour",       icon = "Interface\\Icons\\INV_Banner_02",   category = "Social", quality = BADGE_QUALITY.COMMON},
+  {id = "guildie_hours_10",    name = "Guildie Group Hours II",  desc = "Obtain 10 guildie group hours",     icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
+  {id = "guildie_hours_25",    name = "Guildie Group Hours III", desc = "Obtain 25 guildie group hours",     icon = "Interface\\Icons\\INV_Misc_Gift_02", category = "Social", quality = BADGE_QUALITY.UNCOMMON},
+  {id = "guildie_hours_50",    name = "Guildie Group Hours IV",  desc = "Obtain 50 guildie group hours",     icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
+  {id = "guildie_hours_100",   name = "Guildie Group Hours V",   desc = "Obtain 100 guildie group hours",    icon = "Interface\\Icons\\INV_Banner_01",   category = "Social", quality = BADGE_QUALITY.RARE},
+  {id = "guildie_hours_1000",  name = "Guildie Group Hours VI",  desc = "Obtain 1000 guildie group hours",   icon = "Interface\\Icons\\INV_Crown_01",    category = "Social", quality = BADGE_QUALITY.EPIC},
+  {id = "guildie_hours_10000", name = "Guildie Group Hours VII", desc = "Obtain 10000 guildie group hours",  icon = "Interface\\Icons\\INV_Crown_02",    category = "Social", quality = BADGE_QUALITY.LEGENDARY},
   
   -- Shoutouts (AUTO-TRACKED)
   {id = "first_shoutout_given",    name = "Generous Soul",   desc = "Give your first shoutout",    icon = "Interface\\Icons\\INV_Letter_15",                    category = "Recognition", quality = BADGE_QUALITY.COMMON},
