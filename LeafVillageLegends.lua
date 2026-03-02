@@ -24,7 +24,7 @@ LeafVE.version = "11.5"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
 -- cannot corrupt the shared leaderboard / badge data.
-LeafVE.minCompatVersion = "11.3"
+LeafVE.minCompatVersion = "11.5"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
