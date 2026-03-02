@@ -20,11 +20,14 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "11.5"
+LeafVE.version = "11.6"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
 -- cannot corrupt the shared leaderboard / badge data.
-LeafVE.minCompatVersion = "11.3"
+LeafVE.minCompatVersion = "11.6"
+
+-- The latest published version; used to detect when the running addon is outdated.
+local LATEST_VERSION = "11.6"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
@@ -2343,7 +2346,8 @@ local function VersionLessThan(a, b)
   return amin < bmin
 end
 
--- Returns true when a sender's known version meets LeafVE.minCompatVersion.
+-- Returns true only when a sender's known version exactly matches LeafVE.version.
+-- This prevents cross-version data and resets from reaching the local client.
 -- If the version-exchange table has been initialised (VERSIONREQ was sent on
 -- login) but we have not yet received a VERSIONRSP from this sender, we
 -- conservatively reject their messages to prevent stale data from old clients
@@ -2352,7 +2356,7 @@ local function IsSenderCompatible(sender)
   if not LeafVE.versionResponses then return true end
   local senderVer = LeafVE.versionResponses[sender]
   if not senderVer then return false end
-  return not VersionLessThan(senderVer, LeafVE.minCompatVersion)
+  return senderVer == LeafVE.version
 end
 
 function LeafVE:OnAddonMessage(prefix, message, channel, sender)
@@ -2666,40 +2670,15 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     if not IsSenderCompatible(sender) then return end
     local lboardData = string.sub(message, 8)
 
-    -- Parse optional EPOCH:<timestamp>, prefix (added to guard against stale
-    -- data from players who missed a guild-wide reset while offline).
+    -- Parse optional EPOCH:<timestamp>, prefix; strip it but do NOT use it to
+    -- auto-wipe local data (epoch-based auto-resets removed in v11.6 to prevent
+    -- random leaderboard wipes from timestamp mismatches).
     local incomingEpoch = 0
     if string.sub(lboardData, 1, 6) == "EPOCH:" then
       local commaPos = string.find(lboardData, ",")
       if not commaPos then return end  -- malformed epoch prefix; discard
       incomingEpoch = tonumber(string.sub(lboardData, 7, commaPos - 1)) or 0
       lboardData = string.sub(lboardData, commaPos + 1)
-    end
-
-    -- Drop the entire payload when it comes from a sender who has not yet
-    -- applied a reset that we already know about (their data is pre-reset).
-    local myEpoch = (LeafVE_GlobalDB and LeafVE_GlobalDB.globalLeafResetAt) or 0
-    if incomingEpoch < myEpoch then return end
-
-    -- If the sender carries a newer reset epoch we haven't seen, wipe our own
-    -- data first so pre-reset points are not preserved on our side.
-    EnsureDB()
-    local myResetAt = LeafVE_DB.lastLeafResetAt or 0
-    if incomingEpoch > myResetAt then
-      -- Reject epochs that are unreasonably far in the future; a corrupted
-      -- SavedVariables entry with a bogus timestamp would otherwise wipe the
-      -- entire guild's Leaf Points during a normal leaderboard sync.
-      local now = time()
-      if incomingEpoch > now + MAX_FUTURE_EPOCH_OFFSET then
-        Print("|cFFFF4444LeafVE: Ignored suspicious reset epoch from "..tostring(sender).." (epoch "..tostring(incomingEpoch).." is more than 1 week in the future).|r")
-        return
-      end
-      LeafVE:HardResetLeafPoints_Local()
-      -- Override the timestamps set by HardResetLeafPoints_Local so they
-      -- reflect the original admin-reset time, not the current wall-clock.
-      LeafVE_DB.lastLeafResetAt = incomingEpoch
-      if LeafVE_GlobalDB then LeafVE_GlobalDB.globalLeafResetAt = incomingEpoch end
-      Print("|cFFFF4444A guild-wide Leaf Points reset was detected. Your data has been wiped.|r")
     end
 
     -- Parse comma-separated player entries
@@ -2777,23 +2756,14 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     return
 
   -- Handle hard reset of all Leaf Points (admin broadcast)
+  -- Disabled in v11.6: random remote resets are blocked to prevent accidental wipes.
+  -- Admins should use /lve reset or the Manual Reset button instead.
   elseif string.sub(message, 1, 25) == "LVE_ADMIN_RESET_LEAF_ALL:" then
-    -- Validate sender is an admin rank before applying the reset
-    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
-    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
-    if ADMIN_RANKS[senderRank] then
-      LeafVE:HardResetLeafPoints_Local()
-    end
     return
 
   -- Handle hard reset of achievement leaderboard (admin broadcast)
+  -- Disabled in v11.6: random remote resets are blocked to prevent accidental wipes.
   elseif string.sub(message, 1, 28) == "LVE_ADMIN_RESET_ACHIEVE_ALL:" then
-    -- Validate sender is an admin rank before applying the reset
-    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
-    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
-    if ADMIN_RANKS[senderRank] then
-      LeafVE:HardResetAchievementLeaderboard_Local()
-    end
     return
 
   -- Handle admin config broadcast
@@ -2857,22 +2827,8 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     return
 
   -- Handle leaderboard zero-out broadcast from admin (bypasses higher-total-wins guard)
+  -- Disabled in v11.6: random remote resets are blocked to prevent accidental wipes.
   elseif string.sub(message, 1, 22) == "LVE_RESET_LBOARD_ZERO:" then
-    -- Validate sender is an admin rank before applying the reset
-    local senderInfo = LeafVE.guildRosterCache[Lower(sender)]
-    local senderRank = senderInfo and senderInfo.rank and Lower(senderInfo.rank) or ""
-    if ADMIN_RANKS[senderRank] then
-      EnsureDB()
-      LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
-      if LeafVE.UI and LeafVE.UI.panels then
-        if LeafVE.UI.panels.leaderLife and LeafVE.UI.panels.leaderLife:IsVisible() then
-          LeafVE.UI:RefreshLeaderboard("leaderLife")
-        end
-        if LeafVE.UI.panels.leaderWeek and LeafVE.UI.panels.leaderWeek:IsVisible() then
-          LeafVE.UI:RefreshLeaderboard("leaderWeek")
-        end
-      end
-    end
     return
 
   -- Handle gear cache broadcast from a guild member
@@ -5780,6 +5736,19 @@ local function BuildLeaderboardPanel(panel, isWeekly)
   panel.scrollBar = scrollBar
   panel.leaderEntries = {}
   panel.isWeekly = isWeekly
+
+  -- Manual Reset button (visible to admins only)
+  if LeafVE:IsAdminRank() then
+    local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    resetBtn:SetWidth(130)
+    resetBtn:SetHeight(22)
+    resetBtn:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -40, -8)
+    resetBtn:SetText("|cFFFF4444Manual Reset|r")
+    SkinButtonAccent(resetBtn)
+    resetBtn:SetScript("OnClick", function()
+      LeafVE:ShowManualResetConfirm()
+    end)
+  end
 end
 
 function LeafVE.UI:RefreshLeaderboard(panelName)
@@ -7237,6 +7206,104 @@ local function BuildJoinPanel(panel)
   joinText:SetText("|cFFFFD700Please Join Leaf Village to gain access|r")
 end
 
+local function BuildUpdatePanel(panel)
+  local headerBG = panel:CreateTexture(nil, "BACKGROUND")
+  headerBG:SetPoint("TOP", panel, "TOP", -15, -10)
+  headerBG:SetWidth(420)
+  headerBG:SetHeight(50)
+  headerBG:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  headerBG:SetVertexColor(0.15, 0.15, 0.18, 0.9)
+
+  local accentTop = panel:CreateTexture(nil, "BORDER")
+  accentTop:SetPoint("TOPLEFT", headerBG, "TOPLEFT", 0, 0)
+  accentTop:SetPoint("TOPRIGHT", headerBG, "TOPRIGHT", 0, 0)
+  accentTop:SetHeight(3)
+  accentTop:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+  accentTop:SetVertexColor(1, 0.3, 0.3, 1)
+
+  local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  h:SetPoint("TOP", headerBG, "TOP", 0, -10)
+  h:SetText("|cFFFF4444Update Required|r")
+
+  local sub = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  sub:SetPoint("TOP", h, "BOTTOM", 0, -3)
+  sub:SetText("|cFF888888A newer version is available|r")
+
+  local msg = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  msg:SetPoint("TOP", headerBG, "BOTTOM", 0, -30)
+  msg:SetWidth(420)
+  msg:SetJustifyH("CENTER")
+  msg:SetText(
+    "|cFFFFD700Please update to the latest version for full features and compatibility.\n\n|r"..
+    "|cFFCCCCCCDownload from:\nhttps://github.com/Tracer96/Leaf-Village-Legends-By-Methl|r\n\n"..
+    "|cFF888888Your current version: "..LeafVE.version.."\nLatest version: "..LATEST_VERSION.."|r"
+  )
+end
+
+-- Shows an admin confirmation dialog for a full guild-wide manual reset.
+-- Resets local Leaf Points and achievement data, then broadcasts reset messages.
+function LeafVE:ShowManualResetConfirm()
+  if not self:IsAdminRank() then
+    Print("|cFFFF4444Access denied: only Anbu / Sannin / Hokage can perform a manual reset.|r")
+    return
+  end
+  if not LeafVE._confirmManualResetFrame then
+    local cf = CreateFrame("Frame", "LeafVE_ConfirmManualReset", UIParent)
+    cf:SetWidth(420)
+    cf:SetHeight(140)
+    cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+    cf:SetFrameStrata("DIALOG")
+    cf:EnableMouse(true)
+    cf:SetBackdrop({
+      bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = 16, edgeSize = 16,
+      insets = {left = 4, right = 4, top = 4, bottom = 4}
+    })
+    cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+    cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+    local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+    warningText:SetWidth(380)
+    warningText:SetJustifyH("CENTER")
+    warningText:SetText(
+      "|cFFFF4444Are you sure you want to reset all Leaf Points and achievements\n"..
+      "for the guild? This will broadcast a reset to all online members.|r"
+    )
+
+    local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+    confirmBtn:SetWidth(140)
+    confirmBtn:SetHeight(22)
+    confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+    confirmBtn:SetText("|cFFFF4444Confirm Reset|r")
+    confirmBtn:SetScript("OnClick", function()
+      LeafVE:HardResetLeafPoints_Local()
+      LeafVE:HardResetAchievementLeaderboard_Local()
+      if InGuild() then
+        local epoch = time()
+        SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..epoch, "GUILD")
+        SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_ACHIEVE_ALL:"..epoch, "GUILD")
+        SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..epoch, "GUILD")
+        LeafVE:BroadcastLeaderboardData()
+      end
+      Print("|cFFFF4444Manual reset complete: all Leaf Points and achievements wiped.|r")
+      cf:Hide()
+    end)
+
+    local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+    cancelBtn:SetWidth(80)
+    cancelBtn:SetHeight(22)
+    cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+    cf:Hide()
+    LeafVE._confirmManualResetFrame = cf
+  end
+  LeafVE._confirmManualResetFrame:Show()
+end
+
 local function BuildWelcomePanel(panel)
   -- Header
   local headerBG = panel:CreateTexture(nil, "BACKGROUND")
@@ -8225,6 +8292,45 @@ function LeafVE.UI:Build()
   local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
 
+  -- Version check: if this client is running an older version than LATEST_VERSION,
+  -- show only the "Update Required" tab so stale clients cannot access features.
+  if VersionLessThan(LeafVE.version, LATEST_VERSION) then
+    local tabUpdate = TabButton(f, "|cFFFF4444Update Required|r", "LeafVE_TabUpdate")
+    tabUpdate:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -52)
+    tabUpdate:SetWidth(140)
+
+    self.inset = CreateInset(f)
+    self.inset:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -80)
+    self.inset:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -12, 12)
+
+    self.left = CreateFrame("Frame", nil, self.inset)
+    self.left:SetPoint("TOPLEFT", self.inset, "TOPLEFT", 0, 0)
+    self.left:SetPoint("BOTTOMLEFT", self.inset, "BOTTOMLEFT", 0, 0)
+    self.left:SetPoint("TOPRIGHT", self.inset, "TOPRIGHT", -470, 0)
+    self.left:SetPoint("BOTTOMRIGHT", self.inset, "BOTTOMRIGHT", -470, 0)
+
+    self.panels = {}
+    self.panels.update = CreateFrame("Frame", nil, self.left)
+    self.panels.update:SetAllPoints(self.left)
+    BuildUpdatePanel(self.panels.update)
+
+    tabUpdate:SetScript("OnClick", function()
+      self.activeTab = "update"
+      self:Refresh()
+    end)
+
+    self.activeTab = "update"
+    self.panels.update:Show()
+
+    if LeafVE_DB.ui.point and LeafVE_DB.ui.x and LeafVE_DB.ui.y then
+      f:ClearAllPoints()
+      f:SetPoint(LeafVE_DB.ui.point, UIParent, LeafVE_DB.ui.relativePoint or "CENTER", LeafVE_DB.ui.x, LeafVE_DB.ui.y)
+    end
+
+    f:Hide()
+    return
+  end
+
   self.tabJoin = TabButton(f, "Please Join Leaf Village to gain access", "LeafVE_TabJoin")
   self.tabJoin:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -52)
   self.tabJoin:SetWidth(300)
@@ -8457,6 +8563,12 @@ function LeafVE.UI:Refresh()
   if not self.panels then 
     Print("ERROR: Panels not initialized!")
     return 
+  end
+
+  -- If in "update required" mode, only show the update panel.
+  if self.panels.update then
+    self.panels.update:Show()
+    return
   end
 
   local hasAccess = LeafVE:HasLeafAccess()
@@ -9268,6 +9380,10 @@ SlashCmdList["LEAFVE"] = function(msg)
     LeafVE:ToggleUI()
     
   elseif trimmedMsg == "reset" then
+    -- Admin-only: prompt a guild-wide manual reset confirmation.
+    LeafVE:ShowManualResetConfirm()
+
+  elseif trimmedMsg == "uireset" then
     EnsureDB()
     LeafVE_DB.ui.w = 1050
     LeafVE_DB.ui.h = 700

@@ -4,7 +4,7 @@
 
 The Leaf Village Legends addon transforms our guild experience by tracking member contributions, awarding badges, managing leaderboards, and fostering community engagement — all themed around the Naruto-inspired Leaf Village guild hierarchy.
 
-![Version](https://img.shields.io/badge/Version-11.4-green) ![Interface](https://img.shields.io/badge/Interface-1.12-blue) ![Language](https://img.shields.io/badge/Language-Lua-purple)
+![Version](https://img.shields.io/badge/Version-11.6-green) ![Interface](https://img.shields.io/badge/Interface-1.12-blue) ![Language](https://img.shields.io/badge/Language-Lua-purple)
 
 ---
 
@@ -110,6 +110,8 @@ Restricted to guild leadership ranks (**Hokage**, **Sannin**, **Anbu**):
 | `/lve wider` | Increase UI width |
 | `/lve narrower` | Decrease UI width |
 | `/lve shoutout <name> [reason]` | Give a shoutout to a guild member |
+| `/lve reset` | **Admin only** — prompt a guild-wide Leaf Points & achievement reset |
+| `/lve uireset` | Reset UI size to default |
 
 ### UI Tabs
 
