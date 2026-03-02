@@ -961,6 +961,73 @@ function LeafVE:HardResetLeafPoints_Local()
   Print("|cFFFF4444All Leaf Points have been wiped (daily/weekly/season/all-time).|r")
 end
 
+-- Wipes all saved data for the current player (account-wide).
+-- Clears both the per-character DB and all per-player entries in the shared DB,
+-- then broadcasts a removal notice to online guild members so their caches are
+-- also cleaned up, preventing polluted data from entering the leaderboards.
+function LeafVE:ResetMyData()
+  EnsureDB()
+  local me = ShortName(UnitName("player"))
+  if not me then
+    Print("|cFFFF4444Error: Could not determine your character name.|r")
+    return
+  end
+
+  -- Clear all point and tracking data keyed by the player's name.
+  LeafVE_DB.alltime[me]            = nil
+  LeafVE_DB.season[me]             = nil
+  LeafVE_DB.loginStreaks[me]       = nil
+  LeafVE_DB.loginTracking[me]      = nil
+  LeafVE_DB.groupSessions[me]      = nil
+  LeafVE_DB.groupPointsToday[me]   = nil
+  LeafVE_DB.guildieGroupHours[me]  = nil
+  LeafVE_DB.attendance[me]         = nil
+  LeafVE_DB.pointHistory[me]       = nil
+  LeafVE_DB.instanceTracking[me]   = nil
+  LeafVE_DB.questTracking[me]      = nil
+  LeafVE_DB.questCompletions[me]   = nil
+  LeafVE_DB.badges[me]             = nil
+  LeafVE_DB.badgesAnnounced[me]    = nil
+  -- Remove from leaderboard caches.
+  LeafVE_DB.lboard.alltime[me]     = nil
+  LeafVE_DB.lboard.updatedAt[me]   = nil
+  for _, wkData in pairs(LeafVE_DB.lboard.weekly) do
+    if type(wkData) == "table" then wkData[me] = nil end
+  end
+  if LeafVE_DB.lboard.season then
+    LeafVE_DB.lboard.season[me] = nil
+  end
+  -- Remove from daily global point tables.
+  for _, dayData in pairs(LeafVE_DB.global) do
+    if type(dayData) == "table" then dayData[me] = nil end
+  end
+  -- Remove shoutouts sent by this player and shoutouts targeting this player.
+  LeafVE_DB.shoutouts[me] = nil
+  for _, targets in pairs(LeafVE_DB.shoutouts) do
+    if type(targets) == "table" then targets[me] = nil end
+  end
+  -- Clear account-wide (GlobalDB) entries for this player.
+  if LeafVE_GlobalDB.achievementCache then
+    LeafVE_GlobalDB.achievementCache[me] = nil
+  end
+  if LeafVE_GlobalDB.gearCache then
+    LeafVE_GlobalDB.gearCache[me] = nil
+  end
+  if LeafVE_GlobalDB.playerNotes then
+    LeafVE_GlobalDB.playerNotes[me] = nil
+  end
+
+  -- Broadcast so online guild members remove this player from their caches.
+  if InGuild() then
+    SendAddonMessage("LeafVE", "LVE_PLAYER_DATA_RESET:"..me, "GUILD")
+  end
+
+  Print("|cFF2DD35CYour saved data has been reset. Guild members have been notified to remove your entries from their leaderboard caches.|r")
+  if LeafVE.UI and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
+  end
+end
+
 -- Hard-wipes the achievement leaderboard cache locally.
 -- Called by the admin UI button and by the guild broadcast handler.
 function LeafVE:HardResetAchievementLeaderboard_Local()
@@ -2473,6 +2540,58 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     end
     if LeafVE.UI and LeafVE.UI.Refresh then
       LeafVE.UI:Refresh()
+    end
+    return
+  end
+
+  -- Handle a player resetting their own data (spoof-protected: sender must match the declared name).
+  if string.sub(message, 1, 22) == "LVE_PLAYER_DATA_RESET:" then
+    local declaredName = ShortName(string.sub(message, 23))
+    local shortSender = ShortName(sender)
+    -- Only accept the message when the sender matches the declared name.
+    if declaredName and Lower(declaredName) == Lower(shortSender or sender) then
+      EnsureDB()
+      LeafVE_DB.alltime[declaredName]           = nil
+      LeafVE_DB.season[declaredName]            = nil
+      LeafVE_DB.loginStreaks[declaredName]       = nil
+      LeafVE_DB.loginTracking[declaredName]     = nil
+      LeafVE_DB.groupSessions[declaredName]     = nil
+      LeafVE_DB.groupPointsToday[declaredName]  = nil
+      LeafVE_DB.guildieGroupHours[declaredName] = nil
+      LeafVE_DB.attendance[declaredName]        = nil
+      LeafVE_DB.pointHistory[declaredName]      = nil
+      LeafVE_DB.instanceTracking[declaredName]  = nil
+      LeafVE_DB.questTracking[declaredName]     = nil
+      LeafVE_DB.questCompletions[declaredName]  = nil
+      LeafVE_DB.badges[declaredName]            = nil
+      LeafVE_DB.badgesAnnounced[declaredName]   = nil
+      LeafVE_DB.lboard.alltime[declaredName]    = nil
+      LeafVE_DB.lboard.updatedAt[declaredName]  = nil
+      for _, wkData in pairs(LeafVE_DB.lboard.weekly) do
+        if type(wkData) == "table" then wkData[declaredName] = nil end
+      end
+      if LeafVE_DB.lboard.season then
+        LeafVE_DB.lboard.season[declaredName] = nil
+      end
+      for _, dayData in pairs(LeafVE_DB.global) do
+        if type(dayData) == "table" then dayData[declaredName] = nil end
+      end
+      LeafVE_DB.shoutouts[declaredName] = nil
+      for _, targets in pairs(LeafVE_DB.shoutouts) do
+        if type(targets) == "table" then targets[declaredName] = nil end
+      end
+      if LeafVE_GlobalDB.achievementCache then
+        LeafVE_GlobalDB.achievementCache[declaredName] = nil
+      end
+      if LeafVE_GlobalDB.gearCache then
+        LeafVE_GlobalDB.gearCache[declaredName] = nil
+      end
+      if LeafVE_GlobalDB.playerNotes then
+        LeafVE_GlobalDB.playerNotes[declaredName] = nil
+      end
+      if LeafVE.UI and LeafVE.UI.Refresh then
+        LeafVE.UI:Refresh()
+      end
     end
     return
   end
@@ -7291,6 +7410,59 @@ function LeafVE:ShowManualResetConfirm()
   LeafVE._confirmManualResetFrame:Show()
 end
 
+-- Shows a confirmation dialog so any player can reset their own saved data.
+function LeafVE:ShowMyDataResetConfirm()
+  if not LeafVE._confirmMyDataResetFrame then
+    local cf = CreateFrame("Frame", "LeafVE_ConfirmMyDataReset", UIParent)
+    cf:SetWidth(420)
+    cf:SetHeight(150)
+    cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+    cf:SetFrameStrata("DIALOG")
+    cf:EnableMouse(true)
+    cf:SetBackdrop({
+      bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = 16, edgeSize = 16,
+      insets = {left = 4, right = 4, top = 4, bottom = 4}
+    })
+    cf:SetBackdropColor(0.02, 0.05, 0.12, 0.97)
+    cf:SetBackdropBorderColor(0.2, 0.5, 0.9, 1)
+
+    local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+    warningText:SetWidth(380)
+    warningText:SetJustifyH("CENTER")
+    warningText:SetText(
+      "|cFFFFD700Reset YOUR saved data?|r\n\n"..
+      "|cFFCCCCCCThis will permanently delete all your Leaf Points,\n"..
+      "badges, history, and leaderboard entries from your saved\n"..
+      "variables file and notify online guild members to remove\n"..
+      "your entries from their caches.|r"
+    )
+
+    local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+    confirmBtn:SetWidth(140)
+    confirmBtn:SetHeight(22)
+    confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+    confirmBtn:SetText("|cFFFF4444Reset My Data|r")
+    confirmBtn:SetScript("OnClick", function()
+      LeafVE:ResetMyData()
+      cf:Hide()
+    end)
+
+    local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+    cancelBtn:SetWidth(80)
+    cancelBtn:SetHeight(22)
+    cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+    cf:Hide()
+    LeafVE._confirmMyDataResetFrame = cf
+  end
+  LeafVE._confirmMyDataResetFrame:Show()
+end
+
 local function BuildWelcomePanel(panel)
   -- Header
   local headerBG = panel:CreateTexture(nil, "BACKGROUND")
@@ -9511,6 +9683,11 @@ SlashCmdList["LEAFBADGES"] = function()
   for i = 1, table.getn(badges) do
     Print("  - "..badges[i].badge.name..": "..badges[i].badge.desc)
   end
+end
+
+SLASH_LEAFRESETMYDATA1 = "/lvereset"
+SlashCmdList["LEAFRESETMYDATA"] = function()
+  LeafVE:ShowMyDataResetConfirm()
 end
 
 SLASH_LEAFDEBUG1 = "/lvedebug"
