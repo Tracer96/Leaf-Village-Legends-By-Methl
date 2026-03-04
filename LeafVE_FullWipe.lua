@@ -52,6 +52,8 @@ function EnsureDBDefaults()
     LeafVE_GlobalDB.mergedMemberData    = LeafVE_GlobalDB.mergedMemberData    or {}
     LeafVE_GlobalDB.syncCache           = LeafVE_GlobalDB.syncCache           or {}
     LeafVE_GlobalDB.fullWipeVersion     = LeafVE_GlobalDB.fullWipeVersion     or 0
+    LeafVE_GlobalDB.lastWipeTimestamp   = LeafVE_GlobalDB.lastWipeTimestamp   or 0
+    LeafVE_GlobalDB.wipeProtocolVersion = LeafVE_GlobalDB.wipeProtocolVersion or 0
 end
 
 -- ---------------------------------------------------------------------------
@@ -117,8 +119,13 @@ function LeafVE_AdminDoFullWipe()
     -- 3. Apply the wipe immediately to the current character
     ApplyPendingFullWipeIfNeeded()
 
-    -- 4. Broadcast to online guild/raid/party members
-    local msg = "FULL_WIPE_VERSION:" .. newVersion
+    -- 4. Record wipe metadata and activate quarantine
+    LeafVE_GlobalDB.lastWipeTimestamp   = time()
+    LeafVE_GlobalDB.wipeProtocolVersion = _G.LEAFVE_PROTOCOL
+    LeafVE_ActivateWipeQuarantine()
+
+    -- 5. Broadcast to online guild/raid/party members
+    local msg = LeafVE_BuildMessage("FULL_WIPE_VERSION", tostring(newVersion))
     local channel = nil
     if IsInGuild and IsInGuild() then
         channel = "GUILD"
@@ -131,7 +138,7 @@ function LeafVE_AdminDoFullWipe()
         SendAddonMessage("LeafVE", msg, channel)
     end
 
-    -- 5. Debug / acceptance-test output
+    -- 6. Debug / acceptance-test output
     DEFAULT_CHAT_FRAME:AddMessage(
         "|cffff8000[LeafVE ADMIN]|r Full wipe executed. fullWipeVersion=" .. newVersion
     )
@@ -148,11 +155,29 @@ end
 -- when an admin broadcasts a new wipe version.
 -- ---------------------------------------------------------------------------
 function LeafVE_OnAddonMessage(prefix, msg, channel, sender)
-    if string.find(msg, "^FULL_WIPE_VERSION:") then
-        local newVersion = tonumber(string.sub(msg, string.len("FULL_WIPE_VERSION:") + 1))
+    local parsed = LeafVE_ParseMessage(msg, sender)
+    if not parsed then return end
+
+    if parsed.msgType == "FULL_WIPE_VERSION" then
+        local newVersion = tonumber(parsed.payload)
         if newVersion and newVersion > (LeafVE_GlobalDB.fullWipeVersion or 0) then
             LeafVE_GlobalDB.fullWipeVersion = newVersion
+            LeafVE_ActivateWipeQuarantine()
             ApplyPendingFullWipeIfNeeded()
+        end
+        return
+    end
+
+    if parsed.msgType == "SYNC_POINTS" then
+        -- Quarantine gate: if a full wipe was recently performed, drop point-merge
+        -- messages from old clients that have not yet received the wipe broadcast.
+        -- When quarantine is inactive the main addon handler (LeafVE:OnAddonMessage)
+        -- in LeafVillageLegends.lua processes the message normally.
+        if LeafVE_IsQuarantineActive() then
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffff8000[LeafVE]|r Quarantine: ignoring SYNC_POINTS from " .. (sender or "unknown")
+            )
+            return
         end
     end
 end
