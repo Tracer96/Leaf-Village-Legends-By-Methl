@@ -928,6 +928,9 @@ end
 
 -- Hard-wipes ALL Leaf Point data (daily/weekly/season/all-time) locally.
 -- Called by the admin UI button and by the guild broadcast handler.
+-- NOTE: badges and badgesAnnounced are NOT cleared here — badges are permanent
+-- achievements that survive LP resets.  Only a full admin wipe (LeafVE_FullWipe.lua
+-- ApplyPendingFullWipeIfNeeded) should clear badge data.
 function LeafVE:HardResetLeafPoints_Local()
   EnsureDB()
   local resetNow = time()
@@ -946,8 +949,6 @@ function LeafVE:HardResetLeafPoints_Local()
   LeafVE_DB.loginTracking = {}
   LeafVE_DB.shoutouts    = {}
   LeafVE_DB.attendance   = {}
-  LeafVE_DB.badges       = {}
-  LeafVE_DB.badgesAnnounced = {}
   LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
   if LeafVE_GlobalDB then
     LeafVE_GlobalDB.achievementCache = {}
@@ -9045,9 +9046,8 @@ end
 function LeafVE.UI:Refresh()
   EnsureDB()
   
-  -- Safety check
+  -- Safety check: UI may not be built yet on early login events; silently skip.
   if not self.panels then 
-    Print("ERROR: Panels not initialized!")
     return 
   end
 
