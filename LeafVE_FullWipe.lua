@@ -155,6 +155,20 @@ end
 -- when an admin broadcasts a new wipe version.
 -- ---------------------------------------------------------------------------
 function LeafVE_OnAddonMessage(prefix, msg, channel, sender)
+    -- Guard: LeafVE_ParseMessage may not be available if LeafVE_Protocol.lua
+    -- failed to load or is missing. Fall back to the legacy raw-string check.
+    if not LeafVE_ParseMessage then
+        -- Legacy fallback: handle old-style raw FULL_WIPE_VERSION messages
+        if msg and string.find(msg, "^FULL_WIPE_VERSION:") then
+            local newVersion = tonumber(string.sub(msg, string.len("FULL_WIPE_VERSION:") + 1))
+            if newVersion and newVersion > (LeafVE_GlobalDB.fullWipeVersion or 0) then
+                LeafVE_GlobalDB.fullWipeVersion = newVersion
+                ApplyPendingFullWipeIfNeeded()
+            end
+        end
+        return
+    end
+
     local parsed = LeafVE_ParseMessage(msg, sender)
     if not parsed then return end
 
