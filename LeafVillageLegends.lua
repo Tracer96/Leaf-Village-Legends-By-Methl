@@ -961,6 +961,18 @@ function LeafVE:HardResetLeafPoints_Local()
   Print("|cFFFF4444All Leaf Points have been wiped (daily/weekly/season/all-time).|r")
 end
 
+-- Wipes all leaderboard display tables on the local client.
+-- Called by the admin UI confirm button and the LBOARD_WIPE network handler.
+local function LVL_ExecuteLocalLboardWipe()
+  EnsureDB()
+  LeafVE_DB.lboard.alltime   = {}
+  LeafVE_DB.lboard.weekly    = {}
+  LeafVE_DB.lboard.season    = {}
+  LeafVE_DB.lboard.updatedAt = {}
+  LeafVE_DB.alltime          = {}
+  LeafVE_DB.season           = {}
+end
+
 -- Wipes all saved data for the current player (account-wide).
 -- Clears both the per-character DB and all per-player entries in the shared DB,
 -- then broadcasts a removal notice to online guild members so their caches are
@@ -1611,6 +1623,7 @@ function LeafVE:ApplyGroupPointAward(playerName, pointsPerGuildie, numGuildies, 
     LeafVE_DB.groupSessions[playerName] = (LeafVE_DB.groupSessions[playerName] or 0) + 1
     LeafVE_DB.guildieGroupHours[playerName] = (LeafVE_DB.guildieGroupHours[playerName] or 0) + 1
     self:CheckBadgeMilestones(playerName)
+    if InGuild() then self:BroadcastBadgeProgress() end
     Print(string.format("Group points awarded! +%d LP (%d per guildie x%d guildies)", awarded, pointsPerGuildie, numGuildies))
     LeafVE.UI:Refresh()
     self:BroadcastLeaderboardData()
@@ -2087,7 +2100,8 @@ function LeafVE:BroadcastBadgeProgress()
   local attendance = table.getn(LeafVE_DB.attendance[me] or {})
   local streak = (LeafVE_DB.loginStreaks and LeafVE_DB.loginStreaks[me] and LeafVE_DB.loginStreaks[me].current) or 0
   local joinDate = (LeafVE_DB.guildJoinDate and LeafVE_DB.guildJoinDate[me]) or 0
-  SendAddonMessage("LeafVE", "BADGEPROG:"..me..SEP..groupSessions..SEP..attendance..SEP..streak..SEP..joinDate, "GUILD")
+  local guildieGroupHoursMe = (LeafVE_DB.guildieGroupHours and LeafVE_DB.guildieGroupHours[me]) or 0
+  SendAddonMessage("LeafVE", "BADGEPROG:"..me..SEP..groupSessions..SEP..attendance..SEP..streak..SEP..joinDate..SEP..guildieGroupHoursMe, "GUILD")
 end
 
 function LeafVE:BroadcastLeaderboardData()
@@ -2121,7 +2135,13 @@ function LeafVE:BroadcastLeaderboardData()
   if wL + wG + wS > 0 then
     table.insert(data, string.format("W%s:%s:%d:%d:%d", wk, me, wL, wG, wS))
   end
-  
+
+  -- Propagate the admin wipe timestamp so offline members wipe on sync-receive.
+  local wipeAt = (LeafVE_DB.lboard and LeafVE_DB.lboard.wipeAt) or 0
+  if wipeAt > 0 then
+    table.insert(data, "WIPE:" .. wipeAt)
+  end
+
   -- Send in chunks to stay within the 255-byte WoW addon message limit.
   -- "LBOARD:" prefix uses 7 chars; "EPOCH:<10-digit>,": up to 18 chars.
   -- 255 - 7 - 18 = 230 available for entries; we use 210 to leave an
@@ -2500,6 +2520,27 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     return
   end
 
+  -- Handle admin leaderboard wipe broadcast
+  if string.sub(message, 1, 12) == "LBOARD_WIPE:" then
+    EnsureDB()
+    local wipeTime = tonumber(string.sub(message, 13)) or 0
+    if wipeTime > 0 then
+      -- Validate that the sender holds an admin guild rank
+      self:UpdateGuildRosterCache()
+      local senderInfo = self.guildRosterCache[Lower(sender)]
+      local senderRank = senderInfo and senderInfo.rank
+      local isAdmin = senderRank and ADMIN_RANKS[Lower(Trim(senderRank))] == true
+      if not isAdmin then return end
+      if wipeTime > (LeafVE_DB.lboard.wipeAt or 0) then
+        LVL_ExecuteLocalLboardWipe()
+        LeafVE_DB.lboard.wipeAt = wipeTime
+        Print("|cff00ff00[Leaf Village Legends]|r Leaderboard data wiped by guild admin.")
+        if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
+      end
+    end
+    return
+  end
+
   -- Handle badge reset broadcast for a single player
   if string.sub(message, 1, 12) == "BADGESRESET:" then
     local targetPlayer = ShortName(string.sub(message, 13))
@@ -2696,10 +2737,24 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     local p4 = string.find(rest4, SEP)
     if not p4 then return end
     local streak = tonumber(string.sub(rest4, 1, p4 - 1)) or 0
-    local joinDate = tonumber(string.sub(rest4, p4 + 1)) or 0
+    local rest5 = string.sub(rest4, p4 + 1)
+    -- Field 6 (guildieGroupHours) was added later; parse if present, else default to 0.
+    local p5 = string.find(rest5, SEP)
+    local joinDate, receivedGroupHours
+    if p5 then
+      joinDate = tonumber(string.sub(rest5, 1, p5 - 1)) or 0
+      receivedGroupHours = tonumber(string.sub(rest5, p5 + 1)) or 0
+    else
+      joinDate = tonumber(rest5) or 0
+      receivedGroupHours = 0
+    end
     EnsureDB()
     if not LeafVE_DB.groupSessions[progName] or LeafVE_DB.groupSessions[progName] < groupSessions then
       LeafVE_DB.groupSessions[progName] = groupSessions
+    end
+    if not LeafVE_DB.guildieGroupHours then LeafVE_DB.guildieGroupHours = {} end
+    if not LeafVE_DB.guildieGroupHours[progName] or LeafVE_DB.guildieGroupHours[progName] < receivedGroupHours then
+      LeafVE_DB.guildieGroupHours[progName] = receivedGroupHours
     end
     if not LeafVE_DB.attendance[progName] then LeafVE_DB.attendance[progName] = {} end
     -- Pad attendance array to at least the reported count so badge milestone
@@ -2825,7 +2880,17 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         startPos = string.len(lboardData) + 1
       end
       
-      LeafVE:ReceiveLeaderboardData(sender, playerEntry)
+      if string.sub(playerEntry, 1, 5) == "WIPE:" then
+        local wipeTime = tonumber(string.sub(playerEntry, 6)) or 0
+        if wipeTime > 0 and wipeTime > (LeafVE_DB.lboard.wipeAt or 0) then
+          LVL_ExecuteLocalLboardWipe()
+          LeafVE_DB.lboard.wipeAt = wipeTime
+          Print("|cff00ff00[Leaf Village Legends]|r Leaderboard data wiped by guild admin.")
+          if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
+        end
+      else
+        LeafVE:ReceiveLeaderboardData(sender, playerEntry)
+      end
     end  -- ← CLOSE THE WHILE LOOP
     
     -- Refresh leaderboards if open
@@ -7384,81 +7449,9 @@ local function BuildAdminPanel(panel)
   end)
   yBase = yBase - 34
 
-  -- Helper: Build a set of ALL guild member names (online and offline)
-  local function LVL_GetAllGuildMembers()
-    local members = {}
-    GuildRoster() -- Refresh roster data
-    local numTotal = GetNumGuildMembers(true) -- true = include offline members
-    for i = 1, numTotal do
-      local name = GetGuildRosterInfo(i)
-      if name then
-        -- Strip server suffix if present (e.g. "Player-ServerName" -> "Player")
-        name = ShortName(name) or name
-        members[name] = true
-      end
-    end
-    return members
-  end
-
-  local function LVL_AdminWipeLeaderboardData()
-    EnsureDB()
-    local allMembers = LVL_GetAllGuildMembers()
-    -- Wipe leaderboard entries for every guild member (online and offline)
-    if LeafVE_DB.lboard then
-      -- Clear all-time leaderboard cache
-      if LeafVE_DB.lboard.alltime then
-        for name in pairs(LeafVE_DB.lboard.alltime) do
-          if allMembers[name] then
-            LeafVE_DB.lboard.alltime[name] = nil
-          end
-        end
-      end
-      -- Clear weekly leaderboard cache
-      if LeafVE_DB.lboard.weekly then
-        for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
-          if type(wkData) == "table" then
-            for name in pairs(wkData) do
-              if allMembers[name] then
-                wkData[name] = nil
-              end
-            end
-          end
-        end
-      end
-      -- Clear season leaderboard cache
-      if LeafVE_DB.lboard.season then
-        for name in pairs(LeafVE_DB.lboard.season) do
-          if allMembers[name] then
-            LeafVE_DB.lboard.season[name] = nil
-          end
-        end
-      end
-      -- Clear updatedAt cache entries
-      if LeafVE_DB.lboard.updatedAt then
-        for name in pairs(LeafVE_DB.lboard.updatedAt) do
-          if allMembers[name] then
-            LeafVE_DB.lboard.updatedAt[name] = nil
-          end
-        end
-      end
-    end
-    -- Also wipe the stored all-time and season point data for all guild members
-    if LeafVE_DB.alltime then
-      for name in pairs(LeafVE_DB.alltime) do
-        if allMembers[name] then
-          LeafVE_DB.alltime[name] = nil
-        end
-      end
-    end
-    if LeafVE_DB.season then
-      for name in pairs(LeafVE_DB.season) do
-        if allMembers[name] then
-          LeafVE_DB.season[name] = nil
-        end
-      end
-    end
-    Print("|cffFF6600[LVL Admin]|r Leaderboard data wiped for all guild members.")
-  end
+  -- REMOVED: LVL_GetAllGuildMembers() and LVL_AdminWipeLeaderboardData() from PR #118.
+  -- Those functions only modified the local client's LeafVE_DB, which has no effect on
+  -- other players' data. Replaced by the LBOARD_WIPE broadcast approach below.
 
   -- "Wipe Leaderboard Data" button
   local wipeLboardBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
@@ -7496,8 +7489,17 @@ local function BuildAdminPanel(panel)
       confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
       confirmBtn:SetText("Confirm Wipe")
       confirmBtn:SetScript("OnClick", function()
-        LVL_AdminWipeLeaderboardData()
-        -- Refresh leaderboard panels if open
+        -- 1. Wipe locally (admin's own client)
+        LVL_ExecuteLocalLboardWipe()
+        -- 2. Broadcast the wipe to all online guild members
+        local wipeNow = time()
+        if InGuild() then
+          SendAddonMessage("LeafVE", "LBOARD_WIPE:" .. wipeNow, "GUILD")
+        end
+        -- 3. Store wipe timestamp so the sync system propagates it to offline members
+        EnsureDB()
+        LeafVE_DB.lboard.wipeAt = wipeNow
+        -- 4. Refresh leaderboard panels if open
         if LeafVE.UI and LeafVE.UI.panels then
           if LeafVE.UI.panels.leaderWeek and LeafVE.UI.panels.leaderWeek:IsVisible() then
             LeafVE.UI:RefreshLeaderboard("leaderWeek")
@@ -7509,6 +7511,7 @@ local function BuildAdminPanel(panel)
             LeafVE.UI:Refresh()
           end
         end
+        Print("|cff00ff00[Leaf Village Legends]|r Leaderboard wipe broadcast to all online guild members. Offline members will be wiped on next login via sync.")
         cf:Hide()
       end)
 
