@@ -24,7 +24,7 @@ LeafVE.version = "12.1"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
 -- cannot corrupt the shared leaderboard / badge data.
-LeafVE.minCompatVersion = "12.0"
+LeafVE.minCompatVersion = "12.1"
 
 -- The latest published version; used to detect when the running addon is outdated.
 local LATEST_VERSION = "12.1"
@@ -13312,6 +13312,7 @@ end
 Print("|cFF2DD35CLeaf Village Legends|r v"..LeafVE.version.." loaded!")
 Print("Type |cFFFFD700/lve|r or |cFFFFD700/leaf|r to open the UI")
 Print("Type |cFFFFD700/lvedebug|r for debug commands")
+
 
 
 
