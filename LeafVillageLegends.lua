@@ -94,6 +94,7 @@ local LEAF_POINT_DAILY_CAP = 0
 local GROUP_POINTS = 5                -- points awarded per guild group tick per guildie
 local GROUP_POINTS_DAILY_CAP = 500    -- daily cap for group tick points only
 local GRPAWARD_GRACE_PERIOD = 60      -- seconds non-broadcasters wait for the guildie broadcaster before self-awarding
+local WEEKEND_POINT_MULTIPLIER = 2    -- LP multiplier applied on Saturday/Sunday
 
 local SEASON_REWARD_1 = 10
 local SEASON_REWARD_2 = 5
@@ -602,6 +603,56 @@ end
 local function Now() return time() end
 local function Lower(s) return s and string.lower(s) or "" end
 local function Trim(s) return (string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
+local function StripColorCodes(s)
+  s = s or ""
+  s = string.gsub(s, "|c%x%x%x%x%x%x%x%x", "")
+  s = string.gsub(s, "|r", "")
+  return s
+end
+local function EscapePattern(s)
+  return string.gsub(s or "", "([%(%)%.%%%+%-%*%?%[%^%$])", "%%%1")
+end
+
+-- Extract a potential boss name from combat death text.
+-- Turtle/Classic chat formatting can vary across patches, so keep this permissive.
+local function ExtractBossNameFromDeathMessage(msg)
+  msg = Trim(StripColorCodes(msg))
+  if msg == "" then return nil end
+
+  local directPatterns = {
+    "^(.+) is slain by .+[%.!]?$",
+    "^(.+) was slain by .+[%.!]?$",
+    "^(.+) dies[%.!%s]*$",
+    "^(.+) has died[%.!%s]*$",
+    "^(.+) is dead[%.!%s]*$",
+    "^You have slain (.+)[%.!]?$",
+    "^.+ has slain (.+)[%.!]?$",
+  }
+  for _, pat in ipairs(directPatterns) do
+    local captured = string.match(msg, pat)
+    if captured and Trim(captured) ~= "" then
+      return Trim(captured)
+    end
+  end
+
+  -- Fallback: if the line clearly describes a death, try matching any known boss
+  -- name at the start of the line. This protects against template changes.
+  local lmsg = Lower(msg)
+  local looksLikeDeath = string.find(lmsg, "dies")
+    or string.find(lmsg, "slain")
+    or string.find(lmsg, "has died")
+    or string.find(lmsg, "is dead")
+  if not looksLikeDeath then return nil end
+
+  for knownBoss in pairs(KNOWN_BOSSES) do
+    local escaped = EscapePattern(knownBoss)
+    if msg == knownBoss or string.find(msg, "^"..escaped.."[%s%p]") then
+      return knownBoss
+    end
+  end
+
+  return nil
+end
 
 local function ShortName(name)
   if not name then return nil end
@@ -688,6 +739,21 @@ local function DayKeyFromTS(ts)
 end
 
 local function DayKey(ts) return DayKeyFromTS(ts or Now()) end
+
+local function IsDoublePointsWeekend(ts)
+  local d = date("*t", ts or Now())
+  local wday = d and d.wday
+  return wday == 1 or wday == 7  -- Sunday=1, Saturday=7
+end
+
+local function ApplyPointMultiplier(amount, ts)
+  amount = tonumber(amount) or 0
+  if amount <= 0 then return 0 end
+  if IsDoublePointsWeekend(ts) then
+    return amount * WEEKEND_POINT_MULTIPLIER
+  end
+  return amount
+end
 
 local function WeekStartTS(ts)
   local d = date("*t", ts or Now())
@@ -2006,7 +2072,9 @@ end
 
 function LeafVE:AddPoints(playerName, pointType, amount)
   EnsureDB() playerName = ShortName(playerName) if not playerName then return end
-  amount = amount or 1 local day = DayKey()
+  local now = Now()
+  amount = ApplyPointMultiplier(amount or 1, now)
+  local day = DayKey(now)
   if not LeafVE_DB.global[day] then LeafVE_DB.global[day] = {} end
   if not LeafVE_DB.global[day][playerName] then LeafVE_DB.global[day][playerName] = {L = 0, G = 0, S = 0} end
   local dailyCap = LEAF_POINT_DAILY_CAP
@@ -2492,7 +2560,22 @@ function LeafVE:ApplyGroupPointAward(playerName, pointsPerGuildie, numGuildies, 
   local points = pointsPerGuildie * numGuildies
   if GROUP_POINTS_DAILY_CAP ~= 0 then
     local remaining = GROUP_POINTS_DAILY_CAP - (todayData.earned or 0)
-    if points > remaining then points = remaining end
+    local now = Now()
+    local projectedAward = ApplyPointMultiplier(points, now)
+    if projectedAward > remaining then
+      -- AddPoints may multiply weekend awards; trim the pre-multiplier input so
+      -- the post-multiplier result does not overshoot the group-specific cap.
+      if IsDoublePointsWeekend(now) then
+        points = math.floor(remaining / WEEKEND_POINT_MULTIPLIER)
+      else
+        points = remaining
+      end
+    end
+    if points <= 0 then
+      Print(string.format("|cFFFF4444Group points skipped - daily group cap of %d LP reached!|r", GROUP_POINTS_DAILY_CAP))
+      if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
+      return 0
+    end
   end
 
   local awarded = self:AddPoints(playerName, "G", points)
@@ -2715,25 +2798,22 @@ function LeafVE:OnInstanceExit()
 end
 
 function LeafVE:OnBossKillChat(msg)
-  -- Match "BossName is slain by PlayerName." or "BossName is slain by PlayerName!"
-  local bossName = string.match(msg, "^(.+) is slain by .+[%.!]$")
-  -- Fallback: match "BossName dies." (environmental or alternate death messages)
-  if not bossName then bossName = string.match(msg, "^(.+) dies%.$") end
+  local bossName = ExtractBossNameFromDeathMessage(msg)
   if not bossName then return end
   if not KNOWN_BOSSES[bossName] then return end
   local me = ShortName(UnitName("player"))
   if not me then return end
   EnsureDB()
 
-  -- Dedup: ignore if this boss was already awarded within the last 10 seconds
-  local now = Now()
-  if self.recentBossKills[bossName] and (now - self.recentBossKills[bossName]) < BOSS_KILL_DEDUP_WINDOW then return end
-  self.recentBossKills[bossName] = now
-
   -- Require at least one other guildie in the group (solo runs don't count)
   local guildies = self:GetGroupGuildies()
   local hasGuildie = table.getn(guildies) > 0
   if not hasGuildie then return end
+
+  -- Dedup: ignore if this boss was already awarded within the last 10 seconds
+  local now = Now()
+  if self.recentBossKills[bossName] and (now - self.recentBossKills[bossName]) < BOSS_KILL_DEDUP_WINDOW then return end
+  self.recentBossKills[bossName] = now
 
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
   local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
@@ -3214,19 +3294,20 @@ function LeafVE:MergeShoutoutHistory(payload)
               LeafVE_DB.shoutouts[giver][target] = timestamp
               -- Only award S points if the shoutout postdates the last hard reset.
               if timestamp > (LeafVE_DB.lastLeafResetAt or 0) then
-              local actualDay = DayKeyFromTS(timestamp)
-              if not LeafVE_DB.global[actualDay] then LeafVE_DB.global[actualDay] = {} end
-              if not LeafVE_DB.global[actualDay][target] then LeafVE_DB.global[actualDay][target] = {L=0, G=0, S=0} end
-              LeafVE_DB.global[actualDay][target].S = (LeafVE_DB.global[actualDay][target].S or 0) + 10
-              if not LeafVE_DB.alltime[target] then LeafVE_DB.alltime[target] = {L=0, G=0, S=0} end
-              LeafVE_DB.alltime[target].S = (LeafVE_DB.alltime[target].S or 0) + 10
-              if not LeafVE_DB.season[target] then LeafVE_DB.season[target] = {L=0, G=0, S=0} end
-              LeafVE_DB.season[target].S = (LeafVE_DB.season[target].S or 0) + 10
-              self:CheckBadgeMilestones(target)
-              self:AddToHistory(target, "S", 10, "Shoutout from "..giver.." (synced)")
-              self:CheckAndAwardBadge(giver, "first_shoutout_given")
-              self:CheckAndAwardBadge(target, "first_shoutout_received")
-              updated = true
+                local syncedAward = ApplyPointMultiplier(10, timestamp)
+                local actualDay = DayKeyFromTS(timestamp)
+                if not LeafVE_DB.global[actualDay] then LeafVE_DB.global[actualDay] = {} end
+                if not LeafVE_DB.global[actualDay][target] then LeafVE_DB.global[actualDay][target] = {L=0, G=0, S=0} end
+                LeafVE_DB.global[actualDay][target].S = (LeafVE_DB.global[actualDay][target].S or 0) + syncedAward
+                if not LeafVE_DB.alltime[target] then LeafVE_DB.alltime[target] = {L=0, G=0, S=0} end
+                LeafVE_DB.alltime[target].S = (LeafVE_DB.alltime[target].S or 0) + syncedAward
+                if not LeafVE_DB.season[target] then LeafVE_DB.season[target] = {L=0, G=0, S=0} end
+                LeafVE_DB.season[target].S = (LeafVE_DB.season[target].S or 0) + syncedAward
+                self:CheckBadgeMilestones(target)
+                self:AddToHistory(target, "S", syncedAward, "Shoutout from "..giver.." (synced)")
+                self:CheckAndAwardBadge(giver, "first_shoutout_given")
+                self:CheckAndAwardBadge(target, "first_shoutout_received")
+                updated = true
               end
             elseif timestamp > existing then
               -- Newer timestamp for an already-known entry: update only, no extra point
@@ -11073,6 +11154,9 @@ local function BuildWelcomePanel(panel)
   -- How to earn points
   AddSection("How to Earn Leaf Points", "Interface\\Icons\\INV_Misc_Coin_01")
 
+  panel.welcomeWeekendLine = AddLine("|cFFFFD700Weekend Bonus|r  (All LP gains are doubled on Saturday and Sunday)", 10)
+  yOffset = yOffset - 4
+
   panel.welcomeLoginLine = AddLine("|cFFFFD700Daily Login|r  (+20 LP)", 10)
   AddLine("Log in each day to collect your ninja stipend. Chain logins unlock", 20)
   AddLine("legendary badges at 7 and 30 days straight.", 20)
@@ -12691,6 +12775,9 @@ function LeafVE.UI:RefreshWelcome()
   local opts = LeafVE_DB.options
   local soPts  = (opts and opts.shoutoutPoints) or 10
   local soMax  = (opts and opts.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  if p.welcomeWeekendLine then
+    p.welcomeWeekendLine:SetText("|cFFFFD700Weekend Bonus|r  (All LP gains are doubled on Saturday and Sunday)")
+  end
   if p.welcomeLoginLine then
     p.welcomeLoginLine:SetText("|cFFFFD700Daily Login|r  (+20 LP)")
   end
