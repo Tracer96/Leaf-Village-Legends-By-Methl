@@ -74,8 +74,10 @@ Restricted to guild leadership ranks (**Hokage**, **Sannin**, **Anbu**):
 - View current hard-coded point rules at a glance.
 - **Announce Weekly Standings** to guild chat with one click — preview top 5 standings before announcing.
 - Version check across all online guild members.
+- Hard reset leaderboards, badges, or achievement data.
+- **Wipe Leaderboard Data** — wipes leaderboard data (all-time, weekly, season rankings) for **all guild members**, including offline members. A confirmation dialog is shown before wiping.
 - **Full Data Wipe** — Wipes ALL data (points, badges, history, leaderboards) for every guild member including offline players. Offline members are auto-wiped on next login via a login stamp. A double-confirmation dialog is shown before wiping.
-- Award a random badge for testing.
+- Award or remove badges from individual players.
 
 ### 🔗 Data Sync
 - Peer-to-peer leaderboard syncing over the `GUILD` addon message channel.
@@ -110,8 +112,8 @@ Restricted to guild leadership ranks (**Hokage**, **Sannin**, **Anbu**):
 | `/lve wider` | Increase UI width |
 | `/lve narrower` | Decrease UI width |
 | `/lve shoutout <name> [reason]` | Give a shoutout to a guild member |
+| `/lve reset` | **Admin only** — prompt a guild-wide Leaf Points & achievement reset |
 | `/lve uireset` | Reset UI size to default |
-| `/lvereset` | Reset only your own saved addon data |
 
 ### UI Tabs
 

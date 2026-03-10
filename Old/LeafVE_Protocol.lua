@@ -9,8 +9,8 @@ local LEAFVE_ADDON_VERSION = "11.8"   -- must match ## Version in .toc
 local LEAFVE_PROTOCOL      = 2        -- integer; bump when wire format changes
 local LEAFVE_MIN_PROTOCOL  = 2        -- reject any incoming msg with protocol < this
 
--- Expose protocol number as a global so other addon files can reference it
--- without depending on the local above.
+-- Expose protocol number as a global so other files (e.g. LeafVE_FullWipe.lua)
+-- can reference it without depending on the local above.
 _G.LEAFVE_PROTOCOL = LEAFVE_PROTOCOL
 
 -- ---------------------------------------------------------------------------

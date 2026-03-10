@@ -20,14 +20,14 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "13.0"
+LeafVE.version = "12.1"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
 -- cannot corrupt the shared leaderboard / badge data.
-LeafVE.minCompatVersion = "13.0"
+LeafVE.minCompatVersion = "12.1"
 
 -- The latest published version; used to detect when the running addon is outdated.
-local LATEST_VERSION = "13.0"
+local LATEST_VERSION = "12.1"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
@@ -39,13 +39,9 @@ local GUILD_ROSTER_CACHE_DURATION = 30
 local SHOUTOUT_MAX_PER_DAY = 2
 local LBOARD_RESYNC_COOLDOWN = 30  -- seconds between outgoing LBOARDREQ messages
 local LBOARD_RESPOND_COOLDOWN = 30 -- seconds between responses to LBOARDREQ
-local MYSTATS_RESPOND_COOLDOWN = 5 -- seconds between responses to explicit self-stats requests
 local MAX_FUTURE_EPOCH_OFFSET = 7 * SECONDS_PER_DAY  -- reject reset epochs more than 1 week in the future
 local SHOUT_SYNC_RESPOND_COOLDOWN = 30 -- seconds between shoutout history sync responses
 local DEFAULT_ACHIEVEMENT_POINTS = 10  -- fallback points per achievement when metadata is unavailable
-local FULL_WIPE_GUILD_MARKER = "LVLFW"
-local FULL_WIPE_GUILD_MARKER_PATTERN = "%["..FULL_WIPE_GUILD_MARKER..":(%d+)%]"
-local FULL_WIPE_GUILD_MARKER_STRIP_PATTERN = "%s*%["..FULL_WIPE_GUILD_MARKER..":%d+%]%s*"
 
 local GEAR_BROADCAST_THROTTLE = 10  -- seconds between gear broadcasts
 local GEAR_REQUEST_THROTTLE = 8     -- seconds between re-requesting remote gear for the same player
@@ -285,6 +281,7 @@ end
 
 BADGES = {
   -- Login & Activity (AUTO-TRACKED)
+  {id = "first_login",      name = "First Steps",    desc = "Earn your first login point",   icon = "Interface\\Icons\\INV_Misc_Ribbon_01",            category = "Activity",    quality = BADGE_QUALITY.COMMON},
   {id = "login_streak_7",   name = "Dedicated",      desc = "Login 7 days in a row",         icon = "Interface\\Icons\\Spell_Holy_SealOfWisdom",       category = "Activity",    quality = BADGE_QUALITY.UNCOMMON},
   {id = "login_streak_30",  name = "Truly Dedicated", desc = "Login 30 days in a row",       icon = "Interface\\Icons\\INV_Helmet_66",                 category = "Activity",    quality = BADGE_QUALITY.RARE},
   {id = "login_streak_100", name = "Unbreakable Streak", desc = "Login 100 days in a row",   icon = "Interface\\Icons\\INV_Crown_01",                  category = "Activity",    quality = BADGE_QUALITY.EPIC},
@@ -328,26 +325,6 @@ BADGES = {
   {id = "guild_age_90",  name = "Three Month Veteran", desc = "Be in guild for 90 days",  icon = "Interface\\Icons\\INV_Shield_06",                category = "Loyalty", quality = BADGE_QUALITY.RARE},
   {id = "guild_age_365", name = "One Year Legend",     desc = "Be in guild for 1 year",   icon = "Interface\\Icons\\Ability_Creature_Cursed_02",   category = "Loyalty", quality = BADGE_QUALITY.LEGENDARY},
 }
-
-local REMOVED_BADGE_IDS = {
-  first_login = true,
-}
-
-local function PurgeRemovedBadgesFromMap(playerBadgeMap)
-  if type(playerBadgeMap) ~= "table" then return end
-  for badgeId in pairs(REMOVED_BADGE_IDS) do
-    playerBadgeMap[badgeId] = nil
-  end
-end
-
-local function PurgeRemovedBadgesFromContainer(container)
-  if type(container) ~= "table" then return end
-  for _, playerBadgeMap in pairs(container) do
-    if type(playerBadgeMap) == "table" then
-      PurgeRemovedBadgesFromMap(playerBadgeMap)
-    end
-  end
-end
 
 -- Known Classic WoW boss names for per-boss point awards (CHAT_MSG_COMBAT_HOSTILE_DEATH detection)
 local KNOWN_BOSSES = {
@@ -584,7 +561,6 @@ LeafVE.errorLog = {}
 LeafVE.maxErrors = 50
 LeafVE.lastResyncRequestAt = 0
 LeafVE.lastResyncRespondAt = 0
-LeafVE.lastMyStatsRespondAt = 0
 LeafVE.lastShoutSyncRespondAt = 0
 LeafVE.lastBadgeSyncRespondAt = 0
 LeafVE.lastAchSyncRespondAt = 0
@@ -930,13 +906,12 @@ local function EnsureDB()
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
   if not LeafVE_DB.guildieGroupHours then LeafVE_DB.guildieGroupHours = {} end
-  if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {}, weeklyVersion = {} } end
+  if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
   if not LeafVE_DB.lboard.alltime then LeafVE_DB.lboard.alltime = {} end
   if not LeafVE_DB.lboard.weekly then LeafVE_DB.lboard.weekly = {} end
   if not LeafVE_DB.lboard.season then LeafVE_DB.lboard.season = {} end
   if not LeafVE_DB.lboard.updatedAt then LeafVE_DB.lboard.updatedAt = {} end
-  if not LeafVE_DB.lboard.weeklyVersion then LeafVE_DB.lboard.weeklyVersion = {} end
   -- Migrate: older code stored updatedAt[name] as a plain timestamp number; now it must be a table
   for k, v in pairs(LeafVE_DB.lboard.updatedAt) do
     if type(v) == "number" then LeafVE_DB.lboard.updatedAt[k] = { lifetime = v } end
@@ -944,9 +919,6 @@ local function EnsureDB()
   -- Migrate: ensure weekly[wk] entries are tables, not numbers
   for wk, v in pairs(LeafVE_DB.lboard.weekly) do
     if type(v) ~= "table" then LeafVE_DB.lboard.weekly[wk] = {} end
-    if type(LeafVE_DB.lboard.weeklyVersion[wk]) ~= "table" then
-      LeafVE_DB.lboard.weeklyVersion[wk] = {}
-    end
   end
   if LeafVE_DB.ui.w == nil then LeafVE_DB.ui.w = 950 end
   if LeafVE_DB.ui.h == nil then LeafVE_DB.ui.h = 660 end
@@ -979,45 +951,8 @@ local function EnsureDB()
   if not LeafVE_GlobalDB.lboardCache.alltime then LeafVE_GlobalDB.lboardCache.alltime = {} end
   if not LeafVE_GlobalDB.lboardCache.weekly then LeafVE_GlobalDB.lboardCache.weekly = {} end
   if not LeafVE_GlobalDB.badgeProgressCache then LeafVE_GlobalDB.badgeProgressCache = {} end
+  if not LeafVE_GlobalDB.globalLeafResetAt then LeafVE_GlobalDB.globalLeafResetAt = 0 end
   if not LeafVE_GlobalDB.fullWipeVersion then LeafVE_GlobalDB.fullWipeVersion = 0 end
-  if not LeafVE_DB.badgesArchive then LeafVE_DB.badgesArchive = {} end
-  -- Badge bucket follows full-wipe version so manual resets start a fresh badge season.
-  local currentBadgeBucket = tonumber(LeafVE_GlobalDB.fullWipeVersion) or 0
-  local storedBadgeBucket = tonumber(LeafVE_DB.badgeBucketVersion)
-  if LeafVE_DB.badgeBucketMigrated ~= true then
-    -- One-time migration for clients that had pre-bucket badge data.
-    if currentBadgeBucket > 0 and type(LeafVE_DB.badges) == "table" and next(LeafVE_DB.badges) then
-      LeafVE_DB.badgesArchive["legacy"] = LeafVE_DB.badges
-      LeafVE_DB.badges = {}
-      LeafVE_DB.badgesAnnounced = {}
-    end
-    LeafVE_DB.badgeBucketVersion = currentBadgeBucket
-    LeafVE_DB.badgeBucketMigrated = true
-  elseif storedBadgeBucket == nil then
-    LeafVE_DB.badgeBucketVersion = currentBadgeBucket
-  elseif storedBadgeBucket ~= currentBadgeBucket then
-    if type(LeafVE_DB.badges) == "table" and next(LeafVE_DB.badges) then
-      LeafVE_DB.badgesArchive[tostring(storedBadgeBucket)] = LeafVE_DB.badges
-    end
-    LeafVE_DB.badges = {}
-    LeafVE_DB.badgesAnnounced = {}
-    LeafVE_DB.badgeBucketVersion = currentBadgeBucket
-  end
-  -- Migration/safety: "__fw" is a transport marker, never a real badge entry.
-  for _, badgeMap in pairs(LeafVE_DB.badges or {}) do
-    if type(badgeMap) == "table" then
-      badgeMap["__fw"] = nil
-    end
-  end
-  PurgeRemovedBadgesFromContainer(LeafVE_DB.badges)
-  for _, archivedSeason in pairs(LeafVE_DB.badgesArchive or {}) do
-    PurgeRemovedBadgesFromContainer(archivedSeason)
-  end
-  for announcedKey in pairs(LeafVE_DB.badgesAnnounced or {}) do
-    if announcedKey == "first_login" or (type(announcedKey) == "string" and string.sub(announcedKey, -12) == ":first_login") then
-      LeafVE_DB.badgesAnnounced[announcedKey] = nil
-    end
-  end
   if LeafVE_DB.options.groupPoints == nil then LeafVE_DB.options.groupPoints = GROUP_POINTS end
   if LeafVE_DB.options.loginPoints == nil then LeafVE_DB.options.loginPoints = 20 end
 end
@@ -1031,97 +966,6 @@ local function SamePlayerName(a, b)
   local bn = ShortName(b)
   if not an or not bn then return false end
   return Lower(an) == Lower(bn)
-end
-
-local function CurrentWipeVersion()
-  return (LeafVE_GlobalDB and tonumber(LeafVE_GlobalDB.fullWipeVersion)) or 0
-end
-
-local function PointBucketForEntry(entry)
-  if type(entry) ~= "table" then return 0 end
-  return tonumber(entry._b) or 0
-end
-
-local function IsPointEntryInCurrentBucket(entry)
-  return PointBucketForEntry(entry) == CurrentWipeVersion()
-end
-
-local function EnsurePointEntryCurrentBucket(container, key)
-  if type(container) ~= "table" then
-    return {L = 0, G = 0, S = 0, _b = CurrentWipeVersion()}
-  end
-  local entry = container[key]
-  local bucket = CurrentWipeVersion()
-  if type(entry) ~= "table" or PointBucketForEntry(entry) ~= bucket then
-    entry = {L = 0, G = 0, S = 0, _b = bucket}
-    container[key] = entry
-    return entry
-  end
-  if entry.L == nil then entry.L = 0 end
-  if entry.G == nil then entry.G = 0 end
-  if entry.S == nil then entry.S = 0 end
-  entry._b = bucket
-  return entry
-end
-
-local function SetWeeklyEntryWipeVersion(wk, name, wipeVersion)
-  EnsureDB()
-  wk = wk or WeekKey()
-  name = ShortName(name)
-  if not name then return end
-  if type(LeafVE_DB.lboard.weeklyVersion[wk]) ~= "table" then
-    LeafVE_DB.lboard.weeklyVersion[wk] = {}
-  end
-  LeafVE_DB.lboard.weeklyVersion[wk][name] = tonumber(wipeVersion) or CurrentWipeVersion()
-end
-
-local function GetWeeklyEntryWipeVersion(wk, name)
-  wk = wk or WeekKey()
-  name = ShortName(name)
-  if not name then return nil end
-  local wkMap = LeafVE_DB and LeafVE_DB.lboard and LeafVE_DB.lboard.weeklyVersion and LeafVE_DB.lboard.weeklyVersion[wk]
-  if type(wkMap) ~= "table" then return nil end
-  return tonumber(wkMap[name])
-end
-
-local function ClearWeeklyEntryWipeVersion(wk, name)
-  wk = wk or WeekKey()
-  name = ShortName(name)
-  if not name then return end
-  local wkMap = LeafVE_DB and LeafVE_DB.lboard and LeafVE_DB.lboard.weeklyVersion and LeafVE_DB.lboard.weeklyVersion[wk]
-  if type(wkMap) == "table" then
-    wkMap[name] = nil
-  end
-end
-
-local function PruneLeaderboardForCurrentWipe()
-  EnsureDB()
-  local currentVersion = CurrentWipeVersion()
-  if currentVersion <= 0 then return end
-
-  for name, _ in pairs(LeafVE_DB.lboard.alltime or {}) do
-    local meta = LeafVE_DB.lboard.updatedAt[name]
-    local entryVersion = type(meta) == "table" and tonumber(meta.lifetimeWipeVersion) or nil
-    if entryVersion ~= currentVersion then
-      LeafVE_DB.lboard.alltime[name] = nil
-      if LeafVE_GlobalDB.lboardCache and LeafVE_GlobalDB.lboardCache.alltime then
-        LeafVE_GlobalDB.lboardCache.alltime[name] = nil
-      end
-    end
-  end
-
-  for wk, wkData in pairs(LeafVE_DB.lboard.weekly or {}) do
-    if type(wkData) == "table" then
-      local wkVersions = type(LeafVE_DB.lboard.weeklyVersion[wk]) == "table" and LeafVE_DB.lboard.weeklyVersion[wk] or {}
-      for name, _ in pairs(wkData) do
-        local entryVersion = tonumber(wkVersions[name])
-        if entryVersion ~= currentVersion then
-          wkData[name] = nil
-          wkVersions[name] = nil
-        end
-      end
-    end
-  end
 end
 
 local function StoreLifetimeSnapshot(name, L, G, S, sourceName, authoritative, overwriteSharedCache)
@@ -1141,7 +985,6 @@ local function StoreLifetimeSnapshot(name, L, G, S, sourceName, authoritative, o
   LeafVE_DB.lboard.updatedAt[name].lifetime = Now()
   LeafVE_DB.lboard.updatedAt[name].lifetimeSource = ShortName(sourceName) or sourceName or name
   LeafVE_DB.lboard.updatedAt[name].lifetimeAuthoritative = authoritative and true or false
-  LeafVE_DB.lboard.updatedAt[name].lifetimeWipeVersion = CurrentWipeVersion()
 
   if overwriteSharedCache then
     if not LeafVE_GlobalDB.lboardCache then
@@ -1151,25 +994,6 @@ local function StoreLifetimeSnapshot(name, L, G, S, sourceName, authoritative, o
       LeafVE_GlobalDB.lboardCache.alltime = {}
     end
     LeafVE_GlobalDB.lboardCache.alltime[name] = {L = L, G = G, S = S}
-  end
-end
-
-local function ClearLifetimeSnapshot(name, sourceName, authoritative)
-  EnsureDB()
-  name = ShortName(name)
-  if not name then return end
-
-  LeafVE_DB.lboard.alltime[name] = nil
-  if type(LeafVE_DB.lboard.updatedAt[name]) ~= "table" then
-    LeafVE_DB.lboard.updatedAt[name] = {}
-  end
-  LeafVE_DB.lboard.updatedAt[name].lifetime = Now()
-  LeafVE_DB.lboard.updatedAt[name].lifetimeSource = ShortName(sourceName) or sourceName or name
-  LeafVE_DB.lboard.updatedAt[name].lifetimeAuthoritative = authoritative and true or false
-  LeafVE_DB.lboard.updatedAt[name].lifetimeWipeVersion = CurrentWipeVersion()
-
-  if LeafVE_GlobalDB.lboardCache and LeafVE_GlobalDB.lboardCache.alltime then
-    LeafVE_GlobalDB.lboardCache.alltime[name] = nil
   end
 end
 
@@ -1197,7 +1021,6 @@ end
 local function GetCachedProgressNumber(playerName, field)
   local _, cache = GetBadgeProgressCacheEntry(playerName, false)
   if type(cache) ~= "table" then return 0 end
-  if (tonumber(cache.bucket) or 0) ~= CurrentWipeVersion() then return 0 end
   return tonumber(cache[field]) or 0
 end
 
@@ -1220,16 +1043,11 @@ local function GetBestLifetimeEntry(playerName)
     end
   end
 
-  local localAlltime = LeafVE_DB.alltime and LeafVE_DB.alltime[name]
-  if IsPointEntryInCurrentBucket(localAlltime) then
-    Consider(localAlltime)
-  end
+  Consider(LeafVE_DB.alltime and LeafVE_DB.alltime[name])
   Consider(LeafVE_DB.lboard and LeafVE_DB.lboard.alltime and LeafVE_DB.lboard.alltime[name])
   Consider(LeafVE_GlobalDB.lboardCache and LeafVE_GlobalDB.lboardCache.alltime and LeafVE_GlobalDB.lboardCache.alltime[name])
   local progressCache = LeafVE_GlobalDB.badgeProgressCache and LeafVE_GlobalDB.badgeProgressCache[name]
-  if type(progressCache) == "table" and (tonumber(progressCache.bucket) or 0) == CurrentWipeVersion() then
-    Consider(progressCache.alltime)
-  end
+  Consider(progressCache and progressCache.alltime)
 
   return best or {L = 0, G = 0, S = 0}
 end
@@ -1310,11 +1128,10 @@ local function AggregateGlobalTotalsForPlayer(playerName)
   if not name then return {L = 0, G = 0, S = 0} end
 
   local totals = {L = 0, G = 0, S = 0}
-  local bucket = CurrentWipeVersion()
   for _, dayData in pairs(LeafVE_DB.global or {}) do
     if type(dayData) == "table" then
       local entry = dayData[name]
-      if type(entry) == "table" and PointBucketForEntry(entry) == bucket then
+      if type(entry) == "table" then
         totals.L = totals.L + (tonumber(entry.L) or 0)
         totals.G = totals.G + (tonumber(entry.G) or 0)
         totals.S = totals.S + (tonumber(entry.S) or 0)
@@ -1336,9 +1153,6 @@ local function ResolveLifetimeEntryForDisplay(playerName)
   local localWeek = AggForThisWeek()
 
   local localPts  = LeafVE_DB.alltime[name]
-  if not IsPointEntryInCurrentBucket(localPts) then
-    localPts = nil
-  end
   local syncedPts = LeafVE_DB.lboard.alltime[name]
   local lifeMeta = LeafVE_DB.lboard.updatedAt[name]
   local syncedIsAuthoritative = (type(lifeMeta) == "table" and lifeMeta.lifetimeAuthoritative == true)
@@ -1361,39 +1175,10 @@ local function ResolveLifetimeEntryForDisplay(playerName)
   }
 end
 
--- Builds the exact snapshot used for leaderboard self-broadcasts.
--- This mirrors My Stats reconciliation so refresh requests pull the same totals.
-local function BuildMyStatsSnapshotForPlayer(playerName)
-  EnsureDB()
-  local name = ShortName(playerName)
-  if not name then
-    return {L = 0, G = 0, S = 0}, {L = 0, G = 0, S = 0}
-  end
-
-  local weekAgg = AggForThisWeek()
-  local weekT = weekAgg[name] or {L = 0, G = 0, S = 0}
-
-  local globalSum = AggregateGlobalTotalsForPlayer(name)
-  local leaderboardAlltime = ResolveLifetimeEntryForDisplay(name)
-  local bestAlltime = GetBestLifetimeEntry(name)
-  local alltimeT = {
-    L = math.max(leaderboardAlltime.L or 0, bestAlltime.L or 0, globalSum.L or 0),
-    G = math.max(leaderboardAlltime.G or 0, bestAlltime.G or 0, globalSum.G or 0),
-    S = math.max(leaderboardAlltime.S or 0, bestAlltime.S or 0, globalSum.S or 0),
-  }
-
-  return alltimeT, {
-    L = weekT.L or 0,
-    G = weekT.G or 0,
-    S = weekT.S or 0,
-  }
-end
-
 function LeafVE:CacheBadgeProgress(playerName)
   EnsureDB()
   local name, cache = GetBadgeProgressCacheEntry(playerName, true)
   if not name or type(cache) ~= "table" then return end
-  cache.bucket = CurrentWipeVersion()
 
   local alltime = GetBestLifetimeEntry(name)
   cache.alltime = {
@@ -1432,7 +1217,7 @@ function LeafVE:CacheBadgeProgress(playerName)
   cache.updatedAt = Now()
 end
 
-function LeafVE:UpsertSharedLeaderboard(name, lifetimeEntry, weeklyEntry, wk, forceReplace)
+function LeafVE:UpsertSharedLeaderboard(name, lifetimeEntry, weeklyEntry, wk)
   EnsureDB()
   name = ShortName(name)
   if not name then return end
@@ -1445,7 +1230,7 @@ function LeafVE:UpsertSharedLeaderboard(name, lifetimeEntry, weeklyEntry, wk, fo
 
   if lifetimeEntry then
     local existing = LeafVE_GlobalDB.lboardCache.alltime[name]
-    if forceReplace or LboardEntryTotal(lifetimeEntry) > LboardEntryTotal(existing) then
+    if LboardEntryTotal(lifetimeEntry) > LboardEntryTotal(existing) then
       LeafVE_GlobalDB.lboardCache.alltime[name] = {
         L = lifetimeEntry.L or 0,
         G = lifetimeEntry.G or 0,
@@ -1459,7 +1244,7 @@ function LeafVE:UpsertSharedLeaderboard(name, lifetimeEntry, weeklyEntry, wk, fo
       LeafVE_GlobalDB.lboardCache.weekly[wk] = {}
     end
     local existingW = LeafVE_GlobalDB.lboardCache.weekly[wk][name]
-    if forceReplace or LboardEntryTotal(weeklyEntry) > LboardEntryTotal(existingW) then
+    if LboardEntryTotal(weeklyEntry) > LboardEntryTotal(existingW) then
       LeafVE_GlobalDB.lboardCache.weekly[wk][name] = {
         L = weeklyEntry.L or 0,
         G = weeklyEntry.G or 0,
@@ -1471,7 +1256,6 @@ end
 
 function LeafVE:MergeSharedLeaderboardIntoLocal()
   EnsureDB()
-  PruneLeaderboardForCurrentWipe()
   local cache = LeafVE_GlobalDB.lboardCache
   if not cache then return end
   local wk = WeekKey()
@@ -1483,10 +1267,6 @@ function LeafVE:MergeSharedLeaderboardIntoLocal()
         G = entry.G or 0,
         S = entry.S or 0,
       }
-      if type(LeafVE_DB.lboard.updatedAt[name]) ~= "table" then
-        LeafVE_DB.lboard.updatedAt[name] = {}
-      end
-      LeafVE_DB.lboard.updatedAt[name].lifetimeWipeVersion = CurrentWipeVersion()
     end
   end
 
@@ -1501,7 +1281,6 @@ function LeafVE:MergeSharedLeaderboardIntoLocal()
         G = entry.G or 0,
         S = entry.S or 0,
       }
-      SetWeeklyEntryWipeVersion(wk, name, CurrentWipeVersion())
     end
   end
 end
@@ -1534,62 +1313,6 @@ function LeafVE:AddToHistory(playerName, pointType, amount, reason)
     if string.len(truncReason) > 80 then truncReason = string.sub(truncReason, 1, 80) end
     SendAddonMessage("LeafVE", "PTXN:"..playerName..SEP..tostring(amount)..SEP..tostring(now)..SEP..(pointType or "")..SEP..truncReason, "GUILD")
   end
-end
-
-local function FindBadgeMapForPlayer(badgeTable, playerName)
-  if type(badgeTable) ~= "table" then return nil end
-  local shortName = ShortName(playerName)
-  if not shortName then return nil end
-
-  local direct = badgeTable[shortName]
-  if type(direct) == "table" then
-    return direct
-  end
-
-  local targetLower = Lower(shortName)
-  for name, badgeMap in pairs(badgeTable) do
-    if type(name) == "string" and type(badgeMap) == "table" then
-      local short = ShortName(name)
-      if short and Lower(short) == targetLower then
-        return badgeMap
-      end
-    end
-  end
-  return nil
-end
-
-local function HadBadgeInArchivedSeason(playerName, badgeId)
-  if type(LeafVE_DB) ~= "table" or type(LeafVE_DB.badgesArchive) ~= "table" then
-    return false
-  end
-  for _, seasonBadges in pairs(LeafVE_DB.badgesArchive) do
-    local playerBadges = FindBadgeMapForPlayer(seasonBadges, playerName)
-    if type(playerBadges) == "table" and playerBadges[badgeId] then
-      return true
-    end
-  end
-  return false
-end
-
-local function ShouldAnnounceBadgeInGuild(playerName, badgeId)
-  if not InGuild() then return false end
-  if not badgeId or badgeId == "" then return false end
-  if not LeafVE_DB.badgesAnnounced then LeafVE_DB.badgesAnnounced = {} end
-
-  local bucketKey = tostring(CurrentWipeVersion())..":"..badgeId
-  -- Respect legacy keying while migrating to bucket-scoped flags.
-  if LeafVE_DB.badgesAnnounced[bucketKey] or LeafVE_DB.badgesAnnounced[badgeId] then
-    return false
-  end
-
-  LeafVE_DB.badgesAnnounced[bucketKey] = true
-  LeafVE_DB.badgesAnnounced[badgeId] = true
-
-  -- Suppress season-reset spam for badges already earned in archived seasons.
-  if HadBadgeInArchivedSeason(playerName, badgeId) then
-    return false
-  end
-  return true
 end
 
 function LeafVE:AwardBadge(playerName, badgeId)
@@ -1643,7 +1366,9 @@ function LeafVE:AwardBadge(playerName, badgeId)
   end
 
   -- Send guild chat announcement (only once per badge, never re-announce)
-  if ShouldAnnounceBadgeInGuild(playerName, badgeId) then
+  if InGuild() then
+    if not LeafVE_DB.badgesAnnounced[badgeId] then
+      LeafVE_DB.badgesAnnounced[badgeId] = true
       local badgeQuality = badge.quality or BADGE_QUALITY.COMMON
       local qr, qg, qb = GetBadgeQualityColor(badgeQuality)
       local badgeLink = "|cFF"..RGBToHex(qr, qg, qb).."|Hleafve_badge:"..badge.id.."|h["..badge.name.."]|h|r"
@@ -1652,6 +1377,7 @@ function LeafVE:AwardBadge(playerName, badgeId)
         titleStr = "|cFFFF8000[" .. LeafVE_AchTest_DB[playerName].equippedTitle .. "]|r"
       end
       SendChatMessage(titleStr.."[LeafVE Note] received "..badgeLink.." for contributing to the guild!", "GUILD")
+    end
   end
 
   -- Broadcast badges immediately after awarding
@@ -1690,6 +1416,162 @@ function LeafVE:AwardRandomBadge(playerName)
   end
   local idx = math.random(1, table.getn(unearned))
   self:AwardBadge(playerName, unearned[idx])
+end
+
+function LeafVE:ResetBadges(playerName)
+  EnsureDB()
+  playerName = ShortName(playerName)
+  if not playerName then
+    Print("ERROR: Invalid player name")
+    return
+  end
+  LeafVE_DB.badges[playerName] = {}
+  -- Clear all progress-tracking data for this player so badges cannot immediately re-earn
+  LeafVE_DB.alltime[playerName] = nil
+  LeafVE_DB.season[playerName] = nil
+  LeafVE_DB.loginStreaks[playerName] = nil
+  LeafVE_DB.loginTracking[playerName] = nil
+  LeafVE_DB.groupSessions[playerName] = nil
+  LeafVE_DB.groupPointsToday[playerName] = nil
+  LeafVE_DB.guildieGroupHours[playerName] = nil
+  LeafVE_DB.attendance[playerName] = nil
+  if LeafVE_DB.guildJoinDate then
+    LeafVE_DB.guildJoinDate[playerName] = nil
+  end
+  LeafVE_DB.pointHistory[playerName] = nil
+  LeafVE_DB.instanceTracking[playerName] = nil
+  LeafVE_DB.questTracking[playerName] = nil
+  LeafVE_DB.questCompletions[playerName] = nil
+  LeafVE_DB.lboard.alltime[playerName] = nil
+  for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
+    if type(wkData) == "table" then wkData[playerName] = nil end
+  end
+  for day, dayData in pairs(LeafVE_DB.global) do
+    if type(dayData) == "table" then dayData[playerName] = nil end
+  end
+  for _, targets in pairs(LeafVE_DB.shoutouts) do
+    if type(targets) == "table" then targets[playerName] = nil end
+  end
+  LeafVE_DB.shoutouts[playerName] = nil
+  if LeafVE_GlobalDB.achievementCache then
+    LeafVE_GlobalDB.achievementCache[playerName] = nil
+  end
+  if LeafVE_GlobalDB.lboardCache then
+    if LeafVE_GlobalDB.lboardCache.alltime then
+      LeafVE_GlobalDB.lboardCache.alltime[playerName] = nil
+    end
+    if LeafVE_GlobalDB.lboardCache.weekly then
+      for _, wkData in pairs(LeafVE_GlobalDB.lboardCache.weekly) do
+        if type(wkData) == "table" then wkData[playerName] = nil end
+      end
+    end
+  end
+  if LeafVE_GlobalDB.badgeProgressCache then
+    LeafVE_GlobalDB.badgeProgressCache[playerName] = nil
+  end
+  Print("All badges reset for "..playerName..".")
+  if InGuild() then
+    SendAddonMessage("LeafVE", "BADGESRESET:"..playerName, "GUILD")
+  end
+  local me = ShortName(UnitName("player"))
+  if me and playerName == me then
+    self:BroadcastBadges()
+  end
+  if LeafVE.UI and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
+  end
+end
+
+function LeafVE:ResetAllBadges()
+  EnsureDB()
+  LeafVE_DB.badges = {}
+  -- Clear all progress-tracking tables so badges cannot immediately re-earn
+  LeafVE_DB.alltime      = {}
+  LeafVE_DB.season       = {}
+  LeafVE_DB.global       = {}
+  LeafVE_DB.loginStreaks  = {}
+  LeafVE_DB.loginTracking = {}
+  LeafVE_DB.groupSessions = {}
+  LeafVE_DB.groupCooldowns = {}
+  LeafVE_DB.groupPointsToday = {}
+  LeafVE_DB.guildieGroupHours = {}
+  LeafVE_DB.shoutouts    = {}
+  LeafVE_DB.attendance   = {}
+  LeafVE_DB.guildJoinDate = {}
+  LeafVE_DB.pointHistory = {}
+  LeafVE_DB.weeklyRecap  = {}
+  LeafVE_DB.instanceTracking = {}
+  LeafVE_DB.questTracking = {}
+  LeafVE_DB.questCompletions = {}
+  LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+  LeafVE_GlobalDB.lboardCache = { alltime = {}, weekly = {} }
+  LeafVE_GlobalDB.achievementCache = {}
+  LeafVE_GlobalDB.badgeProgressCache = {}
+  if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
+    LeafVE_AchTest_DB.achievements = {}
+  end
+  Print("All badges reset for all players.")
+  if InGuild() then
+    SendAddonMessage("LeafVE", "BADGESRESETALL", "GUILD")
+  end
+  if LeafVE.UI and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
+  end
+end
+
+-- Hard-wipes ALL Leaf Point data (daily/weekly/season/all-time) locally.
+-- Called by the admin UI button and by the guild broadcast handler.
+-- NOTE: badges and badgesAnnounced are NOT cleared here — badges are permanent
+-- achievements that survive LP resets.  Only a full admin wipe (LeafVE_FullWipe.lua
+-- ApplyPendingFullWipeIfNeeded) should clear badge data.
+function LeafVE:HardResetLeafPoints_Local()
+  EnsureDB()
+  local resetNow = time()
+  LeafVE_DB.global       = {}
+  LeafVE_DB.alltime      = {}
+  LeafVE_DB.season       = {}
+  LeafVE_DB.weeklyRecap  = {}
+  LeafVE_DB.pointHistory = {}
+  LeafVE_DB.instanceTracking = {}
+  LeafVE_DB.questTracking = {}
+  LeafVE_DB.questCompletions = {}
+  LeafVE_DB.groupSessions = {}
+  LeafVE_DB.groupCooldowns = {}
+  LeafVE_DB.groupPointsToday = {}
+  LeafVE_DB.guildieGroupHours = {}
+  LeafVE_DB.loginStreaks  = {}
+  LeafVE_DB.loginTracking = {}
+  LeafVE_DB.shoutouts    = {}
+  LeafVE_DB.attendance   = {}
+  LeafVE_DB.guildJoinDate = {}
+  LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+  if LeafVE_GlobalDB then
+    LeafVE_GlobalDB.lboardCache = { alltime = {}, weekly = {} }
+    LeafVE_GlobalDB.achievementCache = {}
+    LeafVE_GlobalDB.badgeProgressCache = {}
+  end
+  -- Record reset timestamp so offline characters on the same account are also wiped on login
+  LeafVE_DB.lastLeafResetAt = resetNow
+  if LeafVE_GlobalDB then LeafVE_GlobalDB.globalLeafResetAt = resetNow end
+  -- Refresh all visible panels (handles me, leaderWeek, leaderLife, etc.)
+  if LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.Refresh then
+    LeafVE.UI:Refresh()
+  end
+  Print("|cFFFF4444All Leaf Points have been wiped (daily/weekly/season/all-time).|r")
+end
+
+-- Wipes all leaderboard display tables on the local client.
+-- Called by the admin UI confirm button and the LBOARD_WIPE network handler.
+local function LVL_ExecuteLocalLboardWipe()
+  EnsureDB()
+  LeafVE_DB.lboard.alltime   = {}
+  LeafVE_DB.lboard.weekly    = {}
+  LeafVE_DB.lboard.season    = {}
+  LeafVE_DB.lboard.updatedAt = {}
+  LeafVE_DB.alltime          = {}
+  LeafVE_DB.season           = {}
+  LeafVE_GlobalDB.lboardCache = { alltime = {}, weekly = {} }
+  LeafVE_GlobalDB.badgeProgressCache = {}
 end
 
 -- Wipes all saved data for the current player (account-wide).
@@ -1782,6 +1664,23 @@ function LeafVE:ResetMyData()
   end
 end
 
+-- Hard-wipes the achievement leaderboard cache locally.
+-- Called by the admin UI button and by the guild broadcast handler.
+function LeafVE:HardResetAchievementLeaderboard_Local()
+  EnsureDB()
+  LeafVE_GlobalDB.achievementCache = {}
+  if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
+    LeafVE_AchTest_DB.achievements = {}
+  end
+  -- Refresh the achievement leaderboard panel if it is open
+  if LeafVE.UI and LeafVE.UI.panels then
+    if LeafVE.UI.panels.achievements and LeafVE.UI.panels.achievements:IsVisible() then
+      LeafVE.UI:RefreshAchievementsLeaderboard()
+    end
+  end
+  Print("|cFFFF4444Achievement leaderboard cache has been wiped.|r")
+end
+
 -- Wipes ALL addon SavedVariables for this client (daily/weekly/season/lifetime
 -- points, history, badges, leaderboard cache, gear cache, notes, etc.) and then
 -- reloads the UI so the addon starts from a completely clean slate.
@@ -1791,15 +1690,11 @@ function LeafVE:ResetAllData_Local()
   ReloadUI()
 end
 
--- Resets point/history/leaderboard fields on the local player's LeafVE_DB while
--- preserving badge structures and lastWipeApplied so full-wipe bucket transitions
--- can rotate cleanly without losing archived badge seasons.
+-- Resets all point/badge/history fields on the local player's LeafVE_DB while
+-- preserving the lastWipeApplied stamp so the login-stamp check does not
+-- trigger again on the next login.
 function LVE_ResetPlayerDB()
   local wipeApplied = (LeafVE_DB and LeafVE_DB.lastWipeApplied) or 0
-  local preservedBadges = (LeafVE_DB and LeafVE_DB.badges) or nil
-  local preservedBadgesAnnounced = (LeafVE_DB and LeafVE_DB.badgesAnnounced) or nil
-  local preservedBadgeBucketVersion = (LeafVE_DB and LeafVE_DB.badgeBucketVersion) or nil
-  local preservedBadgesArchive = (LeafVE_DB and LeafVE_DB.badgesArchive) or nil
   if LeafVE_DB then
     for k in pairs(LeafVE_DB) do
       LeafVE_DB[k] = nil
@@ -1808,144 +1703,13 @@ function LVE_ResetPlayerDB()
     LeafVE_DB = {}
   end
   LeafVE_DB.lastWipeApplied = wipeApplied
-  if type(preservedBadges) == "table" then
-    LeafVE_DB.badges = preservedBadges
-  end
-  if type(preservedBadgesAnnounced) == "table" then
-    LeafVE_DB.badgesAnnounced = preservedBadgesAnnounced
-  end
-  if preservedBadgeBucketVersion ~= nil then
-    LeafVE_DB.badgeBucketVersion = preservedBadgeBucketVersion
-  end
-  if type(preservedBadgesArchive) == "table" then
-    LeafVE_DB.badgesArchive = preservedBadgesArchive
-  end
   EnsureDB()
 end
 
--- After a full wipe, prevent the same day's auto-login grant from immediately
--- repopulating all-time with +20 L points on the next login refresh.
-local function LVE_StampTodayLoginAsHandled()
-  EnsureDB()
-  local me = ShortName(UnitName("player"))
-  if not me then return end
-  local today = DayKey()
-  if not LeafVE_DB.loginTracking[me] then
-    LeafVE_DB.loginTracking[me] = {}
-  end
-  LeafVE_DB.loginTracking[me][today] = true
-end
-
-local function LVE_ApplyFullWipeVersion(wipeVersion, announceMessage)
-  wipeVersion = tonumber(wipeVersion) or 0
-  if wipeVersion <= 0 then return false end
-
-  LVE_ResetGlobalDB(wipeVersion)
-  local appliedVersion = (LeafVE_GlobalDB and tonumber(LeafVE_GlobalDB.fullWipeVersion)) or wipeVersion
-  LVE_ResetPlayerDB()
-  LeafVE_DB.lastWipeApplied = appliedVersion
-  LVE_StampTodayLoginAsHandled()
-  if announceMessage and announceMessage ~= "" then
-    Print(announceMessage)
-  end
-  if LeafVE.UI and LeafVE.UI.Refresh then
-    LeafVE.UI:Refresh()
-  end
-  return true
-end
-
-local function ShouldApplyIncomingWipeVersion(incomingVersion)
-  incomingVersion = tonumber(incomingVersion) or 0
-  if incomingVersion <= 0 then return false end
-  local localVersion = (LeafVE_GlobalDB and tonumber(LeafVE_GlobalDB.fullWipeVersion)) or 0
-  local lastApplied = (LeafVE_DB and tonumber(LeafVE_DB.lastWipeApplied)) or 0
-  local effectiveLocalVersion = math.max(localVersion, lastApplied)
-  return incomingVersion > effectiveLocalVersion
-end
-
-function LeafVE:BroadcastFullWipeVersion(wipeVersion)
-  if not InGuild() then return end
-  local version = tonumber(wipeVersion) or ((LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or 0)
-  if version and version > 0 then
-    SendAddonMessage("LeafVE", "FULL_WIPE:"..version, "GUILD")
-  end
-end
-
-local function ParseGuildWipeMarkerVersion(infoText)
-  if type(infoText) ~= "string" then return 0 end
-  local markerVersion = string.match(infoText, FULL_WIPE_GUILD_MARKER_PATTERN)
-  return tonumber(markerVersion) or 0
-end
-
-local function BuildGuildInfoTextWithWipeMarker(infoText, wipeVersion)
-  local cleanInfo = string.gsub(tostring(infoText or ""), FULL_WIPE_GUILD_MARKER_STRIP_PATTERN, " ")
-  cleanInfo = Trim(cleanInfo)
-  local marker = "["..FULL_WIPE_GUILD_MARKER..":"..tostring(wipeVersion).."]"
-  if cleanInfo == "" then
-    return marker
-  end
-  return cleanInfo.." "..marker
-end
-
-function LeafVE:PublishGuildWipeMarker(wipeVersion)
-  if not wipeVersion or wipeVersion <= 0 then return false, "invalid_version" end
-  if not InGuild() then return false, "not_in_guild" end
-  if not GetGuildInfoText or not SetGuildInfoText then
-    return false, "guild_info_api_unavailable"
-  end
-
-  local currentInfo = GetGuildInfoText() or ""
-  local currentMarkerVersion = ParseGuildWipeMarkerVersion(currentInfo)
-  if currentMarkerVersion >= wipeVersion then
-    return true, "already_current"
-  end
-
-  local updatedInfo = BuildGuildInfoTextWithWipeMarker(currentInfo, wipeVersion)
-  SetGuildInfoText(updatedInfo)
-  return true, "set_requested"
-end
-
-function LeafVE:ApplyGuildWipeMarkerIfNeeded()
-  EnsureDB()
-  if not InGuild() then return false end
-  if not GetGuildInfoText then return false end
-
-  local guildMarkerVersion = ParseGuildWipeMarkerVersion(GetGuildInfoText() or "")
-  if guildMarkerVersion <= 0 then return false end
-
-  local localVersion = (LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or 0
-  local lastApplied = (LeafVE_DB and LeafVE_DB.lastWipeApplied) or 0
-  local effectiveLocalVersion = math.max(localVersion, lastApplied)
-  if guildMarkerVersion <= effectiveLocalVersion then
-    return false
-  end
-
-  local applied = LVE_ApplyFullWipeVersion(
-    guildMarkerVersion,
-    "|cFFFFD700[LVL]|r Detected guild wipe marker; local data reset applied."
-  )
-  if applied then
-    self:BroadcastFullWipeVersion(guildMarkerVersion)
-  end
-  return applied
-end
-
--- Clears all account-wide caches and stamps fullWipeVersion.
--- When targetVersion is nil, this uses epoch seconds (monotonic fallback) and
--- returns the new version.
-function LVE_ResetGlobalDB(targetVersion)
-  local currentVersion = (LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or 0
-  local newVersion = tonumber(targetVersion)
-  if not newVersion or newVersion <= 0 then
-    -- Use epoch seconds so each admin wipe is globally monotonic across clients.
-    newVersion = Now()
-    if newVersion <= currentVersion then
-      newVersion = currentVersion + 1
-    end
-  elseif newVersion < currentVersion then
-    -- Never move backward; older relays must not downgrade local wipe state.
-    newVersion = currentVersion
-  end
+-- Increments the global wipe counter and clears all shared leaderboard data.
+-- The new fullWipeVersion is returned so callers can broadcast it.
+function LVE_ResetGlobalDB()
+  local newVersion = ((LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or 0) + 1
   if LeafVE_GlobalDB then
     for k in pairs(LeafVE_GlobalDB) do
       LeafVE_GlobalDB[k] = nil
@@ -1956,31 +1720,6 @@ function LVE_ResetGlobalDB(targetVersion)
   LeafVE_GlobalDB.fullWipeVersion = newVersion
   EnsureDB()
   return newVersion
-end
-
--- Admin-only full wipe. This is the sole guild-wide reset path.
-function LeafVE:ExecuteAdminFullDataWipe()
-  if not self:IsAdminRank() then
-    Print("|cFFFF4444Access denied: only Anbu / Sannin / Hokage can perform a full data wipe.|r")
-    return
-  end
-
-  EnsureDB()
-  local wipeVersion = LVE_ResetGlobalDB()
-  LVE_ResetPlayerDB()
-  LeafVE_DB.lastWipeApplied = wipeVersion
-  LVE_StampTodayLoginAsHandled()
-  local markerPublished, markerReason = self:PublishGuildWipeMarker(wipeVersion)
-  if not markerPublished then
-    Print("|cFFFFAA00[LVL]|r Could not publish guild wipe marker ("..tostring(markerReason).."). Offline clients will reset once they receive live guild sync.")
-  end
-
-  self:BroadcastFullWipeVersion(wipeVersion)
-
-  if LeafVE.UI and LeafVE.UI.Refresh then
-    LeafVE.UI:Refresh()
-  end
-  Print("|cFFFF2222[LVL]|r Full data wipe complete for all guild members.")
 end
 
 -- Confirmation popup for the per-user "Reset All Data" feature.
@@ -2000,11 +1739,11 @@ StaticPopupDialogs["LVL_CONFIRM_RESET_ALL"] = {
 
 -- Double-confirmation dialogs for the admin "FULL DATA WIPE" button.
 StaticPopupDialogs["LEAFVE_CONFIRM_FULL_WIPE_2"] = {
-  text = "|cffff0000ARE YOU ABSOLUTELY SURE?|r This will wipe ALL points and history for EVERY guild member including offline players. Badges will move to a new season bucket. This cannot be undone.",
+  text = "|cffff0000ARE YOU ABSOLUTELY SURE?|r This will wipe ALL points, badges, and history for EVERY guild member including offline players. This cannot be undone.",
   button1 = "YES, WIPE EVERYTHING",
   button2 = "Cancel",
   OnAccept = function()
-    LeafVE:ExecuteAdminFullDataWipe()
+    LeafVE_AdminDoFullWipe()
   end,
   timeout = 0,
   whileDead = 1,
@@ -2097,13 +1836,17 @@ function LeafVE:CheckAndAwardBadge(playerName, badgeId)
         self:ShowNotification("Badge Earned! ["..qualityLabel.."]", badge.name..": "..badge.desc, badge.icon, {qr, qg, qb, 1})
       end
       Print("|cFF"..RGBToHex(qr, qg, qb).."["..qualityLabel.."] Badge Earned:|r "..badge.name.." - "..badge.desc)
-      if ShouldAnnounceBadgeInGuild(playerName, badgeId) then
-        local badgeLink = "|cFF"..RGBToHex(qr, qg, qb).."|Hleafve_badge:"..badge.id.."|h["..badge.name.."]|h|r"
-        local titleStr = ""
-        if LeafVE_AchTest_DB and LeafVE_AchTest_DB[playerName] and LeafVE_AchTest_DB[playerName].equippedTitle and LeafVE_AchTest_DB[playerName].equippedTitle ~= "" then
-          titleStr = "|cFFFF8000[" .. LeafVE_AchTest_DB[playerName].equippedTitle .. "]|r"
+      if InGuild() then
+        -- Only announce in guild chat once per badge; never re-announce
+        if not LeafVE_DB.badgesAnnounced[badgeId] then
+          LeafVE_DB.badgesAnnounced[badgeId] = true
+          local badgeLink = "|cFF"..RGBToHex(qr, qg, qb).."|Hleafve_badge:"..badge.id.."|h["..badge.name.."]|h|r"
+          local titleStr = ""
+          if LeafVE_AchTest_DB and LeafVE_AchTest_DB[playerName] and LeafVE_AchTest_DB[playerName].equippedTitle and LeafVE_AchTest_DB[playerName].equippedTitle ~= "" then
+            titleStr = "|cFFFF8000[" .. LeafVE_AchTest_DB[playerName].equippedTitle .. "]|r"
+          end
+          SendChatMessage(titleStr.."[LeafVE Note] received "..badgeLink.." for contributing to the guild!", "GUILD")
         end
-        SendChatMessage(titleStr.."[LeafVE Note] received "..badgeLink.." for contributing to the guild!", "GUILD")
       end
       self:BroadcastBadges()
       if LeafVE.UI.cardCurrentPlayer == playerName then
@@ -2124,13 +1867,15 @@ function LeafVE:CheckBadgeMilestones(playerName)
   
   -- Get player data (prefer the highest cached all-time snapshot)
   local alltime = GetBestLifetimeEntry(playerName)
-  local localAlltime = IsPointEntryInCurrentBucket(LeafVE_DB.alltime[playerName]) and LeafVE_DB.alltime[playerName] or nil
-  if LboardEntryTotal(alltime) > LboardEntryTotal(localAlltime) then
-    LeafVE_DB.alltime[playerName] = {L = alltime.L or 0, G = alltime.G or 0, S = alltime.S or 0, _b = CurrentWipeVersion()}
+  if LboardEntryTotal(alltime) > LboardEntryTotal(LeafVE_DB.alltime[playerName]) then
+    LeafVE_DB.alltime[playerName] = {L = alltime.L or 0, G = alltime.G or 0, S = alltime.S or 0}
   end
   local totalPoints = (alltime.L or 0) + (alltime.G or 0) + (alltime.S or 0)
   
   -- === LOGIN & ACTIVITY ===
+  if alltime.L >= 1 then 
+    self:CheckAndAwardBadge(playerName, "first_login") 
+  end
   if alltime.L >= 100 then 
     self:CheckAndAwardBadge(playerName, "total_logins_100") 
   end
@@ -2237,9 +1982,8 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
   if not name then return nil, nil end
 
   local alltime = GetBestLifetimeEntry(name)
-  local localAlltime = IsPointEntryInCurrentBucket(LeafVE_DB.alltime[name]) and LeafVE_DB.alltime[name] or nil
-  if LboardEntryTotal(alltime) > LboardEntryTotal(localAlltime) then
-    LeafVE_DB.alltime[name] = {L = alltime.L or 0, G = alltime.G or 0, S = alltime.S or 0, _b = CurrentWipeVersion()}
+  if LboardEntryTotal(alltime) > LboardEntryTotal(LeafVE_DB.alltime[name]) then
+    LeafVE_DB.alltime[name] = {L = alltime.L or 0, G = alltime.G or 0, S = alltime.S or 0}
   end
   local totalPoints = (alltime.L or 0) + (alltime.G or 0) + (alltime.S or 0)
 
@@ -2276,11 +2020,9 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
     return GetBestGuildieGroupHours(name), 10000
   elseif badgeId == "shoutout_received_10" or badgeId == "shoutout_received_50" then
     local count = 0
-    local bucket = CurrentWipeVersion()
     for _, targets in pairs(LeafVE_DB.shoutouts or {}) do
-      for t, ts in pairs(targets) do
-        local shoutTs = tonumber(ts) or 0
-        if Lower(t) == Lower(name) and (bucket <= 0 or shoutTs >= bucket) then count = count + 1 end
+      for t, _ in pairs(targets) do
+        if Lower(t) == Lower(name) then count = count + 1 end
       end
     end
     return count, (badgeId == "shoutout_received_10") and 10 or 50
@@ -2348,10 +2090,11 @@ function LeafVE:AddPoints(playerName, pointType, amount)
   amount = ApplyPointMultiplier(amount or 1, now)
   local day = DayKey(now)
   if not LeafVE_DB.global[day] then LeafVE_DB.global[day] = {} end
-  local dayEntry = EnsurePointEntryCurrentBucket(LeafVE_DB.global[day], playerName)
+  if not LeafVE_DB.global[day][playerName] then LeafVE_DB.global[day][playerName] = {L = 0, G = 0, S = 0} end
   local dailyCap = LEAF_POINT_DAILY_CAP
   if dailyCap ~= 0 then
-    local currentTotal = (dayEntry.L or 0) + (dayEntry.G or 0) + (dayEntry.S or 0)
+    local totals = LeafVE_DB.global[day][playerName]
+    local currentTotal = (totals.L or 0) + (totals.G or 0) + (totals.S or 0)
     if currentTotal >= dailyCap then
       return 0
     end
@@ -2362,11 +2105,11 @@ function LeafVE:AddPoints(playerName, pointType, amount)
   if amount <= 0 then
     return 0
   end
-  dayEntry[pointType] = (dayEntry[pointType] or 0) + amount
-  local alltimeEntry = EnsurePointEntryCurrentBucket(LeafVE_DB.alltime, playerName)
-  alltimeEntry[pointType] = (alltimeEntry[pointType] or 0) + amount
-  local seasonEntry = EnsurePointEntryCurrentBucket(LeafVE_DB.season, playerName)
-  seasonEntry[pointType] = (seasonEntry[pointType] or 0) + amount
+  LeafVE_DB.global[day][playerName][pointType] = (LeafVE_DB.global[day][playerName][pointType] or 0) + amount
+  if not LeafVE_DB.alltime[playerName] then LeafVE_DB.alltime[playerName] = {L = 0, G = 0, S = 0} end
+  LeafVE_DB.alltime[playerName][pointType] = (LeafVE_DB.alltime[playerName][pointType] or 0) + amount
+  if not LeafVE_DB.season[playerName] then LeafVE_DB.season[playerName] = {L = 0, G = 0, S = 0} end
+  LeafVE_DB.season[playerName][pointType] = (LeafVE_DB.season[playerName][pointType] or 0) + amount
   self:CacheBadgeProgress(playerName)
   local me = ShortName(UnitName("player"))
   -- Show notification if this is the current player
@@ -3190,16 +2933,14 @@ function LeafVE:GiveShoutout(targetName, reason)
   
   -- Daily cap is tracked per giver character
   local today = DayKey()
-  local bucket = CurrentWipeVersion()
   if not LeafVE_DB.shoutouts[giverName] then 
     LeafVE_DB.shoutouts[giverName] = {} 
   end
   
   local count = 0
   for tname, timestamp in pairs(LeafVE_DB.shoutouts[giverName]) do
-    local shoutTs = tonumber(timestamp) or 0
-    local shoutoutDay = DayKeyFromTS(shoutTs)
-    if (bucket <= 0 or shoutTs >= bucket) and shoutoutDay == today then 
+    local shoutoutDay = DayKeyFromTS(timestamp)
+    if shoutoutDay == today then 
       count = count + 1 
     else 
       LeafVE_DB.shoutouts[giverName][tname] = nil 
@@ -3307,10 +3048,8 @@ function LeafVE:BroadcastBadges()
   EnsureDB()
   local myBadges = LeafVE_DB.badges[me] or {}
   
-  -- Build compressed badge list: "__fw:bucket,badgeID:timestamp,..."
-  -- "__fw" is a lightweight season/bucket marker for compatibility.
+  -- Build compressed badge list: "badgeID:timestamp,badgeID:timestamp,..."
   local badgeData = {}
-  table.insert(badgeData, "__fw:"..tostring(CurrentWipeVersion()))
   for badgeId, timestamp in pairs(myBadges) do
     table.insert(badgeData, badgeId..":"..timestamp)
   end
@@ -3350,8 +3089,6 @@ function LeafVE:BroadcastLeaderboardData(includeKnownCache)
   if not me then return end
   
   EnsureDB()
-  self:ApplyGuildWipeMarkerIfNeeded()
-  PruneLeaderboardForCurrentWipe()
   
   local wk = WeekKey()
   local data = {}
@@ -3373,11 +3110,8 @@ function LeafVE:BroadcastLeaderboardData(includeKnownCache)
     for name, _ in pairs(seen) do
       local isSelf = SamePlayerName(name, me)
       local lbase
-      local myWeeklyExact = nil
       if isSelf then
-        local myLifeExact, myWeekExact = BuildMyStatsSnapshotForPlayer(name)
-        lbase = myLifeExact
-        myWeeklyExact = myWeekExact
+        lbase = LeafVE_DB.alltime[name] or LeafVE_DB.lboard.alltime[name]
       else
         -- Relay only owner-authoritative synced lifetime snapshots for other players.
         local lifeMeta = LeafVE_DB.lboard.updatedAt[name]
@@ -3396,7 +3130,7 @@ function LeafVE:BroadcastLeaderboardData(includeKnownCache)
 
       local wbase
       if isSelf then
-        wbase = myWeeklyExact or weekAgg[name] or syncedWeek[name]
+        wbase = weekAgg[name] or syncedWeek[name]
       else
         -- Relay only synced weekly snapshots for other players.
         wbase = syncedWeek[name]
@@ -3408,80 +3142,52 @@ function LeafVE:BroadcastLeaderboardData(includeKnownCache)
         table.insert(data, string.format("W%s:%s:%d:%d:%d", wk, name, wL, wG, wS))
       end
 
-      local lifeTotal = lL + lG + lS
-      local weekTotal = wL + wG + wS
-      if isSelf then
-        if lifeTotal > 0 then
-          StoreLifetimeSnapshot(name, lL, lG, lS, me, true, true)
-        else
-          ClearLifetimeSnapshot(name, me, true)
-        end
-
-        if type(LeafVE_DB.lboard.weekly[wk]) ~= "table" then
-          LeafVE_DB.lboard.weekly[wk] = {}
-        end
-        if weekTotal > 0 then
-          LeafVE_DB.lboard.weekly[wk][name] = {L = wL, G = wG, S = wS}
-          SetWeeklyEntryWipeVersion(wk, name, CurrentWipeVersion())
-          self:UpsertSharedLeaderboard(name, lifeTotal > 0 and {L = lL, G = lG, S = lS} or nil, {L = wL, G = wG, S = wS}, wk, true)
-        else
-          LeafVE_DB.lboard.weekly[wk][name] = nil
-          ClearWeeklyEntryWipeVersion(wk, name)
-          if LeafVE_GlobalDB.lboardCache and type(LeafVE_GlobalDB.lboardCache.weekly[wk]) == "table" then
-            LeafVE_GlobalDB.lboardCache.weekly[wk][name] = nil
-          end
-          self:UpsertSharedLeaderboard(name, lifeTotal > 0 and {L = lL, G = lG, S = lS} or nil, nil, wk, true)
-        end
+      if isSelf and (lL + lG + lS) > 0 then
+        -- Keep self snapshot authoritative across local/account-wide caches.
+        StoreLifetimeSnapshot(name, lL, lG, lS, me, true, true)
       else
         self:UpsertSharedLeaderboard(name, {L = lL, G = lG, S = lS}, nil, wk)
-        self:UpsertSharedLeaderboard(name, nil, {L = wL, G = wG, S = wS}, wk)
       end
+      self:UpsertSharedLeaderboard(name, nil, {L = wL, G = wG, S = wS}, wk)
     end
   else
-    -- Self snapshot must match My Stats values so refresh pulls exact owner totals.
-    local myLifetimeEntry, myWeeklyEntry = BuildMyStatsSnapshotForPlayer(me)
-    local lL = myLifetimeEntry and (myLifetimeEntry.L or 0) or 0
-    local lG = myLifetimeEntry and (myLifetimeEntry.G or 0) or 0
-    local lS = myLifetimeEntry and (myLifetimeEntry.S or 0) or 0
-    local wL = myWeeklyEntry and (myWeeklyEntry.L or 0) or 0
-    local wG = myWeeklyEntry and (myWeeklyEntry.G or 0) or 0
-    local wS = myWeeklyEntry and (myWeeklyEntry.S or 0) or 0
-    local lifeTotal = lL + lG + lS
-    local weekTotal = wL + wG + wS
-
-    -- Always include self entries (including zero) so peers can clear stale rows.
-    table.insert(data, string.format("L:%s:%d:%d:%d", me, lL, lG, lS))
-    table.insert(data, string.format("W%s:%s:%d:%d:%d", wk, me, wL, wG, wS))
-
-    if lifeTotal > 0 then
+    -- Routine heartbeat broadcasts only self to keep traffic low.
+    local lbase = LeafVE_DB.alltime[me] or LeafVE_DB.lboard.alltime[me]
+    local lL = lbase and (lbase.L or 0) or 0
+    local lG = lbase and (lbase.G or 0) or 0
+    local lS = lbase and (lbase.S or 0) or 0
+    local myLifetimeEntry = nil
+    if lL + lG + lS > 0 then
+      table.insert(data, string.format("L:%s:%d:%d:%d", me, lL, lG, lS))
+      myLifetimeEntry = {L = lL, G = lG, S = lS}
       StoreLifetimeSnapshot(me, lL, lG, lS, me, true, true)
-    else
-      ClearLifetimeSnapshot(me, me, true)
     end
 
-    if type(LeafVE_DB.lboard.weekly[wk]) ~= "table" then
-      LeafVE_DB.lboard.weekly[wk] = {}
+    local weekAgg = AggForThisWeek()
+    local syncedWeek = (type(LeafVE_DB.lboard.weekly[wk]) == "table") and LeafVE_DB.lboard.weekly[wk] or {}
+    local wbase = weekAgg[me] or syncedWeek[me]
+    local wL = wbase and (wbase.L or 0) or 0
+    local wG = wbase and (wbase.G or 0) or 0
+    local wS = wbase and (wbase.S or 0) or 0
+    if wL + wG + wS > 0 then
+      table.insert(data, string.format("W%s:%s:%d:%d:%d", wk, me, wL, wG, wS))
     end
-    if weekTotal > 0 then
-      LeafVE_DB.lboard.weekly[wk][me] = {L = wL, G = wG, S = wS}
-      SetWeeklyEntryWipeVersion(wk, me, CurrentWipeVersion())
-      self:UpsertSharedLeaderboard(me, lifeTotal > 0 and {L = lL, G = lG, S = lS} or nil, {L = wL, G = wG, S = wS}, wk, true)
-    else
-      LeafVE_DB.lboard.weekly[wk][me] = nil
-      ClearWeeklyEntryWipeVersion(wk, me)
-      if LeafVE_GlobalDB.lboardCache and type(LeafVE_GlobalDB.lboardCache.weekly[wk]) == "table" then
-        LeafVE_GlobalDB.lboardCache.weekly[wk][me] = nil
-      end
-      self:UpsertSharedLeaderboard(me, lifeTotal > 0 and {L = lL, G = lG, S = lS} or nil, nil, wk, true)
-    end
+    self:UpsertSharedLeaderboard(me, myLifetimeEntry, {L = wL, G = wG, S = wS}, wk)
+  end
+
+  -- Propagate the admin wipe timestamp so offline members wipe on sync-receive.
+  local wipeAt = (LeafVE_DB.lboard and LeafVE_DB.lboard.wipeAt) or 0
+  if wipeAt > 0 then
+    table.insert(data, "WIPE:" .. wipeAt)
   end
 
   -- Send in chunks to stay within the 255-byte WoW addon message limit.
-  -- Prefix each payload with FW:<fullWipeVersion> so stale clients can
-  -- auto-apply wipes and newer clients can reject pre-wipe snapshots.
+  -- "LBOARD:" prefix uses 7 chars; "EPOCH:<10-digit>,": up to 18 chars.
+  -- 255 - 7 - 18 = 230 available for entries; we use 210 to leave an
+  -- additional safety margin for any protocol overhead.
   if not InGuild() then return end
-  local fullWipeVersion = (LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or 0
-  local versionPrefix = "FW:"..tostring(fullWipeVersion)..","
+  local resetEpoch = (LeafVE_GlobalDB and LeafVE_GlobalDB.globalLeafResetAt) or 0
+  local epochPrefix = "EPOCH:"..resetEpoch..","
   local MAX_CHUNK = 210
   local chunk = {}
   local chunkLen = 0
@@ -3489,7 +3195,7 @@ function LeafVE:BroadcastLeaderboardData(includeKnownCache)
   for _, entry in ipairs(data) do
     local sep = (chunkLen > 0) and 1 or 0  -- account for comma separator
     if chunkLen > 0 and chunkLen + sep + string.len(entry) > MAX_CHUNK then
-      SendAddonMessage("LeafVE", "LBOARD:"..versionPrefix..table.concat(chunk, ","), "GUILD")
+      SendAddonMessage("LeafVE", "LBOARD:"..epochPrefix..table.concat(chunk, ","), "GUILD")
       chunk = {}
       chunkLen = 0
       sep = 0
@@ -3499,11 +3205,7 @@ function LeafVE:BroadcastLeaderboardData(includeKnownCache)
   end
   
   if table.getn(chunk) > 0 then
-    SendAddonMessage("LeafVE", "LBOARD:"..versionPrefix..table.concat(chunk, ","), "GUILD")
-  else
-    -- Still broadcast wipe version when there are no point entries so
-    -- offline clients can learn/apply a wipe before sharing old snapshots.
-    SendAddonMessage("LeafVE", "LBOARD:"..versionPrefix, "GUILD")
+    SendAddonMessage("LeafVE", "LBOARD:"..epochPrefix..table.concat(chunk, ","), "GUILD")
   end
 
   -- Refresh leaderboard panels if any are currently open
@@ -3577,7 +3279,6 @@ function LeafVE:MergeShoutoutHistory(payload)
   if not payload or payload == "" then return end
 
   local me = ShortName(UnitName("player"))
-  local bucket = CurrentWipeVersion()
   local updated = false
   local startPos = 1
 
@@ -3602,11 +3303,8 @@ function LeafVE:MergeShoutoutHistory(payload)
         local target = string.sub(rest, 1, sep2 - 1)
         local timestamp = tonumber(string.sub(rest, sep2 + 1))
         if giver ~= "" and target ~= "" and timestamp then
-          -- Ignore stale shoutout history from pre-wipe seasons.
-          if bucket > 0 and timestamp < bucket then
-            -- no-op
           -- Skip entries where we are the giver (already recorded locally)
-          elseif not (me and Lower(me) == Lower(giver)) then
+          if not (me and Lower(me) == Lower(giver)) then
             if not LeafVE_DB.shoutouts[giver] then
               LeafVE_DB.shoutouts[giver] = {}
             end
@@ -3614,20 +3312,23 @@ function LeafVE:MergeShoutoutHistory(payload)
             if not existing then
               -- Always record dedup entry so this shoutout is not reprocessed in future merges.
               LeafVE_DB.shoutouts[giver][target] = timestamp
-              local syncedAward = ApplyPointMultiplier(10, timestamp)
-              local actualDay = DayKeyFromTS(timestamp)
-              if not LeafVE_DB.global[actualDay] then LeafVE_DB.global[actualDay] = {} end
-              local dayEntry = EnsurePointEntryCurrentBucket(LeafVE_DB.global[actualDay], target)
-              dayEntry.S = (dayEntry.S or 0) + syncedAward
-              local lifeEntry = EnsurePointEntryCurrentBucket(LeafVE_DB.alltime, target)
-              lifeEntry.S = (lifeEntry.S or 0) + syncedAward
-              local seasonEntry = EnsurePointEntryCurrentBucket(LeafVE_DB.season, target)
-              seasonEntry.S = (seasonEntry.S or 0) + syncedAward
-              self:CheckBadgeMilestones(target)
-              self:AddToHistory(target, "S", syncedAward, "Shoutout from "..giver.." (synced)")
-              self:CheckAndAwardBadge(giver, "first_shoutout_given")
-              self:CheckAndAwardBadge(target, "first_shoutout_received")
-              updated = true
+              -- Only award S points if the shoutout postdates the last hard reset.
+              if timestamp > (LeafVE_DB.lastLeafResetAt or 0) then
+                local syncedAward = ApplyPointMultiplier(10, timestamp)
+                local actualDay = DayKeyFromTS(timestamp)
+                if not LeafVE_DB.global[actualDay] then LeafVE_DB.global[actualDay] = {} end
+                if not LeafVE_DB.global[actualDay][target] then LeafVE_DB.global[actualDay][target] = {L=0, G=0, S=0} end
+                LeafVE_DB.global[actualDay][target].S = (LeafVE_DB.global[actualDay][target].S or 0) + syncedAward
+                if not LeafVE_DB.alltime[target] then LeafVE_DB.alltime[target] = {L=0, G=0, S=0} end
+                LeafVE_DB.alltime[target].S = (LeafVE_DB.alltime[target].S or 0) + syncedAward
+                if not LeafVE_DB.season[target] then LeafVE_DB.season[target] = {L=0, G=0, S=0} end
+                LeafVE_DB.season[target].S = (LeafVE_DB.season[target].S or 0) + syncedAward
+                self:CheckBadgeMilestones(target)
+                self:AddToHistory(target, "S", syncedAward, "Shoutout from "..giver.." (synced)")
+                self:CheckAndAwardBadge(giver, "first_shoutout_given")
+                self:CheckAndAwardBadge(target, "first_shoutout_received")
+                updated = true
+              end
             elseif timestamp > existing then
               -- Newer timestamp for an already-known entry: update only, no extra point
               LeafVE_DB.shoutouts[giver][target] = timestamp
@@ -4470,8 +4171,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
       local now = Now()
       if forceRespond or (now - self.lastResyncRespondAt) >= LBOARD_RESPOND_COOLDOWN then
         self.lastResyncRespondAt = now
-        -- Respond with owner-authenticated self snapshot (My Stats exact values).
-        LeafVE:BroadcastLeaderboardData(false)
+        LeafVE:BroadcastLeaderboardData(true)
       end
       if forceRespond or (now - self.lastShoutSyncRespondAt) >= SHOUT_SYNC_RESPOND_COOLDOWN then
         self.lastShoutSyncRespondAt = now
@@ -4489,17 +4189,22 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     return
   end
 
-  -- Handle explicit request for each online player to rebroadcast only their
-  -- own current point totals. This keeps Refresh lightweight and owner-authoritative.
-  if message == "MYSTATSREQ" or message == "MYSTATSREQ_FORCE" then
-    local forceRespond = (message == "MYSTATSREQ_FORCE")
-    local me = ShortName(UnitName("player"))
-    if me and sender ~= me then
-      local now = Now()
-      if forceRespond or (now - (self.lastMyStatsRespondAt or 0)) >= MYSTATS_RESPOND_COOLDOWN then
-        self.lastMyStatsRespondAt = now
-        -- Self-only payload: L/W snapshots sourced directly from this client.
-        LeafVE:BroadcastLeaderboardData(false)
+  -- Handle admin leaderboard wipe broadcast
+  if string.sub(message, 1, 12) == "LBOARD_WIPE:" then
+    EnsureDB()
+    local wipeTime = tonumber(string.sub(message, 13)) or 0
+    if wipeTime > 0 then
+      -- Validate that the sender holds an admin guild rank
+      self:UpdateGuildRosterCache()
+      local senderInfo = self.guildRosterCache[Lower(sender)]
+      local senderRank = senderInfo and senderInfo.rank
+      local isAdmin = senderRank and ADMIN_RANKS[Lower(Trim(senderRank))] == true
+      if not isAdmin then return end
+      if wipeTime > (LeafVE_DB.lboard.wipeAt or 0) then
+        LVL_ExecuteLocalLboardWipe()
+        LeafVE_DB.lboard.wipeAt = wipeTime
+        Print("|cff00ff00[Leaf Village Legends]|r Leaderboard data wiped by guild admin.")
+        if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
       end
     end
     return
@@ -4509,18 +4214,111 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   if string.sub(message, 1, 10) == "FULL_WIPE:" then
     local wipeVersion = tonumber(string.sub(message, 11)) or 0
     if wipeVersion > 0 then
-      -- Accept any guild relay carrying a newer wipe version so wipe propagation
-      -- is reliable even when the original admin packet is missed.
+      -- Validate that the sender holds an admin guild rank
+      self:UpdateGuildRosterCache()
+      local senderInfo = self.guildRosterCache[Lower(sender)]
+      local senderRank = senderInfo and senderInfo.rank
+      local isAdmin = senderRank and ADMIN_RANKS[Lower(Trim(senderRank))] == true
+      if not isAdmin then return end
       EnsureDB()
-      if ShouldApplyIncomingWipeVersion(wipeVersion) then
-        local applied = LVE_ApplyFullWipeVersion(
-          wipeVersion,
-          "|cff00ff00[LVL]|r Your Leaf Point data has been reset by a guild admin."
-        )
-        if applied then
-          self:BroadcastFullWipeVersion(wipeVersion)
+      if wipeVersion > (LeafVE_GlobalDB.fullWipeVersion or 0) then
+        LeafVE_GlobalDB.fullWipeVersion = wipeVersion
+        LVE_ResetPlayerDB()
+        LeafVE_DB.lastWipeApplied = wipeVersion
+        Print("|cff00ff00[LVL]|r Your Leaf Point data has been reset by a guild admin.")
+        if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
+      end
+    end
+    return
+  end
+
+  -- Handle badge reset broadcast for a single player
+  if string.sub(message, 1, 12) == "BADGESRESET:" then
+    local targetPlayer = ShortName(string.sub(message, 13))
+    if targetPlayer then
+      EnsureDB()
+      LeafVE_DB.badges[targetPlayer] = {}
+      LeafVE_DB.alltime[targetPlayer] = nil
+      LeafVE_DB.season[targetPlayer] = nil
+      LeafVE_DB.loginStreaks[targetPlayer] = nil
+      LeafVE_DB.loginTracking[targetPlayer] = nil
+      LeafVE_DB.groupSessions[targetPlayer] = nil
+      LeafVE_DB.groupPointsToday[targetPlayer] = nil
+      LeafVE_DB.guildieGroupHours[targetPlayer] = nil
+      LeafVE_DB.attendance[targetPlayer] = nil
+      if LeafVE_DB.guildJoinDate then LeafVE_DB.guildJoinDate[targetPlayer] = nil end
+      LeafVE_DB.pointHistory[targetPlayer] = nil
+      LeafVE_DB.instanceTracking[targetPlayer] = nil
+      LeafVE_DB.questTracking[targetPlayer] = nil
+      LeafVE_DB.questCompletions[targetPlayer] = nil
+      LeafVE_DB.lboard.alltime[targetPlayer] = nil
+      for wk, wkData in pairs(LeafVE_DB.lboard.weekly) do
+        if type(wkData) == "table" then wkData[targetPlayer] = nil end
+      end
+      for day, dayData in pairs(LeafVE_DB.global) do
+        if type(dayData) == "table" then dayData[targetPlayer] = nil end
+      end
+      for _, targets in pairs(LeafVE_DB.shoutouts) do
+        if type(targets) == "table" then targets[targetPlayer] = nil end
+      end
+      LeafVE_DB.shoutouts[targetPlayer] = nil
+      if LeafVE_GlobalDB.achievementCache then
+        LeafVE_GlobalDB.achievementCache[targetPlayer] = nil
+      end
+      if LeafVE_GlobalDB.lboardCache then
+        if LeafVE_GlobalDB.lboardCache.alltime then
+          LeafVE_GlobalDB.lboardCache.alltime[targetPlayer] = nil
+        end
+        if LeafVE_GlobalDB.lboardCache.weekly then
+          for _, wkData in pairs(LeafVE_GlobalDB.lboardCache.weekly) do
+            if type(wkData) == "table" then wkData[targetPlayer] = nil end
+          end
         end
       end
+      if LeafVE_GlobalDB.badgeProgressCache then
+        LeafVE_GlobalDB.badgeProgressCache[targetPlayer] = nil
+      end
+      if LeafVE.UI and LeafVE.UI.Refresh then
+        LeafVE.UI:Refresh()
+      end
+    end
+    return
+  end
+
+  -- Handle global badge reset broadcast (all players)
+  if message == "BADGESRESETALL" then
+    EnsureDB()
+    LeafVE_DB.badges = {}
+    LeafVE_DB.alltime      = {}
+    LeafVE_DB.season       = {}
+    LeafVE_DB.global       = {}
+    LeafVE_DB.loginStreaks  = {}
+    LeafVE_DB.loginTracking = {}
+    LeafVE_DB.groupSessions = {}
+    LeafVE_DB.groupCooldowns = {}
+    LeafVE_DB.groupPointsToday = {}
+    LeafVE_DB.guildieGroupHours = {}
+    LeafVE_DB.shoutouts    = {}
+    LeafVE_DB.attendance   = {}
+    LeafVE_DB.guildJoinDate = {}
+    LeafVE_DB.pointHistory = {}
+    LeafVE_DB.weeklyRecap  = {}
+    LeafVE_DB.instanceTracking = {}
+    LeafVE_DB.questTracking = {}
+    LeafVE_DB.questCompletions = {}
+    LeafVE_DB.lboard       = { alltime = {}, weekly = {}, season = {}, updatedAt = {} }
+    LeafVE_GlobalDB.lboardCache = { alltime = {}, weekly = {} }
+    LeafVE_GlobalDB.achievementCache = {}
+    LeafVE_GlobalDB.badgeProgressCache = {}
+    LeafVE_GlobalDB.gearCache = {}
+    LeafVE_GlobalDB.specCache = {}
+    LeafVE_GlobalDB.talentCache = {}
+    LeafVE.talentSyncBuffer = {}
+    if LeafVE_AchTest_DB and LeafVE_AchTest_DB.achievements then
+      LeafVE_AchTest_DB.achievements = {}
+    end
+    if LeafVE.UI and LeafVE.UI.Refresh then
+      LeafVE.UI:Refresh()
     end
     return
   end
@@ -4697,7 +4495,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     
     -- Parse badge data (Vanilla WoW compatible)
     local badges = {}
-    local incomingBadgeBucket = 0
     local startPos = 1
     
     while startPos <= string.len(badgeData) do
@@ -4717,32 +4514,19 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
       if colonPos then
         local badgeId = string.sub(badgeEntry, 1, colonPos - 1)
         local timestamp = string.sub(badgeEntry, colonPos + 1)
-        if badgeId == "__fw" then
-          incomingBadgeBucket = tonumber(timestamp) or 0
-        else
-          badges[badgeId] = tonumber(timestamp)
-        end
+        badges[badgeId] = tonumber(timestamp)
       end
-    end
-
-    local localBucket = CurrentWipeVersion()
-    if incomingBadgeBucket > 0 then
-      if incomingBadgeBucket ~= localBucket then
-        return
-      end
-    elseif localBucket > 0 then
-      -- Ignore legacy badge payloads without bucket marker after bucketized wipes.
-      return
     end
     
-    -- Owner snapshot for this season/bucket is authoritative.
+    -- Merge received badges (never discard locally-known badges; keep earliest timestamp)
     if not LeafVE_DB.badges[sender] then
       LeafVE_DB.badges[sender] = {}
     end
-    LeafVE_DB.badges[sender] = {}
     for badgeId, timestamp in pairs(badges) do
-      if timestamp and timestamp > 0 then
+      if not LeafVE_DB.badges[sender][badgeId] then
         LeafVE_DB.badges[sender][badgeId] = timestamp
+      else
+        LeafVE_DB.badges[sender][badgeId] = math.min(LeafVE_DB.badges[sender][badgeId], timestamp)
       end
     end
     
@@ -4759,8 +4543,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   -- Parse badge progress broadcast
   elseif string.sub(message, 1, 10) == "BADGEPROG:" then
     if not IsSenderCompatible(sender) then return end
-    local me = ShortName(UnitName("player"))
-    if me and SamePlayerName(sender, me) then return end
     local rest = string.sub(message, 11)
     local p1 = string.find(rest, SEP)
     if not p1 then return end
@@ -4816,7 +4598,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         LeafVE_DB.guildJoinDate[normalizedProgName] = joinDate
       end
     end
-    -- Progress sync is informational; badge awards only come from local events.
+    self:CheckBadgeMilestones(normalizedProgName)
     self:CacheBadgeProgress(normalizedProgName)
     return
     
@@ -4838,12 +4620,10 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
             EnsureDB()
             -- Deduplicate: only record if not already tracked for today
             local today = DayKey()
-            local bucket = CurrentWipeVersion()
             local alreadyRecorded = false
             if LeafVE_DB.shoutouts[msgGiver] and LeafVE_DB.shoutouts[msgGiver][targetName] then
-              local existingTs = tonumber(LeafVE_DB.shoutouts[msgGiver][targetName]) or 0
-              local existingDay = DayKeyFromTS(existingTs)
-              if (bucket <= 0 or existingTs >= bucket) and existingDay == today then
+              local existingDay = DayKeyFromTS(LeafVE_DB.shoutouts[msgGiver][targetName])
+              if existingDay == today then
                 alreadyRecorded = true
               end
             end
@@ -4861,11 +4641,9 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
             if me and Lower(me) == Lower(targetName) then
               self:CheckAndAwardBadge(targetName, "first_shoutout_received")
               local rcvCount = 0
-              local bucket = CurrentWipeVersion()
               for g, _ in pairs(LeafVE_DB.shoutouts) do
-                for t, ts in pairs(LeafVE_DB.shoutouts[g]) do
-                  local shoutTs = tonumber(ts) or 0
-                  if Lower(t) == Lower(targetName) and (bucket <= 0 or shoutTs >= bucket) then rcvCount = rcvCount + 1 end
+                for t, _ in pairs(LeafVE_DB.shoutouts[g]) do
+                  if Lower(t) == Lower(targetName) then rcvCount = rcvCount + 1 end
                 end
               end
               if rcvCount >= 10 then self:CheckAndAwardBadge(targetName, "shoutout_received_10") end
@@ -4903,49 +4681,17 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     -- **NEW: Parse leaderboard sync message**
   elseif string.sub(message, 1, 7) == "LBOARD:" then
     if not IsSenderCompatible(sender) then return end
-    local me = ShortName(UnitName("player"))
-    if me and SamePlayerName(sender, me) then
-      return
-    end
     local lboardData = string.sub(message, 8)
 
-    -- Parse full-wipe version prefix carried on leaderboard payloads.
-    local incomingWipeVersion = 0
-    if string.sub(lboardData, 1, 3) == "FW:" then
-      local commaPos = string.find(lboardData, ",")
-      if not commaPos then return end
-      incomingWipeVersion = tonumber(string.sub(lboardData, 4, commaPos - 1)) or 0
-      lboardData = string.sub(lboardData, commaPos + 1)
-    end
-
-    -- Parse optional EPOCH:<timestamp>, prefix from older clients.
+    -- Parse optional EPOCH:<timestamp>, prefix; strip it but do NOT use it to
+    -- auto-wipe local data (epoch-based auto-resets removed in v11.6 to prevent
+    -- random leaderboard wipes from timestamp mismatches).
+    local incomingEpoch = 0
     if string.sub(lboardData, 1, 6) == "EPOCH:" then
       local commaPos = string.find(lboardData, ",")
       if not commaPos then return end  -- malformed epoch prefix; discard
+      incomingEpoch = tonumber(string.sub(lboardData, 7, commaPos - 1)) or 0
       lboardData = string.sub(lboardData, commaPos + 1)
-    end
-
-    EnsureDB()
-    local localWipeVersion = (LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or 0
-    local lastApplied = (LeafVE_DB and LeafVE_DB.lastWipeApplied) or 0
-    local effectiveLocalVersion = math.max(localWipeVersion, lastApplied)
-    if incomingWipeVersion > 0 then
-      if ShouldApplyIncomingWipeVersion(incomingWipeVersion) then
-        LVE_ApplyFullWipeVersion(incomingWipeVersion, "|cFFFFD700[LVL]|r Wipe sync applied from guild data.")
-        localWipeVersion = (LeafVE_GlobalDB and LeafVE_GlobalDB.fullWipeVersion) or incomingWipeVersion
-      else
-        localWipeVersion = effectiveLocalVersion
-      end
-      -- Ignore snapshots that do not match the now-active wipe version.
-      if incomingWipeVersion ~= localWipeVersion then
-        return
-      end
-    elseif effectiveLocalVersion > 0 then
-      -- We have wipe-versioned data locally; ignore legacy snapshots without FW.
-      return
-    end
-    if lboardData == "" then
-      return
     end
 
     -- Parse comma-separated player entries
@@ -4962,7 +4708,17 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         startPos = string.len(lboardData) + 1
       end
       
-      LeafVE:ReceiveLeaderboardData(sender, playerEntry)
+      if string.sub(playerEntry, 1, 5) == "WIPE:" then
+        local wipeTime = tonumber(string.sub(playerEntry, 6)) or 0
+        if wipeTime > 0 and wipeTime > (LeafVE_DB.lboard.wipeAt or 0) then
+          LVL_ExecuteLocalLboardWipe()
+          LeafVE_DB.lboard.wipeAt = wipeTime
+          Print("|cff00ff00[Leaf Village Legends]|r Leaderboard data wiped by guild admin.")
+          if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
+        end
+      else
+        LeafVE:ReceiveLeaderboardData(sender, playerEntry)
+      end
     end  -- ← CLOSE THE WHILE LOOP
     
     -- Refresh leaderboards if open
@@ -5023,6 +4779,17 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
     end
     return
 
+  -- Handle hard reset of all Leaf Points (admin broadcast)
+  -- Disabled in v11.6: random remote resets are blocked to prevent accidental wipes.
+  -- Admins should use /lve reset or the Manual Reset button instead.
+  elseif string.sub(message, 1, 25) == "LVE_ADMIN_RESET_LEAF_ALL:" then
+    return
+
+  -- Handle hard reset of achievement leaderboard (admin broadcast)
+  -- Disabled in v11.6: random remote resets are blocked to prevent accidental wipes.
+  elseif string.sub(message, 1, 28) == "LVE_ADMIN_RESET_ACHIEVE_ALL:" then
+    return
+
   -- Handle admin config broadcast
   elseif string.sub(message, 1, 17) == "LVE_ADMIN_CONFIG:" then
     -- No longer used; configurable admin settings have been removed.
@@ -5081,6 +4848,11 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         LeafVE.UI:RefreshAchievementsLeaderboard()
       end
     end
+    return
+
+  -- Handle leaderboard zero-out broadcast from admin (bypasses higher-total-wins guard)
+  -- Disabled in v11.6: random remote resets are blocked to prevent accidental wipes.
+  elseif string.sub(message, 1, 22) == "LVE_RESET_LBOARD_ZERO:" then
     return
 
   -- Handle gear cache broadcast from a guild member
@@ -5416,7 +5188,6 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
               elseif txnType == "G" then w.G = (w.G or 0) + amount
               else w.S = (w.S or 0) + amount end
               LeafVE_DB.lboard.weekly[wk][txnName] = w
-              SetWeeklyEntryWipeVersion(wk, txnName, CurrentWipeVersion())
               self:UpsertSharedLeaderboard(txnName, nil, {L = w.L or 0, G = w.G or 0, S = w.S or 0}, wk)
             end
           end
@@ -5509,7 +5280,6 @@ end
       
       function LeafVE:ReceiveLeaderboardData(sender, playerData)
   EnsureDB()
-  PruneLeaderboardForCurrentWipe()
 
   -- Parse "L:PlayerName:L:G:S" (lifetime) or "W<weekKey>:PlayerName:L:G:S" (weekly, new format)
   -- Also accepts old "W:PlayerName:L:G:S" (unknown week -> stored under current week key)
@@ -5546,17 +5316,14 @@ end
     local meta = LeafVE_DB.lboard.updatedAt[playerName]
     local existingAuthoritative = (type(meta) == "table" and meta.lifetimeAuthoritative == true) and true or false
 
-    if senderIsOwner then
-      -- Owner snapshots are authoritative and can overwrite stale highs/lows.
-      if newTotal > 0 then
+    if newTotal > 0 then
+      if senderIsOwner then
+        -- Owner snapshots are authoritative and may correct stale relayed highs.
         StoreLifetimeSnapshot(playerName, L, G, S, sender, true, true)
-        self:UpsertSharedLeaderboard(playerName, {L = L, G = G, S = S}, nil, WeekKey(), true)
-      else
-        ClearLifetimeSnapshot(playerName, sender, true)
+      elseif (not existingAuthoritative) and newTotal > existingTotal then
+        StoreLifetimeSnapshot(playerName, L, G, S, sender, false, false)
+        self:UpsertSharedLeaderboard(playerName, {L = L, G = G, S = S}, nil, WeekKey())
       end
-    elseif (newTotal > 0) and (not existingAuthoritative) and newTotal > existingTotal then
-      StoreLifetimeSnapshot(playerName, L, G, S, sender, false, false)
-      self:UpsertSharedLeaderboard(playerName, {L = L, G = G, S = S}, nil, WeekKey())
     end
 
   elseif string.sub(dataType, 1, 1) == "W" then
@@ -5568,24 +5335,9 @@ end
     local newTotal = L + G + S
     local existingEntry = type(LeafVE_DB.lboard.weekly[wk]) == "table" and LeafVE_DB.lboard.weekly[wk][playerName]
     local existingTotal = existingEntry and ((existingEntry.L or 0) + (existingEntry.G or 0) + (existingEntry.S or 0)) or 0
-
-    if type(LeafVE_DB.lboard.weekly[wk]) ~= "table" then LeafVE_DB.lboard.weekly[wk] = {} end
-    if senderIsOwner then
-      if newTotal > 0 then
-        LeafVE_DB.lboard.weekly[wk][playerName] = {L = L, G = G, S = S}
-        SetWeeklyEntryWipeVersion(wk, playerName, CurrentWipeVersion())
-        self:UpsertSharedLeaderboard(playerName, nil, {L = L, G = G, S = S}, wk, true)
-      else
-        LeafVE_DB.lboard.weekly[wk][playerName] = nil
-        ClearWeeklyEntryWipeVersion(wk, playerName)
-        if LeafVE_GlobalDB.lboardCache and type(LeafVE_GlobalDB.lboardCache.weekly[wk]) == "table" then
-          LeafVE_GlobalDB.lboardCache.weekly[wk][playerName] = nil
-        end
-      end
-    elseif newTotal > 0 and newTotal > existingTotal then
+    if newTotal > 0 and newTotal > existingTotal then
+      if type(LeafVE_DB.lboard.weekly[wk]) ~= "table" then LeafVE_DB.lboard.weekly[wk] = {} end
       LeafVE_DB.lboard.weekly[wk][playerName] = {L = L, G = G, S = S}
-      SetWeeklyEntryWipeVersion(wk, playerName, CurrentWipeVersion())
-      self:UpsertSharedLeaderboard(playerName, nil, {L = L, G = G, S = S}, wk)
     end
 
     -- Weekly totals are a hard lower bound for lifetime totals.
@@ -5594,14 +5346,14 @@ end
     if newTotal > lifeTotal then
       if senderIsOwner then
         StoreLifetimeSnapshot(playerName, L, G, S, sender, true, true)
-        self:UpsertSharedLeaderboard(playerName, {L = L, G = G, S = S}, nil, wk, true)
       else
         StoreLifetimeSnapshot(playerName, L, G, S, sender, false, false)
         self:UpsertSharedLeaderboard(playerName, {L = L, G = G, S = S}, nil, wk)
       end
     end
+    self:UpsertSharedLeaderboard(playerName, nil, {L = L, G = G, S = S}, wk)
   end
-  -- Leaderboard sync must never award badges; it only reconciles point snapshots.
+  self:CheckBadgeMilestones(playerName)
   self:CacheBadgeProgress(playerName)
 end
 
@@ -5619,26 +5371,20 @@ function LeafVE:PurgeStaleWeeklyData()
   for wk in pairs(LeafVE_DB.lboard.weekly) do
     if wk ~= currentWk then
       LeafVE_DB.lboard.weekly[wk] = nil
-      if LeafVE_DB.lboard.weeklyVersion then
-        LeafVE_DB.lboard.weeklyVersion[wk] = nil
-      end
     end
   end
 end
 
 function AggForThisWeek()
   EnsureDB() local startTS = WeekStartTS(Now()) local agg = {}
-  local bucket = CurrentWipeVersion()
   for d = 0, 6 do
     local dk = DayKeyFromTS(startTS + d * SECONDS_PER_DAY)
     if LeafVE_DB.global[dk] then
       for name, t in pairs(LeafVE_DB.global[dk]) do
-        if PointBucketForEntry(t) == bucket then
-          if not agg[name] then agg[name] = {L = 0, G = 0, S = 0} end
-          agg[name].L = agg[name].L + (t.L or 0)
-          agg[name].G = agg[name].G + (t.G or 0)
-          agg[name].S = agg[name].S + (t.S or 0)
-        end
+        if not agg[name] then agg[name] = {L = 0, G = 0, S = 0} end
+        agg[name].L = agg[name].L + (t.L or 0)
+        agg[name].G = agg[name].G + (t.G or 0)
+        agg[name].S = agg[name].S + (t.S or 0)
       end
     end
   end
@@ -9534,6 +9280,19 @@ local function BuildLeaderboardPanel(panel, isWeekly)
   panel.leaderEntries = {}
   panel.isWeekly = isWeekly
 
+  -- Manual Reset button (visible to admins only)
+  if LeafVE:IsAdminRank() then
+    local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    resetBtn:SetWidth(130)
+    resetBtn:SetHeight(22)
+    resetBtn:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -40, -8)
+    resetBtn:SetText("|cFFFF4444Manual Reset|r")
+    SkinButtonAccent(resetBtn)
+    resetBtn:SetScript("OnClick", function()
+      LeafVE:ShowManualResetConfirm()
+    end)
+  end
+
   -- Refresh button (visible to all players)
   local refreshBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   refreshBtn:SetWidth(80)
@@ -9543,23 +9302,21 @@ local function BuildLeaderboardPanel(panel, isWeekly)
   SkinButtonAccent(refreshBtn)
   refreshBtn:SetScript("OnClick", function()
     LeafVE.UI:RefreshLeaderboard(panel.isWeekly and "leaderWeek" or "leaderLife")
-    if InGuild() then
-      -- Ask each online guildie to push a fresh self-owned snapshot now.
-      SendAddonMessage("LeafVE", "MYSTATSREQ_FORCE", "GUILD")
-    end
-    LeafVE:BroadcastLeaderboardData(false)
+    LeafVE:SendResyncRequest(true)
+    LeafVE:BroadcastLeaderboardData()
   end)
 end
 
 function LeafVE.UI:RefreshLeaderboard(panelName)
   if not self.panels or not self.panels[panelName] then return end
 
+  -- Trigger an on-demand resync if not done recently
+  LeafVE:SendResyncRequest()
+
   local panel = self.panels[panelName]
   local isWeekly = panel.isWeekly
   
   EnsureDB()
-  LeafVE:ApplyGuildWipeMarkerIfNeeded()
-  PruneLeaderboardForCurrentWipe()
   LeafVE:UpdateGuildRosterCache()
   
   local leaders = {}
@@ -9583,8 +9340,12 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
 
 
   if isWeekly then
-    -- Prefer owner-authenticated synced snapshots for remote players.
-    -- For self, use local aggregation (My Stats source of truth).
+    -- Always prefer authoritative local aggregation over peer-synced cache.
+    -- Fall back to synced data only for remote members not witnessed locally.
+
+    -- Iterate the union of localWeek and syncedWeek so that players whose
+    -- points were awarded on a different client (and are absent from localWeek)
+    -- are still included via their syncedWeek entry.
     local seen = {}
     for name, _ in pairs(localWeek) do seen[name] = true end
     for name, _ in pairs(syncedWeek) do seen[name] = true end
@@ -9592,23 +9353,19 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
     for name, _ in pairs(seen) do
       local localPts  = localWeek[name]
       local syncedPts = syncedWeek[name]
-      local pts
-      if SamePlayerName(name, me) then
-        pts = localPts or syncedPts
-      else
-        pts = syncedPts or localPts
+      local pts = syncedPts
+      if LboardEntryTotal(localPts) > LboardEntryTotal(pts) then
+        pts = localPts
       end
       local total = pts and ((pts.L or 0) + (pts.G or 0) + (pts.S or 0)) or 0
-      if total > 0 then
-        local gInfo = memberSet[Lower(name)]
-        table.insert(leaders, {
-          name = name, total = total,
-          L = pts and (pts.L or 0) or 0,
-          G = pts and (pts.G or 0) or 0,
-          S = pts and (pts.S or 0) or 0,
-          class = (gInfo and gInfo.class) or "Unknown"
-        })
-      end
+      local gInfo = memberSet[Lower(name)]
+      table.insert(leaders, {
+        name = name, total = total,
+        L = pts and (pts.L or 0) or 0,
+        G = pts and (pts.G or 0) or 0,
+        S = pts and (pts.S or 0) or 0,
+        class = (gInfo and gInfo.class) or "Unknown"
+      })
     end
   else
     -- Iterate the union of alltime and lboard.alltime so that players whose
@@ -9622,41 +9379,29 @@ function LeafVE.UI:RefreshLeaderboard(panelName)
 
     for name, _ in pairs(seen) do
       local localPts  = LeafVE_DB.alltime[name]
-      if not IsPointEntryInCurrentBucket(localPts) then
-        localPts = nil
-      end
       local syncedPts = LeafVE_DB.lboard.alltime[name]
       local lifeMeta = LeafVE_DB.lboard.updatedAt[name]
       local syncedIsAuthoritative = (type(lifeMeta) == "table" and lifeMeta.lifetimeAuthoritative == true)
-      local pts
-      if SamePlayerName(name, me) then
-        local myLifetime = BuildMyStatsSnapshotForPlayer(me)
-        pts = myLifetime
-      else
-        if syncedIsAuthoritative then
-          pts = syncedPts
-        elseif LboardEntryTotal(syncedPts) > 0 then
-          pts = syncedPts
-        else
-          pts = nil
-        end
-
-        local weekPts = syncedWeek[name] or localWeek[name]
-        if LboardEntryTotal(weekPts) > LboardEntryTotal(pts) then
-          pts = weekPts
-        end
+      local pts = syncedIsAuthoritative and syncedPts or nil
+      if not SamePlayerName(name, me) then
+        localPts = nil
+      end
+      if LboardEntryTotal(localPts) > LboardEntryTotal(pts) then
+        pts = localPts
+      end
+      local weekPts = syncedWeek[name] or localWeek[name]
+      if LboardEntryTotal(weekPts) > LboardEntryTotal(pts) then
+        pts = weekPts
       end
       local total = pts and ((pts.L or 0) + (pts.G or 0) + (pts.S or 0)) or 0
-      if total > 0 then
-        local gInfo = memberSet[Lower(name)]
-        table.insert(leaders, {
-          name = name, total = total,
-          L = pts and (pts.L or 0) or 0,
-          G = pts and (pts.G or 0) or 0,
-          S = pts and (pts.S or 0) or 0,
-          class = (gInfo and gInfo.class) or "Unknown"
-        })
-      end
+      local gInfo = memberSet[Lower(name)]
+      table.insert(leaders, {
+        name = name, total = total,
+        L = pts and (pts.L or 0) or 0,
+        G = pts and (pts.G or 0) or 0,
+        S = pts and (pts.S or 0) or 0,
+        class = (gInfo and gInfo.class) or "Unknown"
+      })
     end
   end
   
@@ -10881,6 +10626,70 @@ local function BuildAdminPanel(panel)
     LeafVE:AwardRandomBadge(me)
   end)
 
+  local resetBadgesBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  resetBadgesBtn:SetWidth(130)
+  resetBadgesBtn:SetHeight(22)
+  resetBadgesBtn:SetPoint("LEFT", randBadgeBtn, "RIGHT", 8, 0)
+  resetBadgesBtn:SetText("Reset My Badges")
+  SkinButtonAccent(resetBadgesBtn)
+  resetBadgesBtn:SetScript("OnClick", function()
+    local me = ShortName(UnitName("player"))
+    LeafVE:ResetBadges(me)
+  end)
+
+  local resetAllBadgesBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  resetAllBadgesBtn:SetWidth(130)
+  resetAllBadgesBtn:SetHeight(22)
+  resetAllBadgesBtn:SetPoint("LEFT", resetBadgesBtn, "RIGHT", 8, 0)
+  resetAllBadgesBtn:SetText("Reset ALL Badges")
+  SkinButtonAccent(resetAllBadgesBtn)
+  resetAllBadgesBtn:SetScript("OnClick", function()
+    -- Confirmation popup
+    if not LeafVE._confirmResetAllBadgesFrame then
+      local cf = CreateFrame("Frame", "LeafVE_ConfirmResetAllBadges", UIParent)
+      cf:SetWidth(380)
+      cf:SetHeight(120)
+      cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+      cf:SetFrameStrata("DIALOG")
+      cf:EnableMouse(true)
+      cf:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = {left = 4, right = 4, top = 4, bottom = 4}
+      })
+      cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+      cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+      local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+      warningText:SetWidth(340)
+      warningText:SetJustifyH("CENTER")
+      warningText:SetText("|cFFFF4444This will reset ALL badges for ALL players.\nThis cannot be undone.|r")
+
+      local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      confirmBtn:SetWidth(120)
+      confirmBtn:SetHeight(22)
+      confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+      confirmBtn:SetText("Confirm Reset")
+      confirmBtn:SetScript("OnClick", function()
+        LeafVE:ResetAllBadges()
+        cf:Hide()
+      end)
+
+      local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      cancelBtn:SetWidth(80)
+      cancelBtn:SetHeight(22)
+      cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+      cancelBtn:SetText("Cancel")
+      cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+      cf:Hide()
+      LeafVE._confirmResetAllBadgesFrame = cf
+    end
+    LeafVE._confirmResetAllBadgesFrame:Show()
+  end)
+
   yBase = yBase - 38
 
   -- Divider above Danger Zone
@@ -10898,6 +10707,207 @@ local function BuildAdminPanel(panel)
   dangerSection:SetText("|cFFFF4444Danger Zone|r")
   yBase = yBase - 28
 
+  -- "Reset All Leaf Points" button
+  local resetLeafBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  resetLeafBtn:SetWidth(200)
+  resetLeafBtn:SetHeight(22)
+  resetLeafBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  resetLeafBtn:SetText("|cFFFF4444Reset All Leaf Points|r")
+  SkinButtonAccent(resetLeafBtn)
+  resetLeafBtn:SetScript("OnClick", function()
+    -- Confirmation popup
+    if not LeafVE._confirmResetLeafFrame then
+      local cf = CreateFrame("Frame", "LeafVE_ConfirmResetLeaf", UIParent)
+      cf:SetWidth(380)
+      cf:SetHeight(120)
+      cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+      cf:SetFrameStrata("DIALOG")
+      cf:EnableMouse(true)
+      cf:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = {left = 4, right = 4, top = 4, bottom = 4}
+      })
+      cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+      cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+      local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+      warningText:SetWidth(340)
+      warningText:SetJustifyH("CENTER")
+      warningText:SetText("|cFFFF4444This will wipe ALL Leaf Points\n(daily/weekly/season/all-time) for the\nentire guild and clear everyone's saved data.|r")
+
+      local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      confirmBtn:SetWidth(120)
+      confirmBtn:SetHeight(22)
+      confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+      confirmBtn:SetText("Confirm Reset")
+      confirmBtn:SetScript("OnClick", function()
+        LeafVE:HardResetLeafPoints_Local()
+        if InGuild() then
+          SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..time(), "GUILD")
+          SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..time(), "GUILD")
+          LeafVE:BroadcastLeaderboardData()
+        end
+        Print("|cFFFF4444Broadcast: All Leaf Points reset for all guild members.|r")
+        cf:Hide()
+      end)
+
+      local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      cancelBtn:SetWidth(80)
+      cancelBtn:SetHeight(22)
+      cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+      cancelBtn:SetText("Cancel")
+      cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+      cf:Hide()
+      LeafVE._confirmResetLeafFrame = cf
+    end
+    LeafVE._confirmResetLeafFrame:Show()
+  end)
+  yBase = yBase - 34
+
+  -- "Reset ALL Achievement Leaderboard Data" button
+  local resetAchLbBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  resetAchLbBtn:SetWidth(280)
+  resetAchLbBtn:SetHeight(22)
+  resetAchLbBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  resetAchLbBtn:SetText("|cFFFF4444Reset ALL Achievement Leaderboard Data|r")
+  SkinButtonAccent(resetAchLbBtn)
+  resetAchLbBtn:SetScript("OnClick", function()
+    -- Confirmation popup
+    if not LeafVE._confirmResetAchFrame then
+      local cf = CreateFrame("Frame", "LeafVE_ConfirmResetAch", UIParent)
+      cf:SetWidth(380)
+      cf:SetHeight(120)
+      cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+      cf:SetFrameStrata("DIALOG")
+      cf:EnableMouse(true)
+      cf:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = {left = 4, right = 4, top = 4, bottom = 4}
+      })
+      cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+      cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+      local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+      warningText:SetWidth(340)
+      warningText:SetJustifyH("CENTER")
+      warningText:SetText("|cFFFF4444This will wipe the achievement leaderboard\ncache for all guild members.\nIndividual completion flags are NOT deleted.|r")
+
+      local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      confirmBtn:SetWidth(120)
+      confirmBtn:SetHeight(22)
+      confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+      confirmBtn:SetText("Confirm Reset")
+      confirmBtn:SetScript("OnClick", function()
+        LeafVE:HardResetAchievementLeaderboard_Local()
+        if InGuild() then
+          SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_ACHIEVE_ALL:"..time(), "GUILD")
+          LeafVE:BroadcastMyAchievements()
+        end
+        Print("|cFFFF4444Broadcast: Achievement leaderboard cache reset for all guild members.|r")
+        cf:Hide()
+      end)
+
+      local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      cancelBtn:SetWidth(80)
+      cancelBtn:SetHeight(22)
+      cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+      cancelBtn:SetText("Cancel")
+      cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+      cf:Hide()
+      LeafVE._confirmResetAchFrame = cf
+    end
+    LeafVE._confirmResetAchFrame:Show()
+  end)
+  yBase = yBase - 34
+
+  -- REMOVED: LVL_GetAllGuildMembers() and LVL_AdminWipeLeaderboardData() from PR #118.
+  -- Those functions only modified the local client's LeafVE_DB, which has no effect on
+  -- other players' data. Replaced by the LBOARD_WIPE broadcast approach below.
+
+  -- "Wipe Leaderboard Data" button
+  local wipeLboardBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
+  wipeLboardBtn:SetWidth(200)
+  wipeLboardBtn:SetHeight(22)
+  wipeLboardBtn:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 12, yBase)
+  wipeLboardBtn:SetText("|cFFFF6600Wipe Leaderboard Data|r")
+  SkinButtonAccent(wipeLboardBtn)
+  wipeLboardBtn:SetScript("OnClick", function()
+    if not LeafVE._confirmWipeLboardFrame then
+      local cf = CreateFrame("Frame", "LeafVE_ConfirmWipeLboard", UIParent)
+      cf:SetWidth(380)
+      cf:SetHeight(130)
+      cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+      cf:SetFrameStrata("DIALOG")
+      cf:EnableMouse(true)
+      cf:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 16,
+        insets = {left = 4, right = 4, top = 4, bottom = 4}
+      })
+      cf:SetBackdropColor(0.1, 0.04, 0.0, 0.97)
+      cf:SetBackdropBorderColor(1.0, 0.4, 0.0, 1)
+
+      local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+      warningText:SetWidth(340)
+      warningText:SetJustifyH("CENTER")
+      warningText:SetText("|cFFFF6600This will permanently wipe leaderboard data\n(all-time, weekly, season rankings) for ALL\nguild members, including offline. Cannot be undone.|r")
+
+      local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      confirmBtn:SetWidth(120)
+      confirmBtn:SetHeight(22)
+      confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+      confirmBtn:SetText("Confirm Wipe")
+      confirmBtn:SetScript("OnClick", function()
+        -- 1. Wipe locally (admin's own client)
+        LVL_ExecuteLocalLboardWipe()
+        -- 2. Broadcast the wipe to all online guild members
+        local wipeNow = time()
+        if InGuild() then
+          SendAddonMessage("LeafVE", "LBOARD_WIPE:" .. wipeNow, "GUILD")
+        end
+        -- 3. Store wipe timestamp so the sync system propagates it to offline members
+        EnsureDB()
+        LeafVE_DB.lboard.wipeAt = wipeNow
+        -- 4. Refresh leaderboard panels if open
+        if LeafVE.UI and LeafVE.UI.panels then
+          if LeafVE.UI.panels.leaderWeek and LeafVE.UI.panels.leaderWeek:IsVisible() then
+            LeafVE.UI:RefreshLeaderboard("leaderWeek")
+          end
+          if LeafVE.UI.panels.leaderLife and LeafVE.UI.panels.leaderLife:IsVisible() then
+            LeafVE.UI:RefreshLeaderboard("leaderLife")
+          end
+          if LeafVE.UI.panels.me and LeafVE.UI.panels.me:IsVisible() then
+            LeafVE.UI:Refresh()
+          end
+        end
+        Print("|cff00ff00[Leaf Village Legends]|r Leaderboard wipe broadcast to all online guild members. Offline members will be wiped on next login via sync.")
+        cf:Hide()
+      end)
+
+      local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+      cancelBtn:SetWidth(80)
+      cancelBtn:SetHeight(22)
+      cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+      cancelBtn:SetText("Cancel")
+      cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+      cf:Hide()
+      LeafVE._confirmWipeLboardFrame = cf
+    end
+    LeafVE._confirmWipeLboardFrame:Show()
+  end)
+  yBase = yBase - 34
+
   -- "⚠ FULL DATA WIPE" button (official season reset — wipes ALL data)
   local fullWipeBtn = CreateFrame("Button", nil, subFrame, "UIPanelButtonTemplate")
   fullWipeBtn:SetWidth(240)
@@ -10907,7 +10917,7 @@ local function BuildAdminPanel(panel)
   SkinButtonAccent(fullWipeBtn)
   fullWipeBtn:SetScript("OnEnter", function()
     GameTooltip:SetOwner(fullWipeBtn, "ANCHOR_RIGHT")
-  GameTooltip:SetText("Wipes ALL Leaf Points and history for every guild member,\nand moves badges to a new season bucket.\nOffline members are auto-wiped on next login.\nUse only for official season resets.", nil, nil, nil, nil, true)
+    GameTooltip:SetText("Wipes ALL Leaf Points, badges, history, and leaderboard data\nfor every guild member including offline players.\nOffline members are auto-wiped on next login.\nUse only for official season resets.", nil, nil, nil, nil, true)
     GameTooltip:Show()
   end)
   fullWipeBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -10962,6 +10972,68 @@ local function BuildUpdatePanel(panel)
     "|cFFCCCCCCDownload from:\nhttps://github.com/Tracer96/Leaf-Village-Legends-By-Methl|r\n\n"..
     "|cFF888888Your current version: "..LeafVE.version.."\nLatest version: "..LATEST_VERSION.."|r"
   )
+end
+
+-- Shows an admin confirmation dialog for a full guild-wide manual reset.
+-- Resets local Leaf Points and achievement data, then broadcasts reset messages.
+function LeafVE:ShowManualResetConfirm()
+  if not self:IsAdminRank() then
+    Print("|cFFFF4444Access denied: only Anbu / Sannin / Hokage can perform a manual reset.|r")
+    return
+  end
+  if not LeafVE._confirmManualResetFrame then
+    local cf = CreateFrame("Frame", "LeafVE_ConfirmManualReset", UIParent)
+    cf:SetWidth(420)
+    cf:SetHeight(140)
+    cf:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+    cf:SetFrameStrata("DIALOG")
+    cf:EnableMouse(true)
+    cf:SetBackdrop({
+      bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = 16, edgeSize = 16,
+      insets = {left = 4, right = 4, top = 4, bottom = 4}
+    })
+    cf:SetBackdropColor(0.1, 0.02, 0.02, 0.97)
+    cf:SetBackdropBorderColor(0.8, 0.1, 0.1, 1)
+
+    local warningText = cf:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    warningText:SetPoint("TOP", cf, "TOP", 0, -16)
+    warningText:SetWidth(380)
+    warningText:SetJustifyH("CENTER")
+    warningText:SetText(
+      "|cFFFF4444Are you sure you want to reset all Leaf Points and\n"..
+      "Leaf Point leaderboards for the guild? This will broadcast a reset to all online members.|r"
+    )
+
+    local confirmBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+    confirmBtn:SetWidth(140)
+    confirmBtn:SetHeight(22)
+    confirmBtn:SetPoint("BOTTOMLEFT", cf, "BOTTOMLEFT", 20, 14)
+    confirmBtn:SetText("|cFFFF4444Confirm Reset|r")
+    confirmBtn:SetScript("OnClick", function()
+      LeafVE:HardResetLeafPoints_Local()
+      if InGuild() then
+        local epoch = time()
+        SendAddonMessage("LeafVE", "LVE_ADMIN_RESET_LEAF_ALL:"..epoch, "GUILD")
+        SendAddonMessage("LeafVE", "LVE_RESET_LBOARD_ZERO:"..epoch, "GUILD")
+        LeafVE:BroadcastLeaderboardData()
+      end
+      Print("|cFFFF4444Manual reset complete: all Leaf Points and Leaf Point leaderboards wiped.|r")
+      cf:Hide()
+    end)
+
+    local cancelBtn = CreateFrame("Button", nil, cf, "UIPanelButtonTemplate")
+    cancelBtn:SetWidth(80)
+    cancelBtn:SetHeight(22)
+    cancelBtn:SetPoint("BOTTOMRIGHT", cf, "BOTTOMRIGHT", -20, 14)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() cf:Hide() end)
+
+    cf:Hide()
+    LeafVE._confirmManualResetFrame = cf
+  end
+  LeafVE._confirmManualResetFrame:Show()
 end
 
 -- Shows a confirmation dialog so any player can reset their own saved data.
@@ -12381,8 +12453,7 @@ function LeafVE.UI:Refresh()
     if not me or me == "" then return end
     
     local day = DayKey()
-    local dayEntry = LeafVE_DB.global[day] and LeafVE_DB.global[day][me]
-    local dayT = IsPointEntryInCurrentBucket(dayEntry) and dayEntry or {L = 0, G = 0, S = 0}
+    local dayT = (LeafVE_DB.global[day] and LeafVE_DB.global[day][me]) or {L = 0, G = 0, S = 0}
     
     if self.panels.me.todayStats then
       self.panels.me.todayStats:SetText(string.format(
@@ -12405,18 +12476,17 @@ function LeafVE.UI:Refresh()
     -- behind the authoritative per-day ledger.
     local globalSum = AggregateGlobalTotalsForPlayer(me)
 
-    local seasonEntry = LeafVE_DB.season[me]
-    local seasonBase = IsPointEntryInCurrentBucket(seasonEntry) and seasonEntry or {L = 0, G = 0, S = 0}
+    local seasonBase = LeafVE_DB.season[me] or {L = 0, G = 0, S = 0}
     local seasonT = {
       L = math.max(seasonBase.L or 0, globalSum.L or 0),
       G = math.max(seasonBase.G or 0, globalSum.G or 0),
       S = math.max(seasonBase.S or 0, globalSum.S or 0),
     }
-    if not IsPointEntryInCurrentBucket(LeafVE_DB.season[me])
+    if not LeafVE_DB.season[me]
       or (LeafVE_DB.season[me].L or 0) < seasonT.L
       or (LeafVE_DB.season[me].G or 0) < seasonT.G
       or (LeafVE_DB.season[me].S or 0) < seasonT.S then
-      LeafVE_DB.season[me] = {L = seasonT.L, G = seasonT.G, S = seasonT.S, _b = CurrentWipeVersion()}
+      LeafVE_DB.season[me] = {L = seasonT.L, G = seasonT.G, S = seasonT.S}
     end
     if self.panels.me.seasonStats then
       self.panels.me.seasonStats:SetText(string.format(
@@ -12432,11 +12502,11 @@ function LeafVE.UI:Refresh()
       G = math.max(leaderboardAlltime.G or 0, bestAlltime.G or 0, globalSum.G or 0),
       S = math.max(leaderboardAlltime.S or 0, bestAlltime.S or 0, globalSum.S or 0),
     }
-    if not IsPointEntryInCurrentBucket(LeafVE_DB.alltime[me])
+    if not LeafVE_DB.alltime[me]
       or (LeafVE_DB.alltime[me].L or 0) < alltimeT.L
       or (LeafVE_DB.alltime[me].G or 0) < alltimeT.G
       or (LeafVE_DB.alltime[me].S or 0) < alltimeT.S then
-      LeafVE_DB.alltime[me] = {L = alltimeT.L, G = alltimeT.G, S = alltimeT.S, _b = CurrentWipeVersion()}
+      LeafVE_DB.alltime[me] = {L = alltimeT.L, G = alltimeT.G, S = alltimeT.S}
       StoreLifetimeSnapshot(me, alltimeT.L, alltimeT.G, alltimeT.S, me, true, true)
     end
     LeafVE:CacheBadgeProgress(me)
@@ -12456,12 +12526,10 @@ function LeafVE.UI:Refresh()
         local dk = DayKeyFromTS(lastWeekStart + d * SECONDS_PER_DAY)
         if LeafVE_DB.global[dk] then
           for name, t in pairs(LeafVE_DB.global[dk]) do
-            if IsPointEntryInCurrentBucket(t) then
-              if not lastWeekAgg[name] then lastWeekAgg[name] = {L = 0, G = 0, S = 0} end
-              lastWeekAgg[name].L = lastWeekAgg[name].L + (t.L or 0)
-              lastWeekAgg[name].G = lastWeekAgg[name].G + (t.G or 0)
-              lastWeekAgg[name].S = lastWeekAgg[name].S + (t.S or 0)
-            end
+            if not lastWeekAgg[name] then lastWeekAgg[name] = {L = 0, G = 0, S = 0} end
+            lastWeekAgg[name].L = lastWeekAgg[name].L + (t.L or 0)
+            lastWeekAgg[name].G = lastWeekAgg[name].G + (t.G or 0)
+            lastWeekAgg[name].S = lastWeekAgg[name].S + (t.S or 0)
           end
         end
       end
@@ -12497,9 +12565,6 @@ function LeafVE.UI:Refresh()
       for name, _ in pairs(syncedWeek) do seen[name] = true end
       for name, _ in pairs(seen) do
         local localPts  = LeafVE_DB.alltime[name]
-        if not IsPointEntryInCurrentBucket(localPts) then
-          localPts = nil
-        end
         local syncedPts = LeafVE_DB.lboard.alltime[name]
         local lifeMeta = LeafVE_DB.lboard.updatedAt[name]
         local syncedIsAuthoritative = (type(lifeMeta) == "table" and lifeMeta.lifetimeAuthoritative == true)
@@ -12606,14 +12671,10 @@ function LeafVE.UI:Refresh()
     local me = ShortName(UnitName("player"))
     if me then
       local today = DayKey()
-      local bucket = CurrentWipeVersion()
       if not LeafVE_DB.shoutouts[me] then LeafVE_DB.shoutouts[me] = {} end
       local count = 0
       for tname, timestamp in pairs(LeafVE_DB.shoutouts[me]) do
-        local shoutTs = tonumber(timestamp) or 0
-        if (bucket <= 0 or shoutTs >= bucket) and DayKeyFromTS(shoutTs) == today then
-          count = count + 1
-        end
+        if DayKeyFromTS(timestamp) == today then count = count + 1 end
       end
       local remaining = SHOUTOUT_MAX_PER_DAY - count
       if self.panels.shoutouts.usageText then
@@ -12870,7 +12931,6 @@ local notificationTimer = 0
 local attendanceTimer = 0
 local badgeSyncTimer = 0
 local achLeaderTimer = 0
-local wipeMarkerPollTimer = 0
 
 ef:SetScript("OnEvent", function()
   if event == "ADDON_LOADED" and arg1 == LeafVE.name then
@@ -12894,7 +12954,6 @@ ef:SetScript("OnEvent", function()
     Print("Loaded v"..LeafVE.version)
     Print("Auto-tracking: Login & Group points enabled!")
     EnsureDB()
-    LeafVE:ApplyGuildWipeMarkerIfNeeded()
     LeafVE:RecordActivity()
     -- One-time migration: purge old "Quest area trigger" history entries
     if not LeafVE_DB.migratedTriggerHistory then
@@ -12914,18 +12973,22 @@ ef:SetScript("OnEvent", function()
       end
       LeafVE_DB.migratedTriggerHistory = true
     end
+    -- Apply any pending admin reset that occurred while this character was offline
+    if (LeafVE_GlobalDB.globalLeafResetAt or 0) > (LeafVE_DB.lastLeafResetAt or 0) then
+      LeafVE:HardResetLeafPoints_Local()
+      Print("|cFFFF4444Leaf Points were reset by an admin while you were offline. Your data has been wiped.|r")
+    end
     -- Apply a pending full data wipe (all points/badges/history) for offline members
-    if ShouldApplyIncomingWipeVersion(LeafVE_GlobalDB.fullWipeVersion or 0) then
-      LVE_ApplyFullWipeVersion(
-        LeafVE_GlobalDB.fullWipeVersion or 0,
-        "|cFFFFD700[LVL]|r Your Leaf Point data was reset by a guild admin. Welcome to the new season!"
-      )
+    if (LeafVE_GlobalDB.fullWipeVersion or 0) > (LeafVE_DB.lastWipeApplied or 0) then
+      LVE_ResetPlayerDB()
+      LeafVE_DB.lastWipeApplied = LeafVE_GlobalDB.fullWipeVersion
+      Print("|cFFFFD700[LVL]|r Your Leaf Point data was reset by a guild admin. Welcome to the new season!")
     end
     LeafVE:CheckDailyLogin()
     LeafVE:PurgeStaleWeeklyData()
     local me = ShortName(UnitName("player"))
     local myAlltime = me and LeafVE_DB.alltime and LeafVE_DB.alltime[me]
-    if myAlltime and IsPointEntryInCurrentBucket(myAlltime) then
+    if myAlltime then
       -- Seed self as authoritative before shared-cache merge so stale relays
       -- cannot overwrite this client's real lifetime snapshot on login.
       StoreLifetimeSnapshot(me, myAlltime.L or 0, myAlltime.G or 0, myAlltime.S or 0, me, true, true)
@@ -12942,15 +13005,11 @@ ef:SetScript("OnEvent", function()
     broadcastFrame:SetScript("OnUpdate", function()
       broadcastTimer = broadcastTimer + arg1
       if broadcastTimer >= 5 then
-        LeafVE:ApplyGuildWipeMarkerIfNeeded()
         if InGuild() then
           -- Request version info from all online guild members so we can
           -- enforce minCompatVersion when their data messages arrive.
           LeafVE.versionResponses = {}
           SendAddonMessage("LeafVE", "VERSIONREQ", "GUILD")
-          -- Re-announce active wipe version so late joiners/clients with
-          -- stale caches apply it even if they missed the original broadcast.
-          LeafVE:BroadcastFullWipeVersion()
           LeafVE:BroadcastBadges()
           LeafVE:BroadcastBadgeProgress()
           LeafVE:BroadcastLeaderboardData()
@@ -12980,7 +13039,6 @@ ef:SetScript("OnEvent", function()
     -- Invalidate the roster cache so the next GetGroupGuildies() call rebuilds it
     -- from the fresh server data (without triggering another GuildRoster() request).
     LeafVE.guildRosterCacheTime = 0
-    LeafVE:ApplyGuildWipeMarkerIfNeeded()
     return
   end
 
@@ -13064,7 +13122,6 @@ updateFrame:SetScript("OnUpdate", function()
   attendanceTimer = attendanceTimer + arg1
   badgeSyncTimer = badgeSyncTimer + arg1
   achLeaderTimer = achLeaderTimer + arg1
-  wipeMarkerPollTimer = wipeMarkerPollTimer + arg1
 
   if groupCheckTimer >= 30 then
     groupCheckTimer = 0
@@ -13110,15 +13167,6 @@ updateFrame:SetScript("OnUpdate", function()
       LeafVE.UI:RefreshAchievementsLeaderboard()
     end
   end
-
-  -- Periodically poll the guild wipe marker so missed addon packets still
-  -- converge to the latest wipe version while players remain online.
-  if wipeMarkerPollTimer >= 60 then
-    wipeMarkerPollTimer = 0
-    if InGuild() then
-      LeafVE:ApplyGuildWipeMarkerIfNeeded()
-    end
-  end
 end)
 
 -------------------------------------------------
@@ -13134,10 +13182,7 @@ end
 SLASH_LBOARDREQ1 = "/lboardreq"
 SlashCmdList["LBOARDREQ"] = function()
   LeafVE:SendResyncRequest(true)
-  if InGuild() then
-    SendAddonMessage("LeafVE", "MYSTATSREQ_FORCE", "GUILD")
-  end
-  Print("Sent forced leaderboard + fresh self-stats request to guild.")
+  Print("Sent forced leaderboard resync request to guild.")
 end
 
 SLASH_NOTESYNC1 = "/notesync"
@@ -13224,6 +13269,10 @@ SlashCmdList["LEAFVE"] = function(msg)
     LeafVE.UI = { activeTab = "me" }
     LeafVE:ToggleUI()
     
+  elseif trimmedMsg == "reset" then
+    -- Admin-only: prompt a guild-wide manual reset confirmation.
+    LeafVE:ShowManualResetConfirm()
+
   elseif trimmedMsg == "uireset" then
     EnsureDB()
     LeafVE_DB.ui.w = 1050
@@ -13250,11 +13299,9 @@ SlashCmdList["LEAFVE"] = function(msg)
     DP("=== LEAF POINTS HEALTH REPORT ===")
 
     -- 1. Point Summary
-    local dayEntry = (LeafVE_DB.global and LeafVE_DB.global[today] and LeafVE_DB.global[today][me]) or nil
-    local dayT = IsPointEntryInCurrentBucket(dayEntry) and dayEntry or {L = 0, G = 0, S = 0}
+    local dayT = (LeafVE_DB.global and LeafVE_DB.global[today] and LeafVE_DB.global[today][me]) or {L = 0, G = 0, S = 0}
     local totalToday = (dayT.L or 0) + (dayT.G or 0) + (dayT.S or 0)
-    local allEntry = (LeafVE_DB.alltime and LeafVE_DB.alltime[me]) or nil
-    local allT = IsPointEntryInCurrentBucket(allEntry) and allEntry or {L = 0, G = 0, S = 0}
+    local allT = (LeafVE_DB.alltime and LeafVE_DB.alltime[me]) or {L = 0, G = 0, S = 0}
     local grandTotal = (allT.L or 0) + (allT.G or 0) + (allT.S or 0)
     local dailyCap = LEAF_POINT_DAILY_CAP
     local remaining = (dailyCap == 0) and "unlimited" or tostring(math.max(0, dailyCap - totalToday))
@@ -13386,23 +13433,19 @@ SlashCmdList["LEAFDEBUG"] = function(msg)
   elseif msg == "points" then
     local me = ShortName(UnitName("player"))
     local day = DayKey()
-    local dayEntry = (LeafVE_DB.global[day] and LeafVE_DB.global[day][me]) or nil
-    local dayT = IsPointEntryInCurrentBucket(dayEntry) and dayEntry or {L = 0, G = 0, S = 0}
+    local dayT = (LeafVE_DB.global[day] and LeafVE_DB.global[day][me]) or {L = 0, G = 0, S = 0}
     Print(string.format("Today: L:%d G:%d S:%d | Total: %d", dayT.L, dayT.G, dayT.S, (dayT.L + dayT.G + dayT.S)))
     
-    local allEntry = LeafVE_DB.alltime[me]
-    local allT = IsPointEntryInCurrentBucket(allEntry) and allEntry or {L = 0, G = 0, S = 0}
+    local allT = LeafVE_DB.alltime[me] or {L = 0, G = 0, S = 0}
     Print(string.format("All-Time: L:%d G:%d S:%d | Total: %d", allT.L, allT.G, allT.S, (allT.L + allT.G + allT.S)))
     
   elseif msg == "shoutouts" then
     local me = ShortName(UnitName("player"))
     local today = DayKey()
-    local bucket = CurrentWipeVersion()
     if not LeafVE_DB.shoutouts[me] then LeafVE_DB.shoutouts[me] = {} end
     local count = 0
     for tname, timestamp in pairs(LeafVE_DB.shoutouts[me]) do
-      local shoutTs = tonumber(timestamp) or 0
-      if (bucket <= 0 or shoutTs >= bucket) and DayKeyFromTS(shoutTs) == today then count = count + 1 end
+      if DayKeyFromTS(timestamp) == today then count = count + 1 end
     end
     Print(string.format("Shoutouts used today: %d / %d", count, SHOUTOUT_MAX_PER_DAY))
     
@@ -13789,7 +13832,6 @@ end
 Print("|cFF2DD35CLeaf Village Legends|r v"..LeafVE.version.." loaded!")
 Print("Type |cFFFFD700/lve|r or |cFFFFD700/leaf|r to open the UI")
 Print("Type |cFFFFD700/lvedebug|r for debug commands")
-
 
 
 
