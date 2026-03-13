@@ -21,7 +21,7 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "13.4"
+LeafVE.version = "13.8"
 LeafVE.guildBankOwner = "Methllyy"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
@@ -29,7 +29,7 @@ LeafVE.guildBankOwner = "Methllyy"
 LeafVE.minCompatVersion = "13.0"
 
 -- The latest published version; used to detect when the running addon is outdated.
-local LATEST_VERSION = "13.4"
+local LATEST_VERSION = "13.8"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
@@ -759,6 +759,17 @@ local function PrintWorkOrderMessage(msg)
   Print(msg)
 end
 
+local function ShouldPrintRaidEventChatMessages()
+  return not (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.enableNotifications == false)
+end
+
+local function PrintRaidEventMessage(msg)
+  if not ShouldPrintRaidEventChatMessages() then
+    return
+  end
+  Print(msg)
+end
+
 local function Now() return time() end
 local function Lower(s) return s and string.lower(s) or "" end
 local function Trim(s) return (string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
@@ -1150,6 +1161,10 @@ local function EnsureDB()
   if not LeafVE_GlobalDB.guildBankCache then LeafVE_GlobalDB.guildBankCache = { owner = LeafVE.guildBankOwner, updatedAt = 0, counts = {}, goldCopper = 0 } end
   if not LeafVE_GlobalDB.guildBankRequests then LeafVE_GlobalDB.guildBankRequests = {} end
   if not LeafVE_GlobalDB.guildBankHighValueItems then LeafVE_GlobalDB.guildBankHighValueItems = {} end
+  if not LeafVE_GlobalDB.guildEvents then LeafVE_GlobalDB.guildEvents = {} end
+  if not LeafVE_GlobalDB.guildEventRSVPs then LeafVE_GlobalDB.guildEventRSVPs = {} end
+  if not LeafVE_GlobalDB.raidEvents then LeafVE_GlobalDB.raidEvents = {} end
+  if not LeafVE_GlobalDB.raidSignups then LeafVE_GlobalDB.raidSignups = {} end
   if not LeafVE_GlobalDB.fullWipeVersion then LeafVE_GlobalDB.fullWipeVersion = 0 end
   if not LeafVE_DB.badgesArchive then LeafVE_DB.badgesArchive = {} end
   -- Badge bucket follows full-wipe version so manual resets start a fresh badge season.
@@ -1191,6 +1206,8 @@ local function EnsureDB()
   end
   if LeafVE_DB.options.groupPoints == nil then LeafVE_DB.options.groupPoints = GROUP_POINTS end
   if LeafVE_DB.options.loginPoints == nil then LeafVE_DB.options.loginPoints = 20 end
+  if not LeafVE_DB.raidProfile then LeafVE_DB.raidProfile = {} end
+  if LeafVE_DB.raidProfile.defaultRole == nil then LeafVE_DB.raidProfile.defaultRole = "" end
 end
 
 local function LboardEntryTotal(entry)
@@ -5362,6 +5379,1594 @@ function LeafVE:FulfillGuildBankItemRequest(requestId)
   return stored
 end
 
+function NormalizeRaidRole(value)
+  local role = Lower(Trim(value or ""))
+  if role == "tank" then return "tank" end
+  if role == "healer" or role == "heal" then return "healer" end
+  if role == "melee" or role == "mdps" then return "melee" end
+  if role == "ranged" or role == "range" or role == "caster" or role == "rdps" then return "ranged" end
+  if role == "flex" then return "flex" end
+  return "flex"
+end
+
+function NormalizeRaidSignupStatus(value)
+  local status = Lower(Trim(value or ""))
+  if status == "going" then return "going" end
+  if status == "tentative" then return "tentative" end
+  if status == "late" then return "late" end
+  if status == "cant_make_it" or status == "cantmakeit" or status == "unavailable" or status == "no" then
+    return "unavailable"
+  end
+  return "going"
+end
+
+function NormalizeRaidRosterStatus(value)
+  local status = Lower(Trim(value or ""))
+  if status == "confirmed" then return "confirmed" end
+  if status == "bench" then return "bench" end
+  if status == "declined" then return "declined" end
+  return "signed"
+end
+
+function NormalizeRaidEventStatus(value)
+  local status = Lower(Trim(value or ""))
+  if status == "locked" then return "locked" end
+  if status == "completed" then return "completed" end
+  if status == "cancelled" then return "cancelled" end
+  if status == "archived" then return "archived" end
+  return "open"
+end
+
+function GetRaidRoleLabel(role)
+  role = NormalizeRaidRole(role)
+  if role == "tank" then return "Tank" end
+  if role == "healer" then return "Healer" end
+  if role == "melee" then return "Melee" end
+  if role == "ranged" then return "Ranged" end
+  return "Flex"
+end
+
+function GetRaidSignupStatusLabel(status)
+  status = NormalizeRaidSignupStatus(status)
+  if status == "tentative" then return "Tentative" end
+  if status == "late" then return "Late" end
+  if status == "unavailable" then return "Can't Make It" end
+  return "Going"
+end
+
+function GetRaidRosterStatusLabel(status)
+  status = NormalizeRaidRosterStatus(status)
+  if status == "confirmed" then return "Confirmed" end
+  if status == "bench" then return "Bench" end
+  if status == "declined" then return "Declined" end
+  return "Signed"
+end
+
+function GetRaidEventStatusLabel(status)
+  status = NormalizeRaidEventStatus(status)
+  if status == "locked" then return "Locked" end
+  if status == "completed" then return "Completed" end
+  if status == "cancelled" then return "Cancelled" end
+  if status == "archived" then return "Archived" end
+  return "Open"
+end
+
+function LeafVE:GetRaidEventsDB()
+  EnsureDB()
+  return LeafVE_GlobalDB.raidEvents
+end
+
+function LeafVE:GetRaidSignupsDB()
+  EnsureDB()
+  return LeafVE_GlobalDB.raidSignups
+end
+
+function LeafVE:IsRaidOrganizerRank(playerName)
+  playerName = ShortName(playerName or UnitName("player"))
+  if not playerName then return false end
+  self:UpdateGuildRosterCache()
+  local info = self.guildRosterCache and self.guildRosterCache[Lower(playerName)] or nil
+  local rank = info and info.rank and Lower(Trim(info.rank)) or ""
+  return rank == "jonin" or rank == "anbu" or rank == "sannin" or rank == "hokage"
+end
+
+function LeafVE:CanManageRaidEvent(eventRecord, playerName)
+  playerName = ShortName(playerName or UnitName("player"))
+  if not playerName then return false end
+  if self:IsRaidOrganizerRank(playerName) then
+    return true
+  end
+  return type(eventRecord) == "table" and SamePlayerName(eventRecord.postedBy, playerName)
+end
+
+function LeafVE:GetRaidCatalog()
+  if self.raidCatalog and self.raidCatalogOrder then
+    return self.raidCatalog, self.raidCatalogOrder
+  end
+
+  self.raidCatalog = {}
+  self.raidCatalogOrder = {}
+  if type(LeafVE_RaidCatalogSource) ~= "table" then
+    return self.raidCatalog, self.raidCatalogOrder
+  end
+
+  for _, source in ipairs(LeafVE_RaidCatalogSource) do
+    if type(source) == "table" and source.key and source.name then
+      local entry = {
+        key = tostring(source.key),
+        name = tostring(source.name),
+        raidSize = tonumber(source.raidSize) or 20,
+        roleTargets = {
+          tank = tonumber(source.roleTargets and source.roleTargets.tank) or 2,
+          healer = tonumber(source.roleTargets and source.roleTargets.healer) or 5,
+          melee = tonumber(source.roleTargets and source.roleTargets.melee) or 6,
+          ranged = tonumber(source.roleTargets and source.roleTargets.ranged) or 7,
+          flex = tonumber(source.roleTargets and source.roleTargets.flex) or 0,
+        },
+        bosses = {},
+      }
+      for _, boss in ipairs(source.bosses or {}) do
+        if type(boss) == "table" and boss.key and boss.name then
+          table.insert(entry.bosses, {
+            key = tostring(boss.key),
+            name = tostring(boss.name),
+            kind = Lower(Trim(boss.kind or "boss")),
+          })
+        end
+      end
+      self.raidCatalog[entry.key] = entry
+      table.insert(self.raidCatalogOrder, entry)
+    end
+  end
+
+  return self.raidCatalog, self.raidCatalogOrder
+end
+
+function LeafVE:GetRaidCatalogEntry(raidKey)
+  local catalog = self:GetRaidCatalog()
+  return catalog[tostring(raidKey or "")]
+end
+
+function LeafVE:GetRaidDefaultRoleTargets(raidKey, raidSize)
+  local catalog = self:GetRaidCatalogEntry(raidKey)
+  if catalog and type(catalog.roleTargets) == "table" then
+    return {
+      tank = tonumber(catalog.roleTargets.tank) or 2,
+      healer = tonumber(catalog.roleTargets.healer) or 5,
+      melee = tonumber(catalog.roleTargets.melee) or 6,
+      ranged = tonumber(catalog.roleTargets.ranged) or 7,
+      flex = tonumber(catalog.roleTargets.flex) or 0,
+    }
+  end
+
+  raidSize = tonumber(raidSize) or 20
+  if raidSize <= 10 then
+    return { tank = 2, healer = 3, melee = 2, ranged = 3, flex = 0 }
+  elseif raidSize <= 20 then
+    return { tank = 2, healer = 5, melee = 6, ranged = 7, flex = 0 }
+  end
+  return { tank = 4, healer = 10, melee = 13, ranged = 13, flex = 0 }
+end
+
+function LeafVE:GetSuggestedRaidRoleForPlayer(playerName, classTag, specName)
+  classTag = string.upper(classTag or self:GetClassTagForPlayer(playerName) or "UNKNOWN")
+  local spec = specName or (self:GetSpecSnapshotForPlayer(playerName, classTag) or {}).name or ""
+  local lspec = Lower(spec)
+
+  if classTag == "WARRIOR" then
+    if string.find(lspec, "protection", 1, true) then return "tank" end
+    return "melee"
+  elseif classTag == "PALADIN" then
+    if string.find(lspec, "holy", 1, true) then return "healer" end
+    if string.find(lspec, "protection", 1, true) then return "tank" end
+    return "melee"
+  elseif classTag == "PRIEST" then
+    if string.find(lspec, "holy", 1, true) or string.find(lspec, "discipline", 1, true) then return "healer" end
+    return "ranged"
+  elseif classTag == "SHAMAN" then
+    if string.find(lspec, "restoration", 1, true) then return "healer" end
+    if string.find(lspec, "enhancement", 1, true) then return "melee" end
+    return "ranged"
+  elseif classTag == "DRUID" then
+    if string.find(lspec, "restoration", 1, true) then return "healer" end
+    if string.find(lspec, "balance", 1, true) then return "ranged" end
+    if string.find(lspec, "feral", 1, true) then return "tank" end
+    return "flex"
+  elseif classTag == "ROGUE" then
+    return "melee"
+  elseif classTag == "MAGE" or classTag == "WARLOCK" or classTag == "HUNTER" then
+    return "ranged"
+  end
+  return "flex"
+end
+
+function LeafVE:FindRaidSignupRecord(eventId, playerName)
+  local eventSignups = self:GetRaidSignupsDB()[tostring(eventId or "")]
+  if type(eventSignups) ~= "table" then return nil end
+  playerName = ShortName(playerName)
+  if not playerName then return nil end
+  return eventSignups[Lower(playerName)]
+end
+
+function LeafVE:GetRaidSignupsForEvent(eventId, includeUnavailable)
+  local rows = {}
+  local eventSignups = self:GetRaidSignupsDB()[tostring(eventId or "")]
+  if type(eventSignups) ~= "table" then
+    return rows
+  end
+
+  for _, signup in pairs(eventSignups) do
+    if type(signup) == "table" then
+      local signupStatus = NormalizeRaidSignupStatus(signup.signupStatus)
+      if includeUnavailable or signupStatus ~= "unavailable" then
+        table.insert(rows, signup)
+      end
+    end
+  end
+
+  table.sort(rows, function(a, b)
+    local aRole = NormalizeRaidRole(a.preferredRole)
+    local bRole = NormalizeRaidRole(b.preferredRole)
+    if aRole == bRole then
+      local aRoster = NormalizeRaidRosterStatus(a.rosterStatus)
+      local bRoster = NormalizeRaidRosterStatus(b.rosterStatus)
+      if aRoster == bRoster then
+        return Lower(a.player or "") < Lower(b.player or "")
+      end
+      return aRoster < bRoster
+    end
+    return aRole < bRole
+  end)
+
+  return rows
+end
+
+function LeafVE:GetVisibleRaidEvents(mode)
+  local rows = {}
+  local me = ShortName(UnitName("player"))
+  local now = Now()
+
+  for _, eventRecord in pairs(self:GetRaidEventsDB()) do
+    if type(eventRecord) == "table" then
+      local status = NormalizeRaidEventStatus(eventRecord.status)
+      local isVisible = status ~= "archived"
+      if mode == "mine" then
+        local mySignup = me and self:FindRaidSignupRecord(eventRecord.id, me) or nil
+        isVisible = isVisible and mySignup ~= nil and NormalizeRaidSignupStatus(mySignup.signupStatus) ~= "unavailable"
+      else
+        isVisible = isVisible and status ~= "cancelled"
+      end
+      if isVisible and ((tonumber(eventRecord.startAt) or 0) + (7 * SECONDS_PER_DAY)) >= now then
+        table.insert(rows, eventRecord)
+      end
+    end
+  end
+
+  table.sort(rows, function(a, b)
+    local aStart = tonumber(a.startAt or 0) or 0
+    local bStart = tonumber(b.startAt or 0) or 0
+    if aStart == bStart then
+      return Lower(a.title or "") < Lower(b.title or "")
+    end
+    return aStart < bStart
+  end)
+
+  return rows
+end
+
+function LeafVE:GetRaidRosterCounts(eventId)
+  local counts = {
+    total = 0,
+    tank = 0,
+    healer = 0,
+    melee = 0,
+    ranged = 0,
+    flex = 0,
+    confirmed = 0,
+    bench = 0,
+  }
+
+  for _, signup in ipairs(self:GetRaidSignupsForEvent(eventId, false)) do
+    local rosterStatus = NormalizeRaidRosterStatus(signup.rosterStatus)
+    if rosterStatus ~= "declined" then
+      counts.total = counts.total + 1
+      local role = NormalizeRaidRole(signup.preferredRole)
+      counts[role] = (counts[role] or 0) + 1
+      if rosterStatus == "confirmed" then
+        counts.confirmed = counts.confirmed + 1
+      elseif rosterStatus == "bench" then
+        counts.bench = counts.bench + 1
+      end
+    end
+  end
+
+  return counts
+end
+
+function LeafVE:GetRaidNeedSummary(eventRecord)
+  if type(eventRecord) ~= "table" then return "No raid selected." end
+
+  local counts = self:GetRaidRosterCounts(eventRecord.id)
+  local needs = {}
+  local roleTargets = eventRecord.roleTargets or {}
+  local roleOrder = {"tank", "healer", "melee", "ranged", "flex"}
+  for _, role in ipairs(roleOrder) do
+    local target = tonumber(roleTargets[role]) or 0
+    local current = tonumber(counts[role]) or 0
+    local missing = target - current
+    if missing > 0 then
+      table.insert(needs, tostring(missing) .. " " .. GetRaidRoleLabel(role))
+    end
+  end
+
+  if table.getn(needs) == 0 then
+    return "Roster targets filled."
+  end
+  return "Need " .. table.concat(needs, ", ")
+end
+
+function LeafVE:GetRaidBossListText(raidKey)
+  local catalog = self:GetRaidCatalogEntry(raidKey)
+  if not catalog then
+    return "No boss list available."
+  end
+
+  local lines = {}
+  for _, boss in ipairs(catalog.bosses or {}) do
+    if boss.kind == "boss" then
+      table.insert(lines, "- " .. tostring(boss.name))
+    end
+  end
+  if table.getn(lines) == 0 then
+    return "No bosses configured."
+  end
+  return table.concat(lines, "\n")
+end
+
+function NormalizeRaidSoftReserveCount(value)
+  if value == nil then
+    return 0
+  end
+  local count = tonumber(value) or 0
+  if count >= 2 then
+    return 2
+  end
+  if count >= 1 then
+    return 1
+  end
+  return 0
+end
+
+function LeafVE:GetRaidBossName(raidKey, bossKey)
+  local catalog = self:GetRaidCatalogEntry(raidKey)
+  if not catalog then
+    return tostring(bossKey or "")
+  end
+  for _, boss in ipairs(catalog.bosses or {}) do
+    if type(boss) == "table" and tostring(boss.key or "") == tostring(bossKey or "") then
+      return tostring(boss.name or bossKey or "")
+    end
+  end
+  return tostring(bossKey or "")
+end
+
+function LeafVE:GetRaidSoftReserveLootForBoss(bossKey)
+  local source = LeafVE_RaidSoftReserveLootSource
+  local rows = source and source[tostring(bossKey or "")]
+  if type(rows) ~= "table" then
+    return {}
+  end
+  return rows
+end
+
+function LeafVE:GetRaidSoftReserveBosses(eventRecord)
+  local rows = {}
+  if type(eventRecord) ~= "table" then
+    return rows
+  end
+  local catalog = self:GetRaidCatalogEntry(eventRecord.raidKey)
+  if not catalog then
+    return rows
+  end
+  for _, boss in ipairs(catalog.bosses or {}) do
+    if type(boss) == "table" and boss.kind == "boss" then
+      table.insert(rows, {
+        key = tostring(boss.key),
+        name = tostring(boss.name or boss.key or "Boss"),
+      })
+    end
+  end
+  return rows
+end
+
+function LeafVE:GetEffectiveRaidSoftReserveCount(eventRecord)
+  local count = NormalizeRaidSoftReserveCount(eventRecord and eventRecord.softReserveCount)
+  if count <= 0 then
+    return 0
+  end
+  if type(eventRecord) ~= "table" then
+    return 0
+  end
+  return table.getn(self:GetRaidSoftReserveBosses(eventRecord)) > 0 and count or 0
+end
+
+function LeafVE:FindRaidSoftReserveLootItem(bossKey, itemId)
+  itemId = tonumber(itemId)
+  if not itemId or itemId <= 0 then
+    return nil
+  end
+  local rows = self:GetRaidSoftReserveLootForBoss(bossKey)
+  for _, row in ipairs(rows) do
+    if type(row) == "table" and tonumber(row.itemId) == itemId then
+      return row
+    end
+  end
+  return nil
+end
+
+function LeafVE:NormalizeRaidSoftReserveEntries(eventRecord, reserves, limit)
+  local rows = {}
+  if type(reserves) ~= "table" then
+    return rows
+  end
+
+  local maxCount = NormalizeRaidSoftReserveCount(limit)
+  if maxCount <= 0 then
+    maxCount = self:GetEffectiveRaidSoftReserveCount(eventRecord)
+  end
+  if maxCount <= 0 then
+    maxCount = 2
+  end
+
+  local allowedBosses = nil
+  if type(eventRecord) == "table" then
+    allowedBosses = {}
+    for _, boss in ipairs(self:GetRaidSoftReserveBosses(eventRecord)) do
+      allowedBosses[tostring(boss.key)] = tostring(boss.name or boss.key or "Boss")
+    end
+  end
+
+  local seen = {}
+  for i = 1, table.getn(reserves) do
+    local reserve = reserves[i]
+    if type(reserve) == "table" then
+      local bossKey = Trim(tostring(reserve.bossKey or ""))
+      local itemId = tonumber(reserve.itemId)
+      if bossKey ~= "" and itemId and itemId > 0 then
+        local bossName = ""
+        if allowedBosses then
+          bossName = tostring(allowedBosses[bossKey] or "")
+          if bossName == "" then
+            bossKey = ""
+          end
+        else
+          bossName = Trim(tostring(reserve.bossName or ""))
+        end
+        if bossKey ~= "" then
+          local dedupeKey = Lower(bossKey) .. ":" .. tostring(itemId)
+          if not seen[dedupeKey] then
+            local lootRow = self:FindRaidSoftReserveLootItem(bossKey, itemId)
+            local itemName = Trim(tostring((lootRow and lootRow.name) or reserve.itemName or ""))
+            if itemName ~= "" then
+              table.insert(rows, {
+                bossKey = bossKey,
+                bossName = string.sub((bossName ~= "" and bossName or self:GetRaidBossName(eventRecord and eventRecord.raidKey, bossKey)), 1, 48),
+                itemId = itemId,
+                itemName = string.sub(itemName, 1, 64),
+                icon = tostring((lootRow and lootRow.icon) or reserve.icon or "INV_Misc_QuestionMark"),
+                quality = tonumber((lootRow and lootRow.quality) or reserve.quality) or 0,
+                slot = string.sub(tostring((lootRow and lootRow.slot) or reserve.slot or ""), 1, 80),
+              })
+              seen[dedupeKey] = true
+              if table.getn(rows) >= maxCount then
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return rows
+end
+
+function LeafVE:SerializeRaidSoftReserveEntries(reserves)
+  local rows = {}
+  if type(reserves) ~= "table" then
+    return ""
+  end
+  for i = 1, table.getn(reserves) do
+    local reserve = reserves[i]
+    if type(reserve) == "table" then
+      local itemId = tonumber(reserve.itemId)
+      local bossKey = Trim(tostring(reserve.bossKey or ""))
+      if bossKey ~= "" and itemId and itemId > 0 then
+        table.insert(rows, table.concat({
+          EncodeTalentField(bossKey),
+          tostring(itemId),
+          EncodeTalentField(reserve.itemName or ""),
+          EncodeTalentField(reserve.icon or ""),
+          tostring(tonumber(reserve.quality) or 0),
+          EncodeTalentField(reserve.slot or ""),
+          EncodeTalentField(reserve.bossName or ""),
+        }, "~"))
+      end
+    end
+  end
+  return table.concat(rows, TALENT_RECORD_SEP)
+end
+
+function LeafVE:DeserializeRaidSoftReserveEntries(text)
+  local rows = {}
+  if not text or text == "" then
+    return rows
+  end
+  local records = SplitByLiteralSep(text, TALENT_RECORD_SEP)
+  for i = 1, table.getn(records) do
+    local fields = SplitByLiteralSep(records[i], "~")
+    local itemId = tonumber(fields[2])
+    local bossKey = DecodeTalentField(fields[1] or "")
+    if bossKey ~= "" and itemId and itemId > 0 then
+      table.insert(rows, {
+        bossKey = bossKey,
+        itemId = itemId,
+        itemName = DecodeTalentField(fields[3] or ""),
+        icon = DecodeTalentField(fields[4] or ""),
+        quality = tonumber(fields[5]) or 0,
+        slot = DecodeTalentField(fields[6] or ""),
+        bossName = DecodeTalentField(fields[7] or ""),
+      })
+    end
+  end
+  return rows
+end
+
+function LeafVE:GetRaidSoftReserveSummary(signup, eventRecord, shortText)
+  local reserves = type(signup) == "table" and signup.softReserves or nil
+  if type(reserves) ~= "table" or table.getn(reserves) == 0 then
+    return ""
+  end
+
+  local lines = {}
+  local maxName = shortText and 20 or 64
+  local limit = self:GetEffectiveRaidSoftReserveCount(eventRecord)
+  if limit <= 0 then
+    limit = table.getn(reserves)
+  end
+  for i = 1, table.getn(reserves) do
+    if i > limit then break end
+    local reserve = reserves[i]
+    local itemName = tostring(reserve and reserve.itemName or "")
+    if string.len(itemName) > maxName then
+      itemName = string.sub(itemName, 1, maxName - 3) .. "..."
+    end
+    if itemName ~= "" then
+      table.insert(lines, itemName)
+    end
+  end
+  return table.concat(lines, shortText and " / " or "\n")
+end
+
+function LeafVE:IsRaidEventActiveForAnnouncements(status)
+  status = NormalizeRaidEventStatus(status)
+  return status == "open" or status == "locked"
+end
+
+function LeafVE:BuildRaidEventAnnouncementLine(eventRecord)
+  local title = tostring((type(eventRecord) == "table" and (eventRecord.title or eventRecord.raidName)) or "Raid Event")
+  local postedBy = tostring((type(eventRecord) == "table" and eventRecord.postedBy) or "Unknown")
+  local whenText = LeafVE_RaidUIFormatTime and LeafVE_RaidUIFormatTime(type(eventRecord) == "table" and eventRecord.startAt or 0) or date("%a %m/%d %H:%M", tonumber(type(eventRecord) == "table" and eventRecord.startAt or 0) or 0)
+  return "|cFF88CCFFRaid Sign-Ups|r " .. title .. " posted by " .. postedBy .. " for " .. whenText .. "."
+end
+
+function LeafVE:AnnounceRaidEventIfNeeded(eventRecord, priorRecord)
+  if type(eventRecord) ~= "table" then
+    return
+  end
+
+  local status = NormalizeRaidEventStatus(eventRecord.status)
+  if not self:IsRaidEventActiveForAnnouncements(status) then
+    return
+  end
+
+  local priorActive = type(priorRecord) == "table" and self:IsRaidEventActiveForAnnouncements(priorRecord.status)
+  if priorActive then
+    return
+  end
+
+  local me = ShortName(UnitName("player"))
+  if me and SamePlayerName(eventRecord.postedBy, me) then
+    return
+  end
+
+  PrintRaidEventMessage(self:BuildRaidEventAnnouncementLine(eventRecord))
+end
+
+function LeafVE:NormalizeRaidEventRecord(record)
+  if type(record) ~= "table" then return nil end
+
+  local catalog = self:GetRaidCatalogEntry(record.raidKey)
+  if not catalog then
+    return nil
+  end
+
+  local raidSize = tonumber(record.raidSize) or tonumber(catalog.raidSize) or 20
+  if raidSize < 5 then raidSize = 5 end
+  if raidSize > 40 then raidSize = 40 end
+
+  local defaultTargets = self:GetRaidDefaultRoleTargets(catalog.key, raidSize)
+  local roleTargets = type(record.roleTargets) == "table" and record.roleTargets or {}
+  local title = Trim(tostring(record.title or catalog.name))
+  title = string.sub(title, 1, 40)
+  if title == "" then
+    title = catalog.name
+  end
+
+  local notes = Trim(tostring(record.notes or ""))
+  notes = string.sub(notes, 1, 120)
+  local consumables = Trim(tostring(record.consumables or ""))
+  consumables = string.sub(consumables, 1, 120)
+
+  local normalized = {
+    id = Trim(tostring(record.id or "")),
+    raidKey = catalog.key,
+    raidName = catalog.name,
+    title = title,
+    postedBy = ShortName(record.postedBy or ""),
+    postedAt = tonumber(record.postedAt) or Now(),
+    updatedAt = tonumber(record.updatedAt) or tonumber(record.postedAt) or Now(),
+    startAt = tonumber(record.startAt) or 0,
+    signupCloseAt = tonumber(record.signupCloseAt) or tonumber(record.startAt) or 0,
+    status = NormalizeRaidEventStatus(record.status),
+    raidSize = raidSize,
+    notes = notes,
+    consumables = consumables,
+    roleTargets = {
+      tank = tonumber(roleTargets.tank) or defaultTargets.tank,
+      healer = tonumber(roleTargets.healer) or defaultTargets.healer,
+      melee = tonumber(roleTargets.melee) or defaultTargets.melee,
+      ranged = tonumber(roleTargets.ranged) or defaultTargets.ranged,
+      flex = tonumber(roleTargets.flex) or defaultTargets.flex,
+    },
+    softReserveCount = NormalizeRaidSoftReserveCount(record.softReserveCount),
+  }
+
+  if normalized.id == "" then
+    return nil
+  end
+  if not normalized.postedBy or normalized.postedBy == "" then
+    return nil
+  end
+
+  return normalized
+end
+
+function LeafVE:StoreRaidEventRecord(record)
+  local normalized = self:NormalizeRaidEventRecord(record)
+  if not normalized then return nil, false end
+
+  local db = self:GetRaidEventsDB()
+  local existing = db[normalized.id]
+  local changed = true
+  if type(existing) == "table" then
+    local priorUpdatedAt = tonumber(existing.updatedAt or 0) or 0
+    if priorUpdatedAt > normalized.updatedAt then
+      return existing, false
+    end
+    changed = priorUpdatedAt ~= normalized.updatedAt or NormalizeRaidEventStatus(existing.status) ~= normalized.status
+  end
+  db[normalized.id] = normalized
+
+  local eventSignups = self:GetRaidSignupsDB()[normalized.id]
+  if type(eventSignups) == "table" then
+    for playerKey, signupRecord in pairs(eventSignups) do
+      if type(signupRecord) == "table" then
+        signupRecord.softReserves = self:NormalizeRaidSoftReserveEntries(normalized, signupRecord.softReserves, normalized.softReserveCount)
+        eventSignups[playerKey] = signupRecord
+      end
+    end
+  end
+
+  if changed then
+    self:AnnounceRaidEventIfNeeded(normalized, existing)
+  end
+
+  if changed and LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.raidSignups and LeafVE.UI.panels.raidSignups:IsVisible() and LeafVE.UI.RefreshRaidSignupPanel then
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end
+  return normalized, changed
+end
+
+function LeafVE:StoreRaidSignupRecord(record)
+  if type(record) ~= "table" then return nil, false end
+
+  local player = ShortName(record.player or "")
+  local eventId = Trim(tostring(record.eventId or ""))
+  if not player or eventId == "" then return nil, false end
+
+  local classTag = string.upper(Trim(record.classTag or self:GetClassTagForPlayer(player) or "UNKNOWN"))
+  if classTag == "" then classTag = "UNKNOWN" end
+  local specName = Trim(tostring(record.specName or ""))
+  if specName == "" then
+    local spec = self:GetSpecSnapshotForPlayer(player, classTag)
+    specName = spec and spec.name or classTag
+  end
+
+  local normalized = {
+    eventId = eventId,
+    player = player,
+    classTag = classTag,
+    specName = string.sub(specName, 1, 32),
+    signupStatus = NormalizeRaidSignupStatus(record.signupStatus),
+    preferredRole = NormalizeRaidRole(record.preferredRole),
+    rosterStatus = NormalizeRaidRosterStatus(record.rosterStatus),
+    note = string.sub(Trim(tostring(record.note or "")), 1, 60),
+    signedAt = tonumber(record.signedAt) or Now(),
+    updatedAt = tonumber(record.updatedAt) or tonumber(record.signedAt) or Now(),
+    softReserves = self:NormalizeRaidSoftReserveEntries(self:GetRaidEventsDB()[eventId], record.softReserves, nil),
+  }
+
+  local signupsDB = self:GetRaidSignupsDB()
+  if type(signupsDB[eventId]) ~= "table" then
+    signupsDB[eventId] = {}
+  end
+
+  local key = Lower(player)
+  local existing = signupsDB[eventId][key]
+  local changed = true
+  if type(existing) == "table" then
+    local priorUpdatedAt = tonumber(existing.updatedAt or 0) or 0
+    if priorUpdatedAt > normalized.updatedAt then
+      return existing, false
+    end
+    changed = priorUpdatedAt ~= normalized.updatedAt
+  end
+  signupsDB[eventId][key] = normalized
+
+  if changed and LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.raidSignups and LeafVE.UI.panels.raidSignups:IsVisible() and LeafVE.UI.RefreshRaidSignupPanel then
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end
+  return normalized, changed
+end
+
+function LeafVE:BroadcastRaidEvent(eventRecord, messageType)
+  if not InGuild() or type(eventRecord) ~= "table" then return end
+
+  local payload = table.concat({
+    EncodeTalentField(eventRecord.id or ""),
+    EncodeTalentField(eventRecord.raidKey or ""),
+    EncodeTalentField(eventRecord.title or ""),
+    EncodeTalentField(eventRecord.postedBy or ""),
+    tostring(tonumber(eventRecord.postedAt) or 0),
+    tostring(tonumber(eventRecord.updatedAt) or 0),
+    tostring(tonumber(eventRecord.startAt) or 0),
+    tostring(tonumber(eventRecord.signupCloseAt) or 0),
+    EncodeTalentField(NormalizeRaidEventStatus(eventRecord.status)),
+    tostring(tonumber(eventRecord.raidSize) or 20),
+    tostring(tonumber(eventRecord.roleTargets and eventRecord.roleTargets.tank) or 0),
+    tostring(tonumber(eventRecord.roleTargets and eventRecord.roleTargets.healer) or 0),
+    tostring(tonumber(eventRecord.roleTargets and eventRecord.roleTargets.melee) or 0),
+    tostring(tonumber(eventRecord.roleTargets and eventRecord.roleTargets.ranged) or 0),
+    tostring(tonumber(eventRecord.roleTargets and eventRecord.roleTargets.flex) or 0),
+    EncodeTalentField(eventRecord.notes or ""),
+    EncodeTalentField(eventRecord.consumables or ""),
+    tostring(NormalizeRaidSoftReserveCount(eventRecord.softReserveCount)),
+  }, SEP)
+
+  SendAddonMessage("LeafVE", (messageType or "RAIDEVENT:") .. payload, "GUILD")
+end
+
+function LeafVE:BroadcastRaidSignup(signupRecord, messageType)
+  if not InGuild() or type(signupRecord) ~= "table" then return end
+
+  local payload = table.concat({
+    EncodeTalentField(signupRecord.eventId or ""),
+    EncodeTalentField(signupRecord.player or ""),
+    EncodeTalentField(signupRecord.classTag or ""),
+    EncodeTalentField(signupRecord.specName or ""),
+    EncodeTalentField(NormalizeRaidSignupStatus(signupRecord.signupStatus)),
+    EncodeTalentField(NormalizeRaidRole(signupRecord.preferredRole)),
+    EncodeTalentField(NormalizeRaidRosterStatus(signupRecord.rosterStatus)),
+    EncodeTalentField(signupRecord.note or ""),
+    tostring(tonumber(signupRecord.signedAt) or 0),
+    tostring(tonumber(signupRecord.updatedAt) or 0),
+    EncodeTalentField(self:SerializeRaidSoftReserveEntries(signupRecord.softReserves)),
+  }, SEP)
+
+  SendAddonMessage("LeafVE", (messageType or "RAIDSIGNUP:") .. payload, "GUILD")
+end
+
+function LeafVE:BroadcastRaidEventSnapshot(force)
+  if not InGuild() then return end
+  local now = Now()
+  self.lastRaidSyncRespondAt = self.lastRaidSyncRespondAt or 0
+  if not force and (now - self.lastRaidSyncRespondAt) < 10 then
+    return
+  end
+  self.lastRaidSyncRespondAt = now
+
+  for _, eventRecord in pairs(self:GetRaidEventsDB()) do
+    if type(eventRecord) == "table" then
+      local updatedAt = tonumber(eventRecord.updatedAt or eventRecord.postedAt or 0) or 0
+      if NormalizeRaidEventStatus(eventRecord.status) ~= "archived" and updatedAt >= (now - (14 * SECONDS_PER_DAY)) then
+        self:BroadcastRaidEvent(eventRecord, "RAIDEVENTSYNC:")
+      end
+    end
+  end
+end
+
+function LeafVE:BroadcastRaidSignupSnapshot(force)
+  if not InGuild() then return end
+  local now = Now()
+  self.lastRaidSignupRespondAt = self.lastRaidSignupRespondAt or 0
+  if not force and (now - self.lastRaidSignupRespondAt) < 10 then
+    return
+  end
+  self.lastRaidSignupRespondAt = now
+
+  for eventId, signupTable in pairs(self:GetRaidSignupsDB()) do
+    if type(signupTable) == "table" then
+      local eventRecord = self:GetRaidEventsDB()[eventId]
+      if type(eventRecord) == "table" and NormalizeRaidEventStatus(eventRecord.status) ~= "archived" then
+        for _, signupRecord in pairs(signupTable) do
+          if type(signupRecord) == "table" then
+            self:BroadcastRaidSignup(signupRecord, "RAIDSIGNUPSYNC:")
+          end
+        end
+      end
+    end
+  end
+end
+
+function LeafVE:RequestRaidSignupSync(force)
+  if not InGuild() then return end
+  local now = Now()
+  if not force and (now - (self.lastRaidSignupRequestAt or 0)) < 20 then
+    return
+  end
+  self.lastRaidSignupRequestAt = now
+  SendAddonMessage("LeafVE", force and "RAIDREQ_FORCE" or "RAIDREQ", "GUILD")
+end
+
+function LeafVE:HandleIncomingRaidEventMessage(payload)
+  local fields = SplitByLiteralSep(payload or "", SEP)
+  local consumables = ""
+  local softReserveCount = 0
+  if fields[18] ~= nil then
+    consumables = DecodeTalentField(fields[17] or "")
+    softReserveCount = tonumber(fields[18]) or 0
+  else
+    softReserveCount = tonumber(fields[17]) or 0
+  end
+  local record = {
+    id = DecodeTalentField(fields[1] or ""),
+    raidKey = DecodeTalentField(fields[2] or ""),
+    title = DecodeTalentField(fields[3] or ""),
+    postedBy = ShortName(DecodeTalentField(fields[4] or "")),
+    postedAt = tonumber(fields[5]) or Now(),
+    updatedAt = tonumber(fields[6]) or tonumber(fields[5]) or Now(),
+    startAt = tonumber(fields[7]) or 0,
+    signupCloseAt = tonumber(fields[8]) or tonumber(fields[7]) or 0,
+    status = DecodeTalentField(fields[9] or "open"),
+    raidSize = tonumber(fields[10]) or 20,
+    roleTargets = {
+      tank = tonumber(fields[11]) or 0,
+      healer = tonumber(fields[12]) or 0,
+      melee = tonumber(fields[13]) or 0,
+      ranged = tonumber(fields[14]) or 0,
+      flex = tonumber(fields[15]) or 0,
+    },
+    notes = DecodeTalentField(fields[16] or ""),
+    consumables = consumables,
+    softReserveCount = softReserveCount,
+  }
+  return self:StoreRaidEventRecord(record)
+end
+
+function LeafVE:HandleIncomingRaidSignupMessage(payload)
+  local fields = SplitByLiteralSep(payload or "", SEP)
+  local record = {
+    eventId = DecodeTalentField(fields[1] or ""),
+    player = ShortName(DecodeTalentField(fields[2] or "")),
+    classTag = DecodeTalentField(fields[3] or ""),
+    specName = DecodeTalentField(fields[4] or ""),
+    signupStatus = DecodeTalentField(fields[5] or "going"),
+    preferredRole = DecodeTalentField(fields[6] or "flex"),
+    rosterStatus = DecodeTalentField(fields[7] or "signed"),
+    note = DecodeTalentField(fields[8] or ""),
+    signedAt = tonumber(fields[9]) or Now(),
+    updatedAt = tonumber(fields[10]) or tonumber(fields[9]) or Now(),
+    softReserves = self:DeserializeRaidSoftReserveEntries(DecodeTalentField(fields[11] or "")),
+  }
+  return self:StoreRaidSignupRecord(record)
+end
+
+function LeafVE:CreateRaidEvent(raidKey, title, startAt, signupCloseAt, raidSize, roleTargets, notes, consumables, softReserveCount)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+  if not self:IsRaidOrganizerRank(me) then
+    return nil, "Only Jonin, Anbu, Sannin, or Hokage can create raid events."
+  end
+
+  local now = Now()
+  local eventRecord = {
+    id = tostring(me) .. ":" .. tostring(startAt or now) .. ":" .. tostring(now),
+    raidKey = raidKey,
+    title = title,
+    postedBy = me,
+    postedAt = now,
+    updatedAt = now,
+    startAt = tonumber(startAt) or 0,
+    signupCloseAt = tonumber(signupCloseAt) or tonumber(startAt) or 0,
+    status = "open",
+    raidSize = tonumber(raidSize) or 20,
+    roleTargets = roleTargets or {},
+    notes = notes or "",
+    consumables = consumables or "",
+    softReserveCount = NormalizeRaidSoftReserveCount(softReserveCount),
+  }
+
+  if eventRecord.startAt <= 0 then
+    return nil, "Start time is invalid."
+  end
+
+  local stored = self:StoreRaidEventRecord(eventRecord)
+  if not stored then
+    return nil, "Unable to create raid event."
+  end
+  PrintRaidEventMessage(self:BuildRaidEventAnnouncementLine(stored))
+  self:BroadcastRaidEvent(stored)
+  return stored
+end
+
+function LeafVE:SetRaidEventStatus(eventId, status)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+
+  local eventRecord = self:GetRaidEventsDB()[tostring(eventId or "")]
+  if type(eventRecord) ~= "table" then
+    return nil, "Raid event not found."
+  end
+  if not self:CanManageRaidEvent(eventRecord, me) then
+    return nil, "Only the raid lead or Jonin+ can manage this event."
+  end
+
+  local updatedAt = Now()
+  local priorUpdatedAt = tonumber(eventRecord.updatedAt or eventRecord.postedAt or 0) or 0
+  if updatedAt <= priorUpdatedAt then
+    updatedAt = priorUpdatedAt + 1
+  end
+
+  eventRecord.status = NormalizeRaidEventStatus(status)
+  eventRecord.updatedAt = updatedAt
+  local stored = self:StoreRaidEventRecord(eventRecord)
+  if not stored then
+    return nil, "Unable to update raid event."
+  end
+  self:BroadcastRaidEvent(stored)
+  return stored
+end
+
+function LeafVE:SubmitRaidSignup(eventId, signupStatus, preferredRole, note, softReserves)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+
+  local eventRecord = self:GetRaidEventsDB()[tostring(eventId or "")]
+  if type(eventRecord) ~= "table" then
+    return nil, "Raid event not found."
+  end
+  if NormalizeRaidEventStatus(eventRecord.status) == "completed" or NormalizeRaidEventStatus(eventRecord.status) == "cancelled" or NormalizeRaidEventStatus(eventRecord.status) == "archived" then
+    return nil, "This raid event is no longer accepting signups."
+  end
+  if NormalizeRaidEventStatus(eventRecord.status) == "locked" and not self:CanManageRaidEvent(eventRecord, me) then
+    return nil, "This raid event is locked."
+  end
+
+  local classTag = self:GetClassTagForPlayer(me)
+  local spec = self:GetSpecSnapshotForPlayer(me, classTag)
+  local role = NormalizeRaidRole(preferredRole or (LeafVE_DB.raidProfile and LeafVE_DB.raidProfile.defaultRole) or self:GetSuggestedRaidRoleForPlayer(me, classTag, spec and spec.name))
+  local existing = self:FindRaidSignupRecord(eventId, me)
+  local eventStatus = NormalizeRaidEventStatus(eventRecord.status)
+  local updatedAt = Now()
+  local signedAt = existing and (tonumber(existing.signedAt) or updatedAt) or updatedAt
+  local priorUpdatedAt = existing and (tonumber(existing.updatedAt or existing.signedAt or 0) or 0) or 0
+  if updatedAt <= priorUpdatedAt then
+    updatedAt = priorUpdatedAt + 1
+  end
+  local normalizedSignupStatus = NormalizeRaidSignupStatus(signupStatus)
+  local normalizedSoftReserves = {}
+  if normalizedSignupStatus ~= "unavailable" then
+    if eventStatus == "locked" then
+      normalizedSoftReserves = self:NormalizeRaidSoftReserveEntries(eventRecord, existing and existing.softReserves or {}, eventRecord.softReserveCount)
+    else
+      normalizedSoftReserves = self:NormalizeRaidSoftReserveEntries(eventRecord, softReserves or (existing and existing.softReserves) or {}, eventRecord.softReserveCount)
+      local reserveLimit = self:GetEffectiveRaidSoftReserveCount(eventRecord)
+      if reserveLimit > 0 and table.getn(normalizedSoftReserves) < reserveLimit then
+        return nil, "Select " .. tostring(reserveLimit) .. " soft reserve" .. (reserveLimit ~= 1 and "s" or "") .. " first."
+      end
+    end
+  end
+
+  local record = {
+    eventId = tostring(eventId),
+    player = me,
+    classTag = classTag,
+    specName = spec and spec.name or classTag,
+    signupStatus = normalizedSignupStatus,
+    preferredRole = role,
+    rosterStatus = existing and existing.rosterStatus or "signed",
+    note = note or "",
+    signedAt = signedAt,
+    updatedAt = updatedAt,
+    softReserves = normalizedSoftReserves,
+  }
+
+  local stored = self:StoreRaidSignupRecord(record)
+  if not stored then
+    return nil, "Unable to save raid signup."
+  end
+  if LeafVE_DB and LeafVE_DB.raidProfile then
+    LeafVE_DB.raidProfile.defaultRole = role
+  end
+  self:BroadcastRaidSignup(stored)
+  return stored
+end
+
+function LeafVE:SetRaidRosterStatus(eventId, playerName, rosterStatus)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+
+  local eventRecord = self:GetRaidEventsDB()[tostring(eventId or "")]
+  if type(eventRecord) ~= "table" then
+    return nil, "Raid event not found."
+  end
+  if not self:CanManageRaidEvent(eventRecord, me) then
+    return nil, "Only the raid lead or Jonin+ can manage this roster."
+  end
+
+  local existing = self:FindRaidSignupRecord(eventId, playerName)
+  if type(existing) ~= "table" then
+    return nil, "Raid signup not found."
+  end
+
+  local updatedAt = Now()
+  local priorUpdatedAt = tonumber(existing.updatedAt or existing.signedAt or 0) or 0
+  if updatedAt <= priorUpdatedAt then
+    updatedAt = priorUpdatedAt + 1
+  end
+
+  existing.rosterStatus = NormalizeRaidRosterStatus(rosterStatus)
+  existing.updatedAt = updatedAt
+  local stored = self:StoreRaidSignupRecord(existing)
+  if not stored then
+    return nil, "Unable to update roster status."
+  end
+  self:BroadcastRaidSignup(stored)
+  return stored
+end
+
+LeafVE_GuildEventCategoryOrder = LeafVE_GuildEventCategoryOrder or {
+  "Guild Meeting",
+  "Dungeon Run",
+  "PvP",
+  "World Boss",
+  "Farming",
+  "Social",
+  "Other",
+}
+
+function NormalizeGuildEventCategory(value)
+  local category = Trim(tostring(value or ""))
+  if category == "" then
+    return LeafVE_GuildEventCategoryOrder[1]
+  end
+  for _, option in ipairs(LeafVE_GuildEventCategoryOrder) do
+    if Lower(option) == Lower(category) then
+      return option
+    end
+  end
+  return string.sub(category, 1, 28)
+end
+
+function LeafVE:GetGuildEventsDB()
+  EnsureDB()
+  return LeafVE_GlobalDB.guildEvents
+end
+
+function LeafVE:GetGuildEventRSVPDB()
+  EnsureDB()
+  return LeafVE_GlobalDB.guildEventRSVPs
+end
+
+function LeafVE:FindGuildEventRSVP(eventId, playerName)
+  local eventRSVPs = self:GetGuildEventRSVPDB()[tostring(eventId or "")]
+  if type(eventRSVPs) ~= "table" then return nil end
+  playerName = ShortName(playerName)
+  if not playerName then return nil end
+  return eventRSVPs[Lower(playerName)]
+end
+
+function LeafVE:GetGuildEventRSVPs(eventId, includeUnavailable)
+  local rows = {}
+  local eventRSVPs = self:GetGuildEventRSVPDB()[tostring(eventId or "")]
+  if type(eventRSVPs) ~= "table" then
+    return rows
+  end
+
+  for _, record in pairs(eventRSVPs) do
+    if type(record) == "table" then
+      local signupStatus = NormalizeRaidSignupStatus(record.signupStatus)
+      if includeUnavailable or signupStatus ~= "unavailable" then
+        table.insert(rows, record)
+      end
+    end
+  end
+
+  table.sort(rows, function(a, b)
+    local aStatus = NormalizeRaidSignupStatus(a.signupStatus)
+    local bStatus = NormalizeRaidSignupStatus(b.signupStatus)
+    if aStatus == bStatus then
+      return Lower(a.player or "") < Lower(b.player or "")
+    end
+    return aStatus < bStatus
+  end)
+
+  return rows
+end
+
+function LeafVE:GetGuildEventResponseCounts(eventId)
+  local counts = { total = 0, going = 0, tentative = 0, late = 0, unavailable = 0 }
+  for _, record in ipairs(self:GetGuildEventRSVPs(eventId, true)) do
+    local status = NormalizeRaidSignupStatus(record.signupStatus)
+    counts.total = counts.total + 1
+    counts[status] = (counts[status] or 0) + 1
+  end
+  return counts
+end
+
+function LeafVE:GetVisibleGuildEvents(mode)
+  local rows = {}
+  local me = ShortName(UnitName("player"))
+  local now = Now()
+
+  for _, eventRecord in pairs(self:GetGuildEventsDB()) do
+    if type(eventRecord) == "table" then
+      local status = NormalizeRaidEventStatus(eventRecord.status)
+      local isVisible = status ~= "archived" and status ~= "cancelled"
+      if mode == "mine" then
+        local myRSVP = me and self:FindGuildEventRSVP(eventRecord.id, me) or nil
+        isVisible = isVisible and myRSVP ~= nil and NormalizeRaidSignupStatus(myRSVP.signupStatus) ~= "unavailable"
+      end
+      if isVisible and ((tonumber(eventRecord.startAt) or 0) + (14 * SECONDS_PER_DAY)) >= now then
+        table.insert(rows, eventRecord)
+      end
+    end
+  end
+
+  table.sort(rows, function(a, b)
+    local aStart = tonumber(a.startAt or 0) or 0
+    local bStart = tonumber(b.startAt or 0) or 0
+    if aStart == bStart then
+      return Lower(a.title or "") < Lower(b.title or "")
+    end
+    return aStart < bStart
+  end)
+
+  return rows
+end
+
+function LeafVE:IsGuildEventActiveForAnnouncements(status)
+  status = NormalizeRaidEventStatus(status)
+  return status == "open" or status == "locked"
+end
+
+function LeafVE:BuildGuildEventAnnouncementLine(eventRecord)
+  local title = tostring((type(eventRecord) == "table" and eventRecord.title) or "Guild Event")
+  local postedBy = tostring((type(eventRecord) == "table" and eventRecord.postedBy) or "Unknown")
+  local whenText = LeafVE_RaidUIFormatTime and LeafVE_RaidUIFormatTime(type(eventRecord) == "table" and eventRecord.startAt or 0) or date("%a %m/%d %H:%M", tonumber(type(eventRecord) == "table" and eventRecord.startAt or 0) or 0)
+  return "|cFF88CCFFGuild Event|r " .. title .. " posted by " .. postedBy .. " for " .. whenText .. "."
+end
+
+function LeafVE:AnnounceGuildEventIfNeeded(eventRecord, priorRecord)
+  if type(eventRecord) ~= "table" then
+    return
+  end
+
+  local status = NormalizeRaidEventStatus(eventRecord.status)
+  if not self:IsGuildEventActiveForAnnouncements(status) then
+    return
+  end
+
+  local priorActive = type(priorRecord) == "table" and self:IsGuildEventActiveForAnnouncements(priorRecord.status)
+  if priorActive then
+    return
+  end
+
+  local me = ShortName(UnitName("player"))
+  if me and SamePlayerName(eventRecord.postedBy, me) then
+    return
+  end
+
+  PrintRaidEventMessage(self:BuildGuildEventAnnouncementLine(eventRecord))
+end
+
+function LeafVE:NormalizeGuildEventRecord(record)
+  if type(record) ~= "table" then return nil end
+
+  local title = Trim(tostring(record.title or ""))
+  title = string.sub(title, 1, 50)
+  if title == "" then
+    return nil
+  end
+
+  local notes = Trim(tostring(record.notes or ""))
+  notes = string.sub(notes, 1, 140)
+  local rewards = Trim(tostring(record.rewards or ""))
+  rewards = string.sub(rewards, 1, 140)
+
+  local normalized = {
+    id = Trim(tostring(record.id or "")),
+    title = title,
+    category = NormalizeGuildEventCategory(record.category),
+    postedBy = ShortName(record.postedBy or ""),
+    postedAt = tonumber(record.postedAt) or Now(),
+    updatedAt = tonumber(record.updatedAt) or tonumber(record.postedAt) or Now(),
+    startAt = tonumber(record.startAt) or 0,
+    signupCloseAt = tonumber(record.signupCloseAt) or tonumber(record.startAt) or 0,
+    status = NormalizeRaidEventStatus(record.status),
+    notes = notes,
+    rewards = rewards,
+  }
+
+  if normalized.id == "" or not normalized.postedBy or normalized.postedBy == "" then
+    return nil
+  end
+
+  return normalized
+end
+
+function LeafVE:StoreGuildEventRecord(record)
+  local normalized = self:NormalizeGuildEventRecord(record)
+  if not normalized then return nil, false end
+
+  local db = self:GetGuildEventsDB()
+  local existing = db[normalized.id]
+  local changed = true
+  if type(existing) == "table" then
+    local priorUpdatedAt = tonumber(existing.updatedAt or 0) or 0
+    if priorUpdatedAt > normalized.updatedAt then
+      return existing, false
+    end
+    changed = priorUpdatedAt ~= normalized.updatedAt or NormalizeRaidEventStatus(existing.status) ~= normalized.status
+  end
+  db[normalized.id] = normalized
+
+  if normalized.status == "cancelled" or normalized.status == "archived" then
+    local rsvpDB = self:GetGuildEventRSVPDB()
+    rsvpDB[normalized.id] = nil
+  end
+
+  if changed then
+    self:AnnounceGuildEventIfNeeded(normalized, existing)
+  end
+  if changed and LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.guildEvents and LeafVE.UI.panels.guildEvents:IsVisible() and LeafVE.UI.RefreshGuildEventsPanel then
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end
+  return normalized, changed
+end
+
+function LeafVE:StoreGuildEventRSVPRecord(record)
+  if type(record) ~= "table" then return nil, false end
+
+  local player = ShortName(record.player or "")
+  local eventId = Trim(tostring(record.eventId or ""))
+  if not player or eventId == "" then return nil, false end
+
+  local classTag = string.upper(Trim(record.classTag or self:GetClassTagForPlayer(player) or "UNKNOWN"))
+  if classTag == "" then classTag = "UNKNOWN" end
+  local specName = Trim(tostring(record.specName or ""))
+  if specName == "" then
+    local spec = self:GetSpecSnapshotForPlayer(player, classTag)
+    specName = spec and spec.name or classTag
+  end
+
+  local normalized = {
+    eventId = eventId,
+    player = player,
+    classTag = classTag,
+    specName = string.sub(specName, 1, 32),
+    signupStatus = NormalizeRaidSignupStatus(record.signupStatus),
+    note = string.sub(Trim(tostring(record.note or "")), 1, 80),
+    signedAt = tonumber(record.signedAt) or Now(),
+    updatedAt = tonumber(record.updatedAt) or tonumber(record.signedAt) or Now(),
+  }
+
+  local rsvpDB = self:GetGuildEventRSVPDB()
+  local eventRecord = self:GetGuildEventsDB()[eventId]
+  local eventStatus = type(eventRecord) == "table" and NormalizeRaidEventStatus(eventRecord.status) or nil
+  if eventStatus == "cancelled" or eventStatus == "archived" then
+    local key = Lower(player)
+    local changed = false
+    if type(rsvpDB[eventId]) == "table" and rsvpDB[eventId][key] then
+      rsvpDB[eventId][key] = nil
+      if next(rsvpDB[eventId]) == nil then
+        rsvpDB[eventId] = nil
+      end
+      changed = true
+    end
+    if changed and LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.guildEvents and LeafVE.UI.panels.guildEvents:IsVisible() and LeafVE.UI.RefreshGuildEventsPanel then
+      LeafVE.UI:RefreshGuildEventsPanel(true)
+    end
+    return nil, changed
+  end
+
+  if type(rsvpDB[eventId]) ~= "table" then
+    rsvpDB[eventId] = {}
+  end
+
+  local key = Lower(player)
+  local existing = rsvpDB[eventId][key]
+  local changed = true
+  if type(existing) == "table" then
+    local priorUpdatedAt = tonumber(existing.updatedAt or existing.signedAt or 0) or 0
+    if priorUpdatedAt > normalized.updatedAt then
+      return existing, false
+    end
+    changed = priorUpdatedAt ~= normalized.updatedAt
+  end
+  rsvpDB[eventId][key] = normalized
+
+  if changed and LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.guildEvents and LeafVE.UI.panels.guildEvents:IsVisible() and LeafVE.UI.RefreshGuildEventsPanel then
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end
+  return normalized, changed
+end
+
+function LeafVE:BroadcastGuildEvent(eventRecord, messageType)
+  if not InGuild() or type(eventRecord) ~= "table" then return end
+
+  local payload = table.concat({
+    EncodeTalentField(eventRecord.id or ""),
+    EncodeTalentField(eventRecord.title or ""),
+    EncodeTalentField(eventRecord.category or ""),
+    EncodeTalentField(eventRecord.postedBy or ""),
+    tostring(tonumber(eventRecord.postedAt) or 0),
+    tostring(tonumber(eventRecord.updatedAt) or 0),
+    tostring(tonumber(eventRecord.startAt) or 0),
+    tostring(tonumber(eventRecord.signupCloseAt) or 0),
+    EncodeTalentField(NormalizeRaidEventStatus(eventRecord.status)),
+    EncodeTalentField(eventRecord.notes or ""),
+    EncodeTalentField(eventRecord.rewards or ""),
+  }, SEP)
+
+  SendAddonMessage("LeafVE", (messageType or "GUILDEVENT:") .. payload, "GUILD")
+end
+
+function LeafVE:BroadcastGuildEventRSVP(record, messageType)
+  if not InGuild() or type(record) ~= "table" then return end
+
+  local payload = table.concat({
+    EncodeTalentField(record.eventId or ""),
+    EncodeTalentField(record.player or ""),
+    EncodeTalentField(record.classTag or ""),
+    EncodeTalentField(record.specName or ""),
+    EncodeTalentField(NormalizeRaidSignupStatus(record.signupStatus)),
+    EncodeTalentField(record.note or ""),
+    tostring(tonumber(record.signedAt) or 0),
+    tostring(tonumber(record.updatedAt) or 0),
+  }, SEP)
+
+  SendAddonMessage("LeafVE", (messageType or "GUILDEVENTRSVP:") .. payload, "GUILD")
+end
+
+function LeafVE:BroadcastGuildEventSnapshot(force)
+  if not InGuild() then return end
+  local now = Now()
+  self.lastGuildEventRespondAt = self.lastGuildEventRespondAt or 0
+  if not force and (now - self.lastGuildEventRespondAt) < 10 then
+    return
+  end
+  self.lastGuildEventRespondAt = now
+
+  for _, eventRecord in pairs(self:GetGuildEventsDB()) do
+    if type(eventRecord) == "table" then
+      local updatedAt = tonumber(eventRecord.updatedAt or eventRecord.postedAt or 0) or 0
+      if NormalizeRaidEventStatus(eventRecord.status) ~= "archived" and updatedAt >= (now - (30 * SECONDS_PER_DAY)) then
+        self:BroadcastGuildEvent(eventRecord, "GUILDEVENTSYNC:")
+      end
+    end
+  end
+end
+
+function LeafVE:BroadcastGuildEventRSVPSnapshot(force)
+  if not InGuild() then return end
+  local now = Now()
+  self.lastGuildEventRSVPRespondAt = self.lastGuildEventRSVPRespondAt or 0
+  if not force and (now - self.lastGuildEventRSVPRespondAt) < 10 then
+    return
+  end
+  self.lastGuildEventRSVPRespondAt = now
+
+  for eventId, signupTable in pairs(self:GetGuildEventRSVPDB()) do
+    if type(signupTable) == "table" then
+      local eventRecord = self:GetGuildEventsDB()[eventId]
+      local eventStatus = type(eventRecord) == "table" and NormalizeRaidEventStatus(eventRecord.status) or nil
+      if type(eventRecord) == "table" and eventStatus ~= "archived" and eventStatus ~= "cancelled" then
+        for _, record in pairs(signupTable) do
+          if type(record) == "table" then
+            self:BroadcastGuildEventRSVP(record, "GUILDEVENTRSVPSYNC:")
+          end
+        end
+      end
+    end
+  end
+end
+
+function LeafVE:RequestGuildEventSync(force)
+  if not InGuild() then return end
+  local now = Now()
+  if not force and (now - (self.lastGuildEventRequestAt or 0)) < 20 then
+    return
+  end
+  self.lastGuildEventRequestAt = now
+  SendAddonMessage("LeafVE", force and "GUILDEVENTREQ_FORCE" or "GUILDEVENTREQ", "GUILD")
+end
+
+function LeafVE:HandleIncomingGuildEventMessage(payload)
+  local fields = SplitByLiteralSep(payload or "", SEP)
+  local record = {
+    id = DecodeTalentField(fields[1] or ""),
+    title = DecodeTalentField(fields[2] or ""),
+    category = DecodeTalentField(fields[3] or ""),
+    postedBy = ShortName(DecodeTalentField(fields[4] or "")),
+    postedAt = tonumber(fields[5]) or Now(),
+    updatedAt = tonumber(fields[6]) or tonumber(fields[5]) or Now(),
+    startAt = tonumber(fields[7]) or 0,
+    signupCloseAt = tonumber(fields[8]) or tonumber(fields[7]) or 0,
+    status = DecodeTalentField(fields[9] or "open"),
+    notes = DecodeTalentField(fields[10] or ""),
+    rewards = DecodeTalentField(fields[11] or ""),
+  }
+  return self:StoreGuildEventRecord(record)
+end
+
+function LeafVE:HandleIncomingGuildEventRSVPMessage(payload)
+  local fields = SplitByLiteralSep(payload or "", SEP)
+  local record = {
+    eventId = DecodeTalentField(fields[1] or ""),
+    player = ShortName(DecodeTalentField(fields[2] or "")),
+    classTag = DecodeTalentField(fields[3] or ""),
+    specName = DecodeTalentField(fields[4] or ""),
+    signupStatus = DecodeTalentField(fields[5] or "going"),
+    note = DecodeTalentField(fields[6] or ""),
+    signedAt = tonumber(fields[7]) or Now(),
+    updatedAt = tonumber(fields[8]) or tonumber(fields[7]) or Now(),
+  }
+  return self:StoreGuildEventRSVPRecord(record)
+end
+
+function LeafVE:CreateGuildEvent(title, category, startAt, signupCloseAt, notes, rewards)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+  if not self:IsRaidOrganizerRank(me) then
+    return nil, "Only Jonin, Anbu, Sannin, or Hokage can create guild events."
+  end
+
+  local now = Now()
+  local eventRecord = {
+    id = tostring(me) .. ":GE:" .. tostring(startAt or now) .. ":" .. tostring(now),
+    title = title,
+    category = category,
+    postedBy = me,
+    postedAt = now,
+    updatedAt = now,
+    startAt = tonumber(startAt) or 0,
+    signupCloseAt = tonumber(signupCloseAt) or tonumber(startAt) or 0,
+    status = "open",
+    notes = notes or "",
+    rewards = rewards or "",
+  }
+
+  if eventRecord.startAt <= 0 then
+    return nil, "Start time is invalid."
+  end
+
+  local stored = self:StoreGuildEventRecord(eventRecord)
+  if not stored then
+    return nil, "Unable to create guild event."
+  end
+  PrintRaidEventMessage(self:BuildGuildEventAnnouncementLine(stored))
+  self:BroadcastGuildEvent(stored)
+  return stored
+end
+
+function LeafVE:SetGuildEventStatus(eventId, status)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+
+  local eventRecord = self:GetGuildEventsDB()[tostring(eventId or "")]
+  if type(eventRecord) ~= "table" then
+    return nil, "Guild event not found."
+  end
+  if not self:CanManageRaidEvent(eventRecord, me) then
+    return nil, "Only the event lead or Jonin+ can manage this event."
+  end
+
+  local updatedAt = Now()
+  local priorUpdatedAt = tonumber(eventRecord.updatedAt or eventRecord.postedAt or 0) or 0
+  if updatedAt <= priorUpdatedAt then
+    updatedAt = priorUpdatedAt + 1
+  end
+
+  eventRecord.status = NormalizeRaidEventStatus(status)
+  eventRecord.updatedAt = updatedAt
+  local stored = self:StoreGuildEventRecord(eventRecord)
+  if not stored then
+    return nil, "Unable to update guild event."
+  end
+  self:BroadcastGuildEvent(stored)
+  return stored
+end
+
+function LeafVE:SubmitGuildEventRSVP(eventId, signupStatus, note)
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return nil, "Your player name could not be determined."
+  end
+
+  local eventRecord = self:GetGuildEventsDB()[tostring(eventId or "")]
+  if type(eventRecord) ~= "table" then
+    return nil, "Guild event not found."
+  end
+  if NormalizeRaidEventStatus(eventRecord.status) == "completed" or NormalizeRaidEventStatus(eventRecord.status) == "cancelled" or NormalizeRaidEventStatus(eventRecord.status) == "archived" then
+    return nil, "This guild event is no longer accepting responses."
+  end
+  if NormalizeRaidEventStatus(eventRecord.status) == "locked" and not self:CanManageRaidEvent(eventRecord, me) then
+    return nil, "This guild event is locked."
+  end
+
+  local classTag = self:GetClassTagForPlayer(me)
+  local spec = self:GetSpecSnapshotForPlayer(me, classTag)
+  local existing = self:FindGuildEventRSVP(eventId, me)
+  local updatedAt = Now()
+  local signedAt = existing and (tonumber(existing.signedAt) or updatedAt) or updatedAt
+  local priorUpdatedAt = existing and (tonumber(existing.updatedAt or existing.signedAt or 0) or 0) or 0
+  if updatedAt <= priorUpdatedAt then
+    updatedAt = priorUpdatedAt + 1
+  end
+
+  local record = {
+    eventId = tostring(eventId),
+    player = me,
+    classTag = classTag,
+    specName = spec and spec.name or classTag,
+    signupStatus = NormalizeRaidSignupStatus(signupStatus),
+    note = note or "",
+    signedAt = signedAt,
+    updatedAt = updatedAt,
+  }
+
+  local stored = self:StoreGuildEventRSVPRecord(record)
+  if not stored then
+    return nil, "Unable to save guild event response."
+  end
+  self:BroadcastGuildEventRSVP(stored)
+  return stored
+end
+
 -- Helper: compare two "major.minor" version strings numerically
 local function VersionLessThan(a, b)
   local amaj, amin = string.match(a or "0.0", "(%d+)%.(%d+)")
@@ -5616,6 +7221,66 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
         LeafVE.UI:RefreshWorkOrderPopup(LeafVE.UI.cardCurrentPlayer)
       end
     end
+    return
+  end
+
+  if message == "RAIDREQ" or message == "RAIDREQ_FORCE" then
+    local forceRespond = (message == "RAIDREQ_FORCE")
+    local me = ShortName(UnitName("player"))
+    if me and sender ~= me then
+      self:BroadcastRaidEventSnapshot(forceRespond)
+      self:BroadcastRaidSignupSnapshot(forceRespond)
+    end
+    return
+  end
+
+  if message == "GUILDEVENTREQ" or message == "GUILDEVENTREQ_FORCE" then
+    local forceRespond = (message == "GUILDEVENTREQ_FORCE")
+    local me = ShortName(UnitName("player"))
+    if me and sender ~= me then
+      self:BroadcastGuildEventSnapshot(forceRespond)
+      self:BroadcastGuildEventRSVPSnapshot(forceRespond)
+    end
+    return
+  end
+
+  if string.sub(message, 1, 11) == "GUILDEVENT:" then
+    self:HandleIncomingGuildEventMessage(string.sub(message, 12))
+    return
+  end
+
+  if string.sub(message, 1, 15) == "GUILDEVENTSYNC:" then
+    self:HandleIncomingGuildEventMessage(string.sub(message, 16))
+    return
+  end
+
+  if string.sub(message, 1, 15) == "GUILDEVENTRSVP:" then
+    self:HandleIncomingGuildEventRSVPMessage(string.sub(message, 16))
+    return
+  end
+
+  if string.sub(message, 1, 19) == "GUILDEVENTRSVPSYNC:" then
+    self:HandleIncomingGuildEventRSVPMessage(string.sub(message, 20))
+    return
+  end
+
+  if string.sub(message, 1, 10) == "RAIDEVENT:" then
+    self:HandleIncomingRaidEventMessage(string.sub(message, 11))
+    return
+  end
+
+  if string.sub(message, 1, 14) == "RAIDEVENTSYNC:" then
+    self:HandleIncomingRaidEventMessage(string.sub(message, 15))
+    return
+  end
+
+  if string.sub(message, 1, 11) == "RAIDSIGNUP:" then
+    self:HandleIncomingRaidSignupMessage(string.sub(message, 12))
+    return
+  end
+
+  if string.sub(message, 1, 15) == "RAIDSIGNUPSYNC:" then
+    self:HandleIncomingRaidSignupMessage(string.sub(message, 16))
     return
   end
 
@@ -18267,29 +19932,38 @@ function LeafVE.UI:Build()
   self.tabAchievements:SetPoint("LEFT", self.tabLeaderLife, "RIGHT", 4, 0)
   self.tabAchievements:SetWidth(95)
 
-  self.tabBadges = TabButton(f, "Badges", "LeafVE_TabBadges")
-  self.tabBadges:SetPoint("LEFT", self.tabAchievements, "RIGHT", 4, 0)
-  self.tabBadges:SetWidth(65)
-
   self.tabShoutouts = TabButton(f, "Shoutouts", "LeafVE_TabShoutouts")
-  self.tabShoutouts:SetPoint("LEFT", self.tabBadges, "RIGHT", 4, 0)
+  self.tabShoutouts:SetPoint("LEFT", self.tabAchievements, "RIGHT", 4, 0)
   self.tabShoutouts:SetWidth(80)
 
+  self.tabRaidSignups = TabButton(f, "Raid Sign-Ups", "LeafVE_TabRaidSignups")
+  self.tabRaidSignups:SetPoint("LEFT", self.tabShoutouts, "RIGHT", 4, 0)
+  self.tabRaidSignups:SetWidth(92)
+
+  self.tabGuildEvents = TabButton(f, "Guild Events", "LeafVE_TabGuildEvents")
+  self.tabGuildEvents:SetPoint("LEFT", self.tabRaidSignups, "RIGHT", 4, 0)
+  self.tabGuildEvents:SetWidth(88)
+
   self.tabHistory = TabButton(f, "History", "LeafVE_TabHistory")
-  self.tabHistory:SetPoint("LEFT", self.tabShoutouts, "RIGHT", 4, 0)
+  self.tabHistory:SetPoint("LEFT", self.tabGuildEvents, "RIGHT", 4, 0)
   self.tabHistory:SetWidth(60)
 
   self.tabLiveHistory = TabButton(f, "Live History", "LeafVE_TabLiveHistory")
   self.tabLiveHistory:SetPoint("LEFT", self.tabHistory, "RIGHT", 4, 0)
   self.tabLiveHistory:SetWidth(80)
 
+  self.tabBadges = TabButton(f, "Badges", "LeafVE_TabBadges")
+  self.tabBadges:SetPoint("LEFT", self.tabLiveHistory, "RIGHT", 4, 0)
+  self.tabBadges:SetWidth(65)
+
   self.tabOptions = TabButton(f, "Options", "LeafVE_TabOptions")
-  self.tabOptions:SetPoint("LEFT", self.tabLiveHistory, "RIGHT", 4, 0)
-  self.tabOptions:SetWidth(60)
+  self.tabOptions:SetPoint("LEFT", self.tabBadges, "RIGHT", 4, 0)
+  self.tabOptions:SetWidth(56)
 
   self.tabAdmin = TabButton(f, "Admin", "LeafVE_TabAdmin")
-  self.tabAdmin:SetPoint("LEFT", self.tabOptions, "RIGHT", 4, 0)
+  self.tabAdmin:SetPoint("TOPLEFT", self.tabWelcome, "BOTTOMLEFT", 0, -6)
   self.tabAdmin:SetWidth(50)
+
   -- Show admin tab only to Anbu, Sannin, or Hokage
   if LeafVE:IsAdminRank() then
     self.tabAdmin:Show()
@@ -18298,7 +19972,7 @@ function LeafVE.UI:Build()
   end
   
   self.inset = CreateInset(f)
-  self.inset:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -80)
+  self.inset:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -106)
   self.inset:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -12, 12)
   
   self.left = CreateFrame("Frame", nil, self.inset)
@@ -18355,6 +20029,28 @@ function LeafVE.UI:Build()
   self.panels.liveHistory = CreateFrame("Frame", nil, self.left)
   self.panels.liveHistory:SetAllPoints(self.left)
   BuildLiveHistoryPanel(self.panels.liveHistory)
+
+  self.panels.raidSignups = CreateFrame("Frame", nil, self.inset)
+  self.panels.raidSignups:SetAllPoints(self.inset)
+  if BuildRaidSignupPanel then
+    BuildRaidSignupPanel(self.panels.raidSignups)
+  else
+    local raidLoadErrorText = self.panels.raidSignups:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    raidLoadErrorText:SetPoint("CENTER", self.panels.raidSignups, "CENTER", 0, 0)
+    raidLoadErrorText:SetText("|cFFFF6666Raid Sign-Ups failed to load.|r")
+    self.panels.raidSignups.loadErrorText = raidLoadErrorText
+  end
+
+  self.panels.guildEvents = CreateFrame("Frame", nil, self.inset)
+  self.panels.guildEvents:SetAllPoints(self.inset)
+  if BuildGuildEventsPanel then
+    BuildGuildEventsPanel(self.panels.guildEvents)
+  else
+    local guildEventLoadErrorText = self.panels.guildEvents:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    guildEventLoadErrorText:SetPoint("CENTER", self.panels.guildEvents, "CENTER", 0, 0)
+    guildEventLoadErrorText:SetText("|cFFFF6666Guild Events failed to load.|r")
+    self.panels.guildEvents.loadErrorText = guildEventLoadErrorText
+  end
 
   self.panels.welcome = CreateFrame("Frame", nil, self.left)
   self.panels.welcome:SetAllPoints(self.left)
@@ -18422,6 +20118,16 @@ function LeafVE.UI:Build()
     self:Refresh()
   end)
 
+  self.tabRaidSignups:SetScript("OnClick", function()
+    self.activeTab = "raidSignups"
+    self:Refresh()
+  end)
+
+  self.tabGuildEvents:SetScript("OnClick", function()
+    self.activeTab = "guildEvents"
+    self:Refresh()
+  end)
+
   self.tabWelcome:SetScript("OnClick", function()
     self.activeTab = "welcome"
     self:Refresh()
@@ -18445,6 +20151,8 @@ function LeafVE.UI:Build()
   self.panels.options:Hide()
   self.panels.admin:Hide()
   self.panels.liveHistory:Hide()
+  self.panels.raidSignups:Hide()
+  self.panels.guildEvents:Hide()
   self.panels.welcome:Hide()
   self.panels.join:Hide()
   
@@ -18484,7 +20192,7 @@ function LeafVE.UI:Refresh()
     self.activeTab = "me"
   end
 
-  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabShoutouts, self.tabHistory, self.tabLiveHistory, self.tabOptions}
+  local accessTabs = {self.tabWelcome, self.tabMe, self.tabRoster, self.tabLeaderWeek, self.tabLeaderLife, self.tabAchievements, self.tabBadges, self.tabShoutouts, self.tabHistory, self.tabLiveHistory, self.tabRaidSignups, self.tabGuildEvents, self.tabOptions}
   if hasAccess then
     for _, tab in ipairs(accessTabs) do
       if tab then tab:Show() end
@@ -18516,7 +20224,7 @@ function LeafVE.UI:Refresh()
   end
 
   if self.card then
-    if hasAccess then
+    if hasAccess and self.activeTab ~= "raidSignups" and self.activeTab ~= "guildEvents" then
       self.card:Show()
     else
       self.card:Hide()
@@ -18524,7 +20232,7 @@ function LeafVE.UI:Refresh()
   end
   
   -- Hide all panels safely
-  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "liveHistory", "welcome", "join"}
+  local panelNames = {"me", "shoutouts", "leaderWeek", "leaderLife", "roster", "history", "badges", "achievements", "options", "admin", "liveHistory", "raidSignups", "guildEvents", "welcome", "join"}
   for _, name in ipairs(panelNames) do
     if self.panels[name] and self.panels[name].Hide then
       self.panels[name]:Hide()
@@ -18833,6 +20541,18 @@ function LeafVE.UI:Refresh()
     self.panels.liveHistory:Show()
     self:RefreshLiveHistory()
 
+  elseif self.activeTab == "raidSignups" and self.panels.raidSignups then
+    self.panels.raidSignups:Show()
+    if self.RefreshRaidSignupPanel then
+      self:RefreshRaidSignupPanel()
+    end
+
+  elseif self.activeTab == "guildEvents" and self.panels.guildEvents then
+    self.panels.guildEvents:Show()
+    if self.RefreshGuildEventsPanel then
+      self:RefreshGuildEventsPanel()
+    end
+
   elseif self.activeTab == "welcome" and self.panels.welcome then
     self.panels.welcome:Show()
     self:RefreshWelcome()
@@ -19130,11 +20850,13 @@ ef:SetScript("OnEvent", function()
           LeafVE:BroadcastMyGear()
           LeafVE.lastTalentBroadcast = 0  -- bypass throttle for login broadcast
           LeafVE:BroadcastMyTalents(true)
-          LeafVE:BroadcastGuildBankOwner(true)
-          LeafVE:RequestGuildBankOwner(true)
-          LeafVE:RequestWorkOrderSync(true)
-          LeafVE:RequestGuildBankSnapshot(true)
-          LeafVE:RequestGuildBankItemRequestSync(true)
+           LeafVE:BroadcastGuildBankOwner(true)
+           LeafVE:RequestGuildBankOwner(true)
+           LeafVE:RequestRaidSignupSync(true)
+           LeafVE:RequestGuildEventSync(true)
+           LeafVE:RequestWorkOrderSync(true)
+           LeafVE:RequestGuildBankSnapshot(true)
+           LeafVE:RequestGuildBankItemRequestSync(true)
           LeafVE:RequestGuildBankHighValueSync(true)
         end
         broadcastFrame:SetScript("OnUpdate", nil)
@@ -19984,9 +21706,2844 @@ Print("|cFF2DD35CLeaf Village Legends|r v"..LeafVE.version.." loaded!")
 Print("Type |cFFFFD700/lve|r or |cFFFFD700/leaf|r to open the UI")
 Print("Type |cFFFFD700/lvedebug|r for debug commands")
 
+if type(LeafVE_RaidCatalogSource) ~= "table" then
+  LeafVE_RaidCatalogSource = {
+    {
+      key = "ZulGurub",
+      name = "Zul'Gurub",
+      raidSize = 20,
+      roleTargets = { tank = 2, healer = 5, melee = 6, ranged = 7, flex = 0 },
+      bosses = {
+        { key = "ZGJeklik", name = "High Priestess Jeklik", kind = "boss" },
+        { key = "ZGVenoxis", name = "High Priest Venoxis", kind = "boss" },
+        { key = "ZGMarli", name = "High Priestess Mar'li", kind = "boss" },
+        { key = "ZGMandokir", name = "Bloodlord Mandokir", kind = "boss" },
+        { key = "ZGThekal", name = "High Priest Thekal", kind = "boss" },
+        { key = "ZGArlokk", name = "High Priestess Arlokk", kind = "boss" },
+        { key = "ZGJindo", name = "Jin'do the Hexxer", kind = "boss" },
+        { key = "ZGHakkar", name = "Hakkar", kind = "boss" },
+      },
+    },
+    {
+      key = "RuinsofAQ",
+      name = "Ruins of Ahn'Qiraj",
+      raidSize = 20,
+      roleTargets = { tank = 2, healer = 5, melee = 6, ranged = 7, flex = 0 },
+      bosses = {
+        { key = "AQ20Kurinnaxx", name = "Kurinnaxx", kind = "boss" },
+        { key = "AQ20CAPTAIN", name = "Rajaxx's Captains", kind = "boss" },
+        { key = "AQ20Rajaxx", name = "General Rajaxx", kind = "boss" },
+        { key = "AQ20Moam", name = "Moam", kind = "boss" },
+        { key = "AQ20Buru", name = "Buru the Gorger", kind = "boss" },
+        { key = "AQ20Ayamiss", name = "Ayamiss the Hunter", kind = "boss" },
+        { key = "AQ20Ossirian", name = "Ossirian the Unscarred", kind = "boss" },
+      },
+    },
+    {
+      key = "MoltenCore",
+      name = "Molten Core",
+      raidSize = 40,
+      roleTargets = { tank = 4, healer = 10, melee = 13, ranged = 13, flex = 0 },
+      bosses = {
+        { key = "MCIncindis", name = "Incindis", kind = "boss" },
+        { key = "MCLucifron", name = "Lucifron", kind = "boss" },
+        { key = "MCMagmadar", name = "Magmadar", kind = "boss" },
+        { key = "MCGehennas", name = "Gehennas", kind = "boss" },
+        { key = "MCGarr", name = "Garr", kind = "boss" },
+        { key = "MCShazzrah", name = "Shazzrah", kind = "boss" },
+        { key = "MCGeddon", name = "Baron Geddon", kind = "boss" },
+        { key = "MCGolemagg", name = "Golemagg the Incinerator", kind = "boss" },
+        { key = "MCTwins", name = "Basalthar & Smoldaris", kind = "boss" },
+        { key = "MCThaurissan", name = "Sorcerer-Thane Thaurissan", kind = "boss" },
+        { key = "MCSulfuron", name = "Sulfuron Harbinger", kind = "boss" },
+        { key = "MCMajordomo", name = "Majordomo Executus", kind = "boss" },
+        { key = "MCRagnaros", name = "Ragnaros", kind = "boss" },
+      },
+    },
+    {
+      key = "Onyxia",
+      name = "Onyxia's Lair",
+      raidSize = 40,
+      roleTargets = { tank = 3, healer = 8, melee = 14, ranged = 15, flex = 0 },
+      bosses = {
+        { key = "Onyxia", name = "Onyxia", kind = "boss" },
+      },
+    },
+    {
+      key = "LowerKara",
+      name = "Lower Karazhan Halls",
+      raidSize = 10,
+      roleTargets = { tank = 2, healer = 3, melee = 2, ranged = 3, flex = 0 },
+      bosses = {
+        { key = "LKHRolfen", name = "Master Blacksmith Rolfen", kind = "boss" },
+        { key = "LKHBroodQueenAraxxna", name = "Brood Queen Araxxna", kind = "boss" },
+        { key = "LKHGrizikil", name = "Grizikil", kind = "boss" },
+        { key = "LKHClawlordHowlfang", name = "Clawlord Howlfang", kind = "boss" },
+        { key = "LKHLordBlackwaldII", name = "Lord Blackwald II", kind = "boss" },
+        { key = "LKHMoroes", name = "Moroes", kind = "boss" },
+      },
+    },
+    {
+      key = "BlackwingLair",
+      name = "Blackwing Lair",
+      raidSize = 40,
+      roleTargets = { tank = 4, healer = 10, melee = 13, ranged = 13, flex = 0 },
+      bosses = {
+        { key = "BWLRazorgore", name = "Razorgore the Untamed", kind = "boss" },
+        { key = "BWLVaelastrasz", name = "Vaelastrasz the Corrupt", kind = "boss" },
+        { key = "BWLLashlayer", name = "Broodlord Lashlayer", kind = "boss" },
+        { key = "BWLFiremaw", name = "Firemaw", kind = "boss" },
+        { key = "BWLEbonroc", name = "Ebonroc", kind = "boss" },
+        { key = "BWLFlamegor", name = "Flamegor", kind = "boss" },
+        { key = "BWLChromaggus", name = "Chromaggus", kind = "boss" },
+        { key = "BWLNefarian", name = "Nefarian", kind = "boss" },
+      },
+    },
+    {
+      key = "EmeraldSanctum",
+      name = "Emerald Sanctum",
+      raidSize = 10,
+      roleTargets = { tank = 2, healer = 3, melee = 2, ranged = 3, flex = 0 },
+      bosses = {
+        { key = "ESErennius", name = "Erennius", kind = "boss" },
+        { key = "ESSolnius1", name = "Solnius the Awakener", kind = "boss" },
+      },
+    },
+    {
+      key = "TempleofAQ",
+      name = "Temple of Ahn'Qiraj",
+      raidSize = 40,
+      roleTargets = { tank = 4, healer = 10, melee = 13, ranged = 13, flex = 0 },
+      bosses = {
+        { key = "AQ40Skeram", name = "The Prophet Skeram", kind = "boss" },
+        { key = "AQ40Trio", name = "The Bug Family", kind = "boss" },
+        { key = "AQ40Sartura", name = "Battleguard Sartura", kind = "boss" },
+        { key = "AQ40Fankriss", name = "Fankriss the Unyielding", kind = "boss" },
+        { key = "AQ40Viscidus", name = "Viscidus", kind = "boss" },
+        { key = "AQ40Huhuran", name = "Princess Huhuran", kind = "boss" },
+        { key = "AQ40Emperors", name = "The Twin Emperors", kind = "boss" },
+        { key = "AQ40Ouro", name = "Ouro", kind = "boss" },
+        { key = "AQ40CThun", name = "C'Thun", kind = "boss" },
+      },
+    },
+    {
+      key = "Naxxramas",
+      name = "Naxxramas",
+      raidSize = 40,
+      roleTargets = { tank = 4, healer = 10, melee = 13, ranged = 13, flex = 0 },
+      bosses = {
+        { key = "NAXPatchwerk", name = "Patchwerk", kind = "boss" },
+        { key = "NAXGrobbulus", name = "Grobbulus", kind = "boss" },
+        { key = "NAXGluth", name = "Gluth", kind = "boss" },
+        { key = "NAXThaddius", name = "Thaddius", kind = "boss" },
+        { key = "NAXAnubRekhan", name = "Anub'Rekhan", kind = "boss" },
+        { key = "NAXGrandWidowFaerlina", name = "Grand Widow Faerlina", kind = "boss" },
+        { key = "NAXMaexxna", name = "Maexxna", kind = "boss" },
+        { key = "NAXNoththePlaguebringer", name = "Noth the Plaguebringer", kind = "boss" },
+        { key = "NAXHeigantheUnclean", name = "Heigan the Unclean", kind = "boss" },
+        { key = "NAXLoatheb", name = "Loatheb", kind = "boss" },
+        { key = "NAXInstructorRazuvious", name = "Instructor Razuvious", kind = "boss" },
+        { key = "NAXGothiktheHarvester", name = "Gothik the Harvester", kind = "boss" },
+        { key = "NAXTheFourHorsemen", name = "The Four Horsemen", kind = "boss" },
+        { key = "NAXSapphiron", name = "Sapphiron", kind = "boss" },
+        { key = "NAXKelThuzard", name = "Kel'Thuzad", kind = "boss" },
+      },
+    },
+    {
+      key = "UpperKara",
+      name = "Upper Karazhan Halls",
+      raidSize = 10,
+      roleTargets = { tank = 2, healer = 3, melee = 2, ranged = 3, flex = 0 },
+      bosses = {
+        { key = "UKHGnarlmoon", name = "Keeper Gnarlmoon", kind = "boss" },
+        { key = "UKHIncantagos", name = "Ley-Watcher Incantagos", kind = "boss" },
+        { key = "UKHAnomalus", name = "Anomalus", kind = "boss" },
+        { key = "UKHEcho", name = "Echo of Medivh", kind = "boss" },
+        { key = "UKHKing", name = "King (Chess fight)", kind = "boss" },
+        { key = "UKHSanvTasdal", name = "Sanv Tas'dal", kind = "boss" },
+        { key = "UKHKruul", name = "Kruul", kind = "boss" },
+        { key = "UKHRupturan", name = "Rupturan the Broken", kind = "boss" },
+        { key = "UKHMephistroth", name = "Mephistroth", kind = "boss" },
+      },
+    },
+  }
+end
 
+LeafVE_RaidUIRoleOrder = LeafVE_RaidUIRoleOrder or { "tank", "healer", "melee", "ranged", "flex" }
+LeafVE_RaidUIStatusOrder = LeafVE_RaidUIStatusOrder or { "going", "tentative", "late", "unavailable" }
 
+function LeafVE_RaidUIFormatTime(timestamp)
+  timestamp = tonumber(timestamp) or 0
+  if timestamp <= 0 then
+    return "Not scheduled"
+  end
+  return date("%a %m/%d %H:%M", timestamp)
+end
 
+function LeafVE_RaidUIFormatCountdown(timestamp)
+  timestamp = tonumber(timestamp) or 0
+  if timestamp <= 0 then
+    return "No start time set."
+  end
+  local remaining = timestamp - time()
+  local prefix = "Starts in "
+  if remaining < 0 then
+    remaining = math.abs(remaining)
+    prefix = "Started "
+  end
+  local days = math.floor(remaining / 86400)
+  local hours = math.floor((remaining - (days * 86400)) / 3600)
+  local minutes = math.floor((remaining - (days * 86400) - (hours * 3600)) / 60)
+  return prefix .. tostring(days) .. "d " .. tostring(hours) .. "h " .. tostring(minutes) .. "m"
+end
 
+function LeafVE_RaidUICreateInset(parent)
+  local frame = CreateFrame("Frame", nil, parent)
+  frame:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 8, edgeSize = 10,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 }
+  })
+  frame:SetBackdropColor(0.05, 0.05, 0.08, 0.92)
+  frame:SetBackdropBorderColor(0.30, 0.30, 0.35, 1)
+  return frame
+end
 
+function LeafVE_RaidUICreateEditBox(parent, width, height)
+  local bg = LeafVE_RaidUICreateInset(parent)
+  bg:SetWidth(width)
+  bg:SetHeight(height)
 
+  local input = CreateFrame("EditBox", nil, bg)
+  input:SetPoint("TOPLEFT", bg, "TOPLEFT", 5, -3)
+  input:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -5, 3)
+  input:SetAutoFocus(false)
+  input:SetFontObject(GameFontHighlightSmall)
+  input:SetJustifyH("LEFT")
+  input:SetText("")
+  input:SetScript("OnEscapePressed", function()
+    this:ClearFocus()
+  end)
+  return bg, input
+end
+
+function LeafVE_RaidUIFindEventById(rows, eventId)
+  if not eventId then
+    return nil
+  end
+  for _, eventRecord in ipairs(rows or {}) do
+    if type(eventRecord) == "table" and tostring(eventRecord.id or "") == tostring(eventId or "") then
+      return eventRecord
+    end
+  end
+  return nil
+end
+
+function LeafVE_RaidUIParseTimestamp(dateText, timeText)
+  local year, month, day = string.match(Trim(dateText or ""), "^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+  local hour, minute = string.match(Trim(timeText or ""), "^(%d%d?)%:(%d%d)$")
+  if not year or not month or not day then
+    return nil, "Use date format YYYY-MM-DD."
+  end
+  if not hour or not minute then
+    return nil, "Use time format HH:MM."
+  end
+  local timestamp = time({
+    year = tonumber(year),
+    month = tonumber(month),
+    day = tonumber(day),
+    hour = tonumber(hour),
+    min = tonumber(minute),
+    sec = 0,
+  })
+  if not timestamp then
+    return nil, "Date or time is invalid."
+  end
+  return timestamp
+end
+
+function LeafVE_RaidUISeedAdminDefaults(panel)
+  if not panel then
+    return
+  end
+  if not panel.createRaidKey then
+    local _, order = LeafVE:GetRaidCatalog()
+    if table.getn(order) > 0 then
+      panel.createRaidKey = order[1].key
+      panel.createRaidIndex = 1
+    end
+  end
+  if panel.adminDefaultsSeeded then
+    return
+  end
+  local tomorrow = date("*t", time() + 86400)
+  if panel.dateInput then
+    panel.dateInput:SetText(string.format("%04d-%02d-%02d", tomorrow.year, tomorrow.month, tomorrow.day))
+  end
+  if panel.startTimeInput then panel.startTimeInput:SetText("20:00") end
+  if panel.closeTimeInput then panel.closeTimeInput:SetText("19:30") end
+  if NormalizeRaidSoftReserveCount(panel.createSoftReserveCount) <= 0 then
+    panel.createSoftReserveCount = 1
+  end
+  if panel.raidNotesInput and not panel.raidNotesSeeded then
+    panel.raidNotesInput:SetText("")
+  end
+  if panel.raidConsumablesInput and not panel.raidConsumablesSeeded then
+    panel.raidConsumablesInput:SetText("")
+  end
+  panel.adminDefaultsSeeded = true
+end
+
+function LeafVE_RaidUIApplyCatalogSelection(panel, direction)
+  local _, order = LeafVE:GetRaidCatalog()
+  if table.getn(order) == 0 then
+    panel.createRaidKey = nil
+    panel.createRaidIndex = nil
+    return
+  end
+
+  local index = tonumber(panel.createRaidIndex) or 1
+  if direction and direction ~= 0 then
+    index = index + direction
+    if index < 1 then index = table.getn(order) end
+    if index > table.getn(order) then index = 1 end
+  else
+    local found = nil
+    if panel.createRaidKey then
+      for i = 1, table.getn(order) do
+        if order[i].key == panel.createRaidKey then
+          found = i
+          break
+        end
+      end
+    end
+    index = found or 1
+  end
+
+  local entry = order[index]
+  if not entry then
+    return
+  end
+  panel.createRaidIndex = index
+  panel.createRaidKey = entry.key
+  if panel.selectedRaidNameText then panel.selectedRaidNameText:SetText(entry.name or "") end
+  if panel.eventTitleInput then panel.eventTitleInput:SetText(entry.name or "") end
+  if panel.raidSizeInput then panel.raidSizeInput:SetText(tostring(tonumber(entry.raidSize) or 20)) end
+  if panel.notesInput then panel.notesInput:SetText("") end
+  if panel.roleTargetInputs then
+    for _, role in ipairs(LeafVE_RaidUIRoleOrder) do
+      local input = panel.roleTargetInputs[role]
+      if input then
+        input:SetText(tostring(tonumber(entry.roleTargets and entry.roleTargets[role]) or 0))
+      end
+    end
+  end
+end
+
+function LeafVE_RaidUISetButtonEnabled(button, enabled)
+  if not button then return end
+  if enabled then
+    button:Enable()
+    button:SetAlpha(1)
+  else
+    button:Disable()
+    button:SetAlpha(0.45)
+  end
+end
+
+function LeafVE_RaidUISetAdminVisible(panel, visible)
+  if not panel then return end
+  if panel.raidPrevBtn then if visible then panel.raidPrevBtn:Show() else panel.raidPrevBtn:Hide() end end
+  if panel.selectedRaidNameText then if visible then panel.selectedRaidNameText:Show() else panel.selectedRaidNameText:Hide() end end
+  if panel.raidNextBtn then if visible then panel.raidNextBtn:Show() else panel.raidNextBtn:Hide() end end
+  if panel.dateLabel then if visible then panel.dateLabel:Show() else panel.dateLabel:Hide() end end
+  if panel.dateBG then if visible then panel.dateBG:Show() else panel.dateBG:Hide() end end
+  if panel.startLabel then if visible then panel.startLabel:Show() else panel.startLabel:Hide() end end
+  if panel.startTimeBG then if visible then panel.startTimeBG:Show() else panel.startTimeBG:Hide() end end
+  if panel.closeLabel then if visible then panel.closeLabel:Show() else panel.closeLabel:Hide() end end
+  if panel.closeTimeBG then if visible then panel.closeTimeBG:Show() else panel.closeTimeBG:Hide() end end
+  if panel.softReserveCountLabel then if visible then panel.softReserveCountLabel:Show() else panel.softReserveCountLabel:Hide() end end
+  if panel.softReserveCountText then if visible then panel.softReserveCountText:Show() else panel.softReserveCountText:Hide() end end
+  if panel.softReserveCountOneBtn then if visible then panel.softReserveCountOneBtn:Show() else panel.softReserveCountOneBtn:Hide() end end
+  if panel.softReserveCountTwoBtn then if visible then panel.softReserveCountTwoBtn:Show() else panel.softReserveCountTwoBtn:Hide() end end
+  if panel.raidNotesLabel then if visible then panel.raidNotesLabel:Show() else panel.raidNotesLabel:Hide() end end
+  if panel.raidNotesBG then if visible then panel.raidNotesBG:Show() else panel.raidNotesBG:Hide() end end
+  if panel.raidConsumablesLabel then if visible then panel.raidConsumablesLabel:Show() else panel.raidConsumablesLabel:Hide() end end
+  if panel.raidConsumablesBG then if visible then panel.raidConsumablesBG:Show() else panel.raidConsumablesBG:Hide() end end
+  if panel.createEventBtn then if visible then panel.createEventBtn:Show() else panel.createEventBtn:Hide() end end
+end
+
+function LeafVE_RaidUIHex(r, g, b)
+  local rr = tonumber(r) or 1
+  local gg = tonumber(g) or 1
+  local bb = tonumber(b) or 1
+  if rr <= 1.5 then rr = math.floor((rr * 255) + 0.5) end
+  if gg <= 1.5 then gg = math.floor((gg * 255) + 0.5) end
+  if bb <= 1.5 then bb = math.floor((bb * 255) + 0.5) end
+  if rr < 0 then rr = 0 elseif rr > 255 then rr = 255 end
+  if gg < 0 then gg = 0 elseif gg > 255 then gg = 255 end
+  if bb < 0 then bb = 0 elseif bb > 255 then bb = 255 end
+  return string.format("%02X%02X%02X", rr, gg, bb)
+end
+
+function LeafVE_RaidUIColorText(text, r, g, b)
+  return "|cFF" .. LeafVE_RaidUIHex(r, g, b) .. tostring(text or "") .. "|r"
+end
+
+function LeafVE_RaidUIGetStatusColor(status)
+  status = NormalizeRaidEventStatus(status)
+  if status == "locked" then return 1.00, 0.74, 0.24 end
+  if status == "completed" then return 0.48, 0.76, 1.00 end
+  if status == "cancelled" then return 1.00, 0.38, 0.38 end
+  if status == "archived" then return 0.68, 0.68, 0.68 end
+  return 0.42, 1.00, 0.56
+end
+
+function LeafVE_RaidUIGetStatusMarkup(status)
+  local r, g, b = LeafVE_RaidUIGetStatusColor(status)
+  return LeafVE_RaidUIColorText(GetRaidEventStatusLabel(status), r, g, b)
+end
+
+function LeafVE_RaidUIGetSignupStatusMarkup(status)
+  status = NormalizeRaidSignupStatus(status)
+  if status == "tentative" then
+    return LeafVE_RaidUIColorText(GetRaidSignupStatusLabel(status), 1.00, 0.85, 0.25)
+  elseif status == "late" then
+    return LeafVE_RaidUIColorText(GetRaidSignupStatusLabel(status), 1.00, 0.60, 0.25)
+  elseif status == "unavailable" then
+    return LeafVE_RaidUIColorText(GetRaidSignupStatusLabel(status), 1.00, 0.40, 0.40)
+  end
+  return LeafVE_RaidUIColorText(GetRaidSignupStatusLabel(status), 0.52, 1.00, 0.62)
+end
+
+function LeafVE_RaidUIGetRosterStatusMarkup(status)
+  status = NormalizeRaidRosterStatus(status)
+  if status == "confirmed" then
+    return LeafVE_RaidUIColorText(GetRaidRosterStatusLabel(status), 0.52, 1.00, 0.62)
+  elseif status == "bench" then
+    return LeafVE_RaidUIColorText(GetRaidRosterStatusLabel(status), 1.00, 0.73, 0.28)
+  elseif status == "declined" then
+    return LeafVE_RaidUIColorText(GetRaidRosterStatusLabel(status), 1.00, 0.40, 0.40)
+  end
+  return LeafVE_RaidUIColorText(GetRaidRosterStatusLabel(status), 0.62, 0.82, 1.00)
+end
+
+function LeafVE_RaidUIGetClassLabel(classTag)
+  local raw = Lower(Trim(classTag or ""))
+  if raw == "" or raw == "unknown" then
+    return "Unknown"
+  end
+  return string.upper(string.sub(raw, 1, 1)) .. string.lower(string.sub(raw, 2))
+end
+
+function LeafVE_RaidUIGetColoredPlayerName(playerName, classTag)
+  local classColor = CLASS_COLORS[string.upper(classTag or "")] or {1, 1, 1}
+  return LeafVE_RaidUIColorText(tostring(playerName or ""), classColor[1], classColor[2], classColor[3])
+end
+
+function LeafVE_RaidUIResolveSignupSpec(signup)
+  local classTag = string.upper(tostring(signup and signup.classTag or "UNKNOWN"))
+  local specName = Trim(tostring(signup and signup.specName or ""))
+  local specIcon = nil
+  local names = CLASS_SPEC_NAMES[classTag]
+  local icons = CLASS_SPEC_ICONS[classTag]
+
+  if names and specName ~= "" then
+    for i = 1, table.getn(names) do
+      if Lower(tostring(names[i] or "")) == Lower(specName) then
+        specName = tostring(names[i] or specName)
+        specIcon = icons and icons[i] or nil
+        break
+      end
+    end
+  end
+
+  if (specName == "" or not specIcon) and signup and signup.player then
+    local snapshot = LeafVE:GetSpecSnapshotForPlayer(signup.player, classTag)
+    if snapshot then
+      if specName == "" then
+        specName = tostring(snapshot.name or "")
+      end
+      if not specIcon then
+        if specName == "" or Lower(tostring(snapshot.name or "")) == Lower(specName) then
+          specIcon = snapshot.icon
+        end
+      end
+    end
+  end
+
+  if specName == "" then
+    specName = LeafVE_RaidUIGetClassLabel(classTag)
+  end
+  if not specIcon or specIcon == "" then
+    specIcon = CLASS_ICONS[classTag] or "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
+  return specName, specIcon
+end
+
+function LeafVE_RaidUIGetSignupProfileMarkup(signup)
+  local classTag = string.upper(tostring(signup and signup.classTag or "UNKNOWN"))
+  local specName = LeafVE_RaidUIResolveSignupSpec(signup)
+  local classLabel = LeafVE_RaidUIGetClassLabel(classTag)
+  return tostring(specName or classLabel) .. " " .. classLabel
+end
+
+function LeafVE_RaidUIGetSignupIconPath(signup)
+  local _, specIcon = LeafVE_RaidUIResolveSignupSpec(signup)
+  return specIcon
+end
+
+function LeafVE_RaidUIGetItemQualityColor(quality)
+  quality = tonumber(quality) or 0
+  if quality >= 5 then return 1.00, 0.50, 0.00 end
+  if quality >= 4 then return 0.64, 0.21, 0.93 end
+  if quality >= 3 then return 0.00, 0.44, 0.87 end
+  if quality >= 2 then return 0.12, 1.00, 0.00 end
+  return 0.88, 0.82, 0.70
+end
+
+function LeafVE_RaidUIGetReserveItemText(reserve, shortText)
+  local itemName = tostring(reserve and reserve.itemName or "")
+  if itemName == "" then
+    return ""
+  end
+  local maxLen = shortText and 30 or 96
+  if string.len(itemName) > maxLen then
+    itemName = string.sub(itemName, 1, maxLen - 3) .. "..."
+  end
+  local r, g, b = LeafVE_RaidUIGetItemQualityColor(reserve and reserve.quality)
+  return LeafVE_RaidUIColorText(itemName, r, g, b)
+end
+
+function LeafVE_RaidUIGetSoftReserveMarkup(signup, eventRecord, shortText)
+  if type(signup) ~= "table" then
+    return ""
+  end
+  local parts = {}
+  local reserves = signup.softReserves or {}
+  local limit = LeafVE:GetEffectiveRaidSoftReserveCount(eventRecord)
+  if limit <= 0 then
+    limit = table.getn(reserves)
+  end
+  for i = 1, table.getn(reserves) do
+    if i > limit then break end
+    local text = LeafVE_RaidUIGetReserveItemText(reserves[i], shortText)
+    if text ~= "" then
+      table.insert(parts, text)
+    end
+  end
+  if table.getn(parts) == 0 then
+    return ""
+  end
+  return LeafVE_RaidUIColorText("SR:", 1.00, 0.84, 0.18) .. " " .. table.concat(parts, shortText and " / " or "  ")
+end
+
+function LeafVE_RaidUIGetNeedMarkup(eventRecord)
+  local summary = LeafVE:GetRaidNeedSummary(eventRecord)
+  if summary == "Roster targets filled." then
+    return LeafVE_RaidUIColorText(summary, 0.52, 1.00, 0.62)
+  end
+  return LeafVE_RaidUIColorText(summary, 1.00, 0.75, 0.28)
+end
+
+function LeafVE_RaidUIGetBossSectionText(raidKey)
+  local catalog = LeafVE:GetRaidCatalogEntry(raidKey)
+  if not catalog then
+    return "|cFF888888No boss list available.|r"
+  end
+
+  local lines = {}
+  for _, boss in ipairs(catalog.bosses or {}) do
+    if type(boss) == "table" and boss.kind == "boss" then
+      table.insert(lines, LeafVE_RaidUIColorText("- ", 1.00, 0.82, 0.20) .. tostring(boss.name or "Boss"))
+    end
+  end
+  if table.getn(lines) == 0 then
+    return "|cFF888888No bosses configured.|r"
+  end
+  return table.concat(lines, "\n")
+end
+
+function LeafVE_RaidUIGetRosterBucket(signup)
+  local signupStatus = NormalizeRaidSignupStatus(signup and signup.signupStatus or nil)
+  local rosterStatus = NormalizeRaidRosterStatus(signup and signup.rosterStatus or nil)
+  if signupStatus == "unavailable" or rosterStatus == "declined" then
+    return "unavailable"
+  end
+  local role = NormalizeRaidRole(signup and signup.preferredRole or nil)
+  if role == "tank" then return "tank" end
+  if role == "healer" then return "healer" end
+  return "dps"
+end
+
+function LeafVE_RaidUIGetRosterBucketTitle(bucket)
+  if bucket == "tank" then
+    return LeafVE_RaidUIColorText("Tanks", 0.50, 0.80, 1.00)
+  elseif bucket == "healer" then
+    return LeafVE_RaidUIColorText("Healers", 0.42, 1.00, 0.56)
+  elseif bucket == "unavailable" then
+    return LeafVE_RaidUIColorText("Unavailable", 1.00, 0.40, 0.40)
+  end
+  return LeafVE_RaidUIColorText("DPS", 1.00, 0.72, 0.28)
+end
+
+function LeafVE_RaidUIBuildRosterSectionText(eventId)
+  local rows = LeafVE:GetRaidSignupsForEvent(eventId, true)
+  if table.getn(rows) == 0 then
+    return "|cFF888888No sign-ups recorded yet.|r"
+  end
+
+  local buckets = {
+    tank = {},
+    healer = {},
+    dps = {},
+    unavailable = {},
+  }
+
+  for i = 1, table.getn(rows) do
+    local signup = rows[i]
+    table.insert(buckets[LeafVE_RaidUIGetRosterBucket(signup)], signup)
+  end
+
+  local sections = {}
+  local order = {"tank", "healer", "dps", "unavailable"}
+  for _, bucket in ipairs(order) do
+    local bucketRows = buckets[bucket]
+    if table.getn(bucketRows) > 0 then
+      table.sort(bucketRows, function(a, b)
+        local aRoster = NormalizeRaidRosterStatus(a.rosterStatus)
+        local bRoster = NormalizeRaidRosterStatus(b.rosterStatus)
+        if aRoster == bRoster then
+          return Lower(a.player or "") < Lower(b.player or "")
+        end
+        return aRoster < bRoster
+      end)
+
+      table.insert(sections, LeafVE_RaidUIGetRosterBucketTitle(bucket))
+      for i = 1, table.getn(bucketRows) do
+        local signup = bucketRows[i]
+        local line = "  - " .. LeafVE_RaidUIGetColoredPlayerName(signup.player or "", signup.classTag) .. "  " .. LeafVE_RaidUIGetSignupProfileMarkup(signup)
+        line = line .. "  " .. LeafVE_RaidUIGetSignupStatusMarkup(signup.signupStatus)
+        if NormalizeRaidRosterStatus(signup.rosterStatus) ~= "signed" then
+          line = line .. "  " .. LeafVE_RaidUIGetRosterStatusMarkup(signup.rosterStatus)
+        end
+        local eventRecord = LeafVE:GetRaidEventsDB()[tostring(signup.eventId or "")]
+        local reserveMarkup = LeafVE_RaidUIGetSoftReserveMarkup(signup, eventRecord, true)
+        if reserveMarkup ~= "" then
+          line = line .. "  " .. reserveMarkup
+        end
+        table.insert(sections, line)
+      end
+      table.insert(sections, "")
+    end
+  end
+
+  if table.getn(sections) > 0 and sections[table.getn(sections)] == "" then
+    table.remove(sections, table.getn(sections))
+  end
+  return table.concat(sections, "\n")
+end
+
+function LeafVE_RaidUIBuildRosterDisplayRows(eventId)
+  local rows = LeafVE:GetRaidSignupsForEvent(eventId, true)
+  local displayRows = {}
+  if table.getn(rows) == 0 then
+    return displayRows
+  end
+
+  local buckets = {
+    tank = {},
+    healer = {},
+    dps = {},
+    unavailable = {},
+  }
+
+  for i = 1, table.getn(rows) do
+    local signup = rows[i]
+    table.insert(buckets[LeafVE_RaidUIGetRosterBucket(signup)], signup)
+  end
+
+  local order = {"tank", "healer", "dps", "unavailable"}
+  for _, bucket in ipairs(order) do
+    local bucketRows = buckets[bucket]
+    if table.getn(bucketRows) > 0 then
+      table.sort(bucketRows, function(a, b)
+        local aRoster = NormalizeRaidRosterStatus(a.rosterStatus)
+        local bRoster = NormalizeRaidRosterStatus(b.rosterStatus)
+        if aRoster == bRoster then
+          return Lower(a.player or "") < Lower(b.player or "")
+        end
+        return aRoster < bRoster
+      end)
+
+      table.insert(displayRows, {
+        kind = "header",
+        bucket = bucket,
+        text = StripColorCodes(LeafVE_RaidUIGetRosterBucketTitle(bucket)) .. " (" .. tostring(table.getn(bucketRows)) .. ")",
+        count = table.getn(bucketRows),
+      })
+      for i = 1, table.getn(bucketRows) do
+        table.insert(displayRows, {
+          kind = "signup",
+          bucket = bucket,
+          signup = bucketRows[i],
+        })
+      end
+    end
+  end
+
+  return displayRows
+end
+
+function LeafVE_RaidUIBuildMySignupText(signup)
+  if type(signup) ~= "table" then
+    return "|cFF888888No signup saved yet.|r"
+  end
+  local text = LeafVE_RaidUIGetSignupProfileMarkup(signup)
+  text = text .. "  " .. LeafVE_RaidUIGetSignupStatusMarkup(signup.signupStatus)
+  text = text .. "  " .. LeafVE_RaidUIGetRosterStatusMarkup(signup.rosterStatus)
+  local eventRecord = LeafVE:GetRaidEventsDB()[tostring(signup.eventId or "")]
+  local reserveMarkup = LeafVE_RaidUIGetSoftReserveMarkup(signup, eventRecord, false)
+  if reserveMarkup ~= "" then
+    text = text .. "\n" .. reserveMarkup
+  end
+  if signup.note and signup.note ~= "" then
+    text = text .. "\n|cFFAAAAAANote: " .. tostring(signup.note) .. "|r"
+  end
+  return text
+end
+
+function LeafVE_RaidUICopySoftReserveSlots(reserves, limit)
+  local slots = {}
+  if limit == nil then
+    limit = 2
+  else
+    limit = NormalizeRaidSoftReserveCount(limit)
+  end
+  if limit <= 0 then
+    return slots
+  end
+  if limit > 2 then
+    limit = 2
+  end
+  if type(reserves) == "table" then
+    for i = 1, limit do
+      if type(reserves[i]) == "table" then
+        slots[i] = reserves[i]
+      end
+    end
+  end
+  return slots
+end
+
+function LeafVE_RaidUICollectSoftReserveSlots(slots, limit)
+  local rows = {}
+  limit = NormalizeRaidSoftReserveCount(limit)
+  if limit <= 0 then
+    return rows
+  end
+  for i = 1, limit do
+    if type(slots) == "table" and type(slots[i]) == "table" then
+      table.insert(rows, slots[i])
+    end
+  end
+  return rows
+end
+
+function LeafVE_RaidUIResolveTexturePath(texturePath)
+  local path = tostring(texturePath or "")
+  if path == "" then
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
+  if string.find(path, "\\", 1, true) then
+    return path
+  end
+  return "Interface\\Icons\\" .. path
+end
+
+function LeafVE_RaidUICloseSoftReservePopup(panel)
+  if panel and panel.softReservePopup then
+    GameTooltip:Hide()
+    panel.softReservePopup:Hide()
+  end
+end
+
+function LeafVE_RaidUIBuildLootSearchRows(eventRecord, searchText)
+  local rows = {}
+  local needle = Lower(Trim(tostring(searchText or "")))
+  if needle == "" or type(eventRecord) ~= "table" then
+    return rows
+  end
+
+  for _, bossInfo in ipairs(LeafVE:GetRaidSoftReserveBosses(eventRecord)) do
+    local lootRows = LeafVE:GetRaidSoftReserveLootForBoss(bossInfo.key)
+    for i = 1, table.getn(lootRows) do
+      local lootInfo = lootRows[i]
+      if type(lootInfo) == "table" then
+        local itemName = Lower(tostring(lootInfo.name or ""))
+        local bossName = Lower(tostring(bossInfo.name or ""))
+        if string.find(itemName, needle, 1, true) or string.find(bossName, needle, 1, true) then
+          table.insert(rows, {
+            bossKey = tostring(bossInfo.key or ""),
+            bossName = tostring(bossInfo.name or bossInfo.key or "Boss"),
+            itemId = tonumber(lootInfo.itemId) or 0,
+            name = tostring(lootInfo.name or ""),
+            icon = tostring(lootInfo.icon or ""),
+            quality = tonumber(lootInfo.quality) or 0,
+            slot = tostring(lootInfo.slot or ""),
+          })
+        end
+      end
+    end
+  end
+
+  table.sort(rows, function(a, b)
+    local aName = Lower(tostring(a.name or ""))
+    local bName = Lower(tostring(b.name or ""))
+    if aName == bName then
+      return Lower(tostring(a.bossName or "")) < Lower(tostring(b.bossName or ""))
+    end
+    return aName < bName
+  end)
+  return rows
+end
+
+function LeafVE_RaidUIRefreshSoftReservePopup(panel)
+  local popup = panel and panel.softReservePopup
+  if not popup or not popup:IsShown() then
+    return
+  end
+
+  local eventRecord = panel.selectedEvent
+  local reserveCount = LeafVE:GetEffectiveRaidSoftReserveCount(eventRecord)
+  if not eventRecord or reserveCount <= 0 then
+    popup:Hide()
+    return
+  end
+
+  local slots = panel.selectedSoftReserveSlots or {}
+  popup.activeSlot = tonumber(popup.activeSlot) or 1
+  if popup.activeSlot < 1 then popup.activeSlot = 1 end
+  if popup.activeSlot > reserveCount then popup.activeSlot = reserveCount end
+
+  popup.titleText:SetText("|cFFFFD700Soft Reserve|r")
+  popup.metaText:SetText("|cFFAAAAAAThis raid allows " .. tostring(reserveCount) .. " soft reserve" .. (reserveCount ~= 1 and "s" or "") .. ". Pick a boss, search all loot, then click an item to assign it to the selected slot.|r")
+
+  for i = 1, 2 do
+    local btn = popup.slotButtons[i]
+    local text = popup.slotTexts[i]
+    local reserve = slots[i]
+    if i <= reserveCount then
+      btn:Show()
+      text:Show()
+      UpdateWorkOrderModeButtonVisual(btn, popup.activeSlot == i)
+      btn:SetText("Reserve " .. tostring(i))
+      if type(reserve) == "table" then
+        text:SetText(LeafVE_RaidUIGetReserveItemText(reserve, false))
+      else
+        text:SetText("|cFF888888Empty|r")
+      end
+    else
+      btn:Hide()
+      text:Hide()
+    end
+  end
+
+  local bossRows = LeafVE:GetRaidSoftReserveBosses(eventRecord)
+  popup.bossRowsData = bossRows
+  local maxBossOffset = math.max(0, table.getn(bossRows) - (popup.bossVisibleRows or 5))
+  if (popup.bossOffset or 0) > maxBossOffset then
+    popup.bossOffset = maxBossOffset
+  end
+  if not popup.selectedBossKey or popup.selectedBossKey == "" then
+    popup.selectedBossKey = bossRows[1] and bossRows[1].key or nil
+  end
+  local bossFound = false
+  for i = 1, table.getn(bossRows) do
+    if tostring(bossRows[i].key or "") == tostring(popup.selectedBossKey or "") then
+      bossFound = true
+      break
+    end
+  end
+  if not bossFound then
+    popup.selectedBossKey = bossRows[1] and bossRows[1].key or nil
+  end
+
+  for i = 1, table.getn(popup.bossRowButtons or {}) do
+    local row = popup.bossRowButtons[i]
+    local bossInfo = bossRows[(popup.bossOffset or 0) + i]
+    if row and bossInfo then
+      row.bossInfo = bossInfo
+      row.label:SetText(tostring(bossInfo.name or bossInfo.key or "Boss"))
+      local selected = tostring(bossInfo.key or "") == tostring(popup.selectedBossKey or "")
+      row:SetBackdropColor(selected and 0.12 or 0.05, selected and 0.10 or 0.05, selected and 0.03 or 0.07, 0.95)
+      row:SetBackdropBorderColor(selected and 1.00 or 0.30, selected and 0.84 or 0.30, selected and 0.18 or 0.35, 1.00)
+      row:Show()
+    elseif row then
+      row.bossInfo = nil
+      row:Hide()
+    end
+  end
+
+  local searchText = popup.searchInput and Trim(popup.searchInput:GetText() or "") or ""
+  local isSearch = searchText ~= ""
+  local lootRows = isSearch and LeafVE_RaidUIBuildLootSearchRows(eventRecord, searchText) or LeafVE:GetRaidSoftReserveLootForBoss(popup.selectedBossKey)
+  popup.lootRowsData = lootRows
+  local maxLootOffset = math.max(0, table.getn(lootRows) - (popup.lootVisibleRows or 6))
+  if (popup.lootOffset or 0) > maxLootOffset then
+    popup.lootOffset = maxLootOffset
+  end
+  if isSearch then
+    popup.lootTitleText:SetText("|cFFFFD700Search Results|r " .. tostring(table.getn(lootRows)) .. " match" .. (table.getn(lootRows) ~= 1 and "es" or ""))
+  else
+    popup.lootTitleText:SetText("|cFFFFD700Loot|r " .. (LeafVE:GetRaidBossName(eventRecord.raidKey, popup.selectedBossKey) or ""))
+  end
+
+  for i = 1, table.getn(popup.lootRowButtons or {}) do
+    local row = popup.lootRowButtons[i]
+    local lootInfo = lootRows[(popup.lootOffset or 0) + i]
+    if row and lootInfo then
+      local r, g, b = LeafVE_RaidUIGetItemQualityColor(lootInfo.quality)
+      row.lootInfo = lootInfo
+      row.icon:SetTexture(LeafVE_RaidUIResolveTexturePath(lootInfo.icon))
+      row.label:SetText(tostring(lootInfo.name or "Unknown Item"))
+      row.label:SetTextColor(r, g, b)
+      row.subText:SetText(isSearch and ("|cFFAAAAAA" .. tostring(lootInfo.bossName or LeafVE:GetRaidBossName(eventRecord.raidKey, lootInfo.bossKey or popup.selectedBossKey) or "") .. "|r") or "")
+      if isSearch then
+        row.subText:Show()
+      else
+        row.subText:Hide()
+      end
+      row:Show()
+    elseif row then
+      row.lootInfo = nil
+      row.subText:Hide()
+      row:Hide()
+    end
+  end
+
+  if popup.lootEmptyText then
+    if table.getn(lootRows) == 0 then
+      if isSearch then
+        popup.lootEmptyText:SetText("|cFF888888No loot matched your search.|r")
+      else
+        popup.lootEmptyText:SetText("|cFF888888No loot cached for this boss yet.|r")
+      end
+      popup.lootEmptyText:Show()
+    else
+      popup.lootEmptyText:Hide()
+    end
+  end
+end
+
+function LeafVE_RaidUIOpenSoftReservePopup(panel)
+  if not panel or not panel.softReservePopup then
+    return
+  end
+  local eventRecord = panel.selectedEvent
+  local reserveCount = LeafVE:GetEffectiveRaidSoftReserveCount(eventRecord)
+  local eventStatus = NormalizeRaidEventStatus(eventRecord and eventRecord.status)
+  if not eventRecord or reserveCount <= 0 or eventStatus == "locked" or eventStatus == "completed" or eventStatus == "cancelled" or eventStatus == "archived" then
+    return
+  end
+  panel.selectedSoftReserveSlots = LeafVE_RaidUICopySoftReserveSlots(
+    LeafVE_RaidUICollectSoftReserveSlots(panel.selectedSoftReserveSlots, reserveCount),
+    reserveCount
+  )
+  if panel.softReservePopup.searchInput then
+    panel.softReservePopup.searchInput:SetText("")
+  end
+  panel.softReservePopup.lootOffset = 0
+  panel.softReservePopup.activeSlot = math.min(tonumber(panel.softReservePopup.activeSlot) or 1, reserveCount)
+  panel.softReservePopup:Show()
+  LeafVE_RaidUIRefreshSoftReservePopup(panel)
+end
+
+function BuildRaidSignupPanel(panel)
+  if not panel or panel.isBuilt then return end
+
+  panel.isBuilt = true
+  panel.mode = "upcoming"
+  panel.eventOffset = 0
+  panel.eventVisibleRows = 7
+
+  panel.modeUpcomingBtn = CreateWorkOrderModeButton(panel, "Upcoming")
+  panel.modeUpcomingBtn:SetWidth(96)
+  panel.modeUpcomingBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -12)
+  panel.modeUpcomingBtn.ownerPanel = panel
+  panel.modeUpcomingBtn:SetScript("OnClick", function()
+    this.ownerPanel.mode = "upcoming"
+    this.ownerPanel.lastDetailEventId = nil
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.modeMineBtn = CreateWorkOrderModeButton(panel, "My Sign-Ups")
+  panel.modeMineBtn:SetWidth(100)
+  panel.modeMineBtn:SetPoint("LEFT", panel.modeUpcomingBtn, "RIGHT", 8, 0)
+  panel.modeMineBtn.ownerPanel = panel
+  panel.modeMineBtn:SetScript("OnClick", function()
+    this.ownerPanel.mode = "mine"
+    this.ownerPanel.lastDetailEventId = nil
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.modeAdminBtn = CreateWorkOrderModeButton(panel, "Admin")
+  panel.modeAdminBtn:SetWidth(82)
+  panel.modeAdminBtn:SetPoint("LEFT", panel.modeMineBtn, "RIGHT", 8, 0)
+  panel.modeAdminBtn.ownerPanel = panel
+  panel.modeAdminBtn:SetScript("OnClick", function()
+    this.ownerPanel.mode = "admin"
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.summaryText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.summaryText:SetPoint("TOPLEFT", panel.modeUpcomingBtn, "BOTTOMLEFT", 0, -10)
+  panel.summaryText:SetPoint("RIGHT", panel, "RIGHT", -12, 0)
+  panel.summaryText:SetJustifyH("LEFT")
+
+  panel.listPane = LeafVE_RaidUICreateInset(panel)
+  panel.listPane:SetPoint("TOPLEFT", panel.summaryText, "BOTTOMLEFT", 0, -8)
+  panel.listPane:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 12)
+  panel.listPane:SetWidth(272)
+
+  panel.detailPane = LeafVE_RaidUICreateInset(panel)
+  panel.detailPane:SetPoint("TOPLEFT", panel.listPane, "TOPRIGHT", 10, 0)
+  panel.detailPane:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -12, 12)
+
+  panel.listTitle = panel.listPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  panel.listTitle:SetPoint("TOPLEFT", panel.listPane, "TOPLEFT", 10, -10)
+  panel.listTitle:SetText("|cFFFFD700Upcoming Raids|r")
+
+  panel.listHint = panel.listPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.listHint:SetPoint("TOPLEFT", panel.listTitle, "BOTTOMLEFT", 0, -5)
+  panel.listHint:SetPoint("RIGHT", panel.listPane, "RIGHT", -10, 0)
+  panel.listHint:SetJustifyH("LEFT")
+  panel.listHint:SetText("|cFFAAAAAAMousewheel to browse cached raids.|r")
+
+  panel.eventListFrame = CreateFrame("Frame", nil, panel.listPane)
+  panel.eventListFrame:SetPoint("TOPLEFT", panel.listHint, "BOTTOMLEFT", 0, -8)
+  panel.eventListFrame:SetPoint("BOTTOMRIGHT", panel.listPane, "BOTTOMRIGHT", -10, 10)
+  panel.eventListFrame:EnableMouse(true)
+  panel.eventListFrame:EnableMouseWheel(true)
+  panel.eventListFrame.ownerPanel = panel
+  panel.eventListFrame:SetScript("OnMouseWheel", function()
+    local owner = this.ownerPanel
+    local totalRows = table.getn(owner.visibleEvents or {})
+    local maxOffset = math.max(0, totalRows - (owner.eventVisibleRows or 7))
+    local nextOffset = (owner.eventOffset or 0) - (arg1 or 0)
+    if nextOffset < 0 then nextOffset = 0 end
+    if nextOffset > maxOffset then nextOffset = maxOffset end
+    if nextOffset ~= (owner.eventOffset or 0) then
+      owner.eventOffset = nextOffset
+      LeafVE.UI:RefreshRaidSignupPanel(true)
+    end
+  end)
+
+  panel.eventRows = {}
+  local lastRow = nil
+  for i = 1, panel.eventVisibleRows do
+    local row = CreateFrame("Button", nil, panel.eventListFrame)
+    row:SetHeight(64)
+    row:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8X8",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = false, tileSize = 8, edgeSize = 10,
+      insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    row:SetBackdropColor(0.06, 0.06, 0.08, 0.90)
+    row:SetBackdropBorderColor(0.28, 0.28, 0.34, 0.8)
+    row:SetPoint("TOPLEFT", lastRow or panel.eventListFrame, lastRow and "BOTTOMLEFT" or "TOPLEFT", 0, lastRow and -6 or 0)
+    row:SetPoint("TOPRIGHT", lastRow or panel.eventListFrame, lastRow and "BOTTOMRIGHT" or "TOPRIGHT", 0, lastRow and -6 or 0)
+    row.ownerPanel = panel
+    row.titleText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.titleText:SetPoint("TOPLEFT", row, "TOPLEFT", 8, -8)
+    row.titleText:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.titleText:SetJustifyH("LEFT")
+    row.metaText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.metaText:SetPoint("TOPLEFT", row.titleText, "BOTTOMLEFT", 0, -4)
+    row.metaText:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.metaText:SetJustifyH("LEFT")
+    row.metaText:SetJustifyV("TOP")
+    row:SetScript("OnClick", function()
+      if not this.eventRecord then return end
+      this.ownerPanel.selectedEventId = this.eventRecord.id
+      this.ownerPanel.lastDetailEventId = nil
+      LeafVE.UI:RefreshRaidSignupPanel(true)
+    end)
+    panel.eventRows[i] = row
+    lastRow = row
+  end
+
+  panel.noEventsText = panel.eventListFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.noEventsText:SetPoint("TOPLEFT", panel.eventListFrame, "TOPLEFT", 8, -8)
+  panel.noEventsText:SetPoint("RIGHT", panel.eventListFrame, "RIGHT", -8, 0)
+  panel.noEventsText:SetJustifyH("LEFT")
+
+  panel.detailTitle = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  panel.detailTitle:SetPoint("TOPLEFT", panel.detailPane, "TOPLEFT", 10, -10)
+  panel.detailTitle:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailTitle:SetJustifyH("LEFT")
+  panel.detailTitle:SetText("|cFFFFD700Raid Details|r")
+
+  panel.detailMeta = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.detailMeta:SetPoint("TOPLEFT", panel.detailTitle, "BOTTOMLEFT", 0, -5)
+  panel.detailMeta:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailMeta:SetJustifyH("LEFT")
+  panel.detailMeta:SetJustifyV("TOP")
+
+  panel.detailBody = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.detailBody:SetPoint("TOPLEFT", panel.detailMeta, "BOTTOMLEFT", 0, -8)
+  panel.detailBody:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailBody:SetHeight(138)
+  panel.detailBody:SetJustifyH("LEFT")
+  panel.detailBody:SetJustifyV("TOP")
+
+  panel.rosterTitle = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.rosterTitle:SetPoint("TOPLEFT", panel.detailBody, "BOTTOMLEFT", 0, -8)
+  panel.rosterTitle:SetText("|cFFFFD700Roster|r")
+
+  panel.rosterPane = LeafVE_RaidUICreateInset(panel.detailPane)
+  panel.rosterPane:SetPoint("TOPLEFT", panel.rosterTitle, "BOTTOMLEFT", 0, -4)
+  panel.rosterPane:SetPoint("TOPRIGHT", panel.detailPane, "TOPRIGHT", -10, -272)
+  panel.rosterPane:SetHeight(126)
+  panel.rosterPane:EnableMouse(true)
+  panel.rosterPane:EnableMouseWheel(true)
+  panel.rosterPane.ownerPanel = panel
+  panel.rosterPane:SetScript("OnMouseWheel", function()
+    local owner = this.ownerPanel
+    local totalRows = table.getn(owner.rosterDisplayRows or {})
+    local maxOffset = math.max(0, totalRows - (owner.rosterVisibleRows or 6))
+    local nextOffset = (owner.rosterOffset or 0) - (arg1 or 0)
+    if nextOffset < 0 then nextOffset = 0 end
+    if nextOffset > maxOffset then nextOffset = maxOffset end
+    if nextOffset ~= (owner.rosterOffset or 0) then
+      owner.rosterOffset = nextOffset
+      LeafVE.UI:RefreshRaidSignupPanel(true)
+    end
+  end)
+
+  panel.rosterEmptyText = panel.rosterPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.rosterEmptyText:SetPoint("TOPLEFT", panel.rosterPane, "TOPLEFT", 8, -8)
+  panel.rosterEmptyText:SetPoint("RIGHT", panel.rosterPane, "RIGHT", -8, 0)
+  panel.rosterEmptyText:SetJustifyH("LEFT")
+
+  panel.rosterVisibleRows = 5
+  panel.rosterOffset = 0
+  panel.rosterRows = {}
+  local lastRosterRow = nil
+  for i = 1, panel.rosterVisibleRows do
+    local row = CreateFrame("Frame", nil, panel.rosterPane)
+    row:SetHeight(22)
+    row:SetPoint("TOPLEFT", lastRosterRow or panel.rosterPane, lastRosterRow and "BOTTOMLEFT" or "TOPLEFT", lastRosterRow and 0 or 6, lastRosterRow and 0 or -6)
+    row:SetPoint("TOPRIGHT", lastRosterRow or panel.rosterPane, lastRosterRow and "BOTTOMRIGHT" or "TOPRIGHT", lastRosterRow and 0 or -6, lastRosterRow and 0 or -6)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetWidth(14)
+    row.icon:SetHeight(14)
+    row.icon:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -2)
+    row.leftText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.leftText:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 6, 0)
+    row.leftText:SetPoint("RIGHT", row, "RIGHT", -68, 0)
+    row.leftText:SetHeight(22)
+    row.leftText:SetJustifyH("LEFT")
+    row.leftText:SetJustifyV("TOP")
+    row.rightText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.rightText:SetPoint("TOPRIGHT", row, "TOPRIGHT", -2, -1)
+    row.rightText:SetWidth(64)
+    row.rightText:SetJustifyH("RIGHT")
+    row.rightText:SetJustifyV("TOP")
+    panel.rosterRows[i] = row
+    lastRosterRow = row
+  end
+
+  panel.managerOpenBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerOpenBtn:SetWidth(58)
+  panel.managerOpenBtn:SetHeight(20)
+  panel.managerOpenBtn:SetPoint("TOPLEFT", panel.rosterPane, "BOTTOMLEFT", 0, -8)
+  panel.managerOpenBtn:SetText("Open")
+  panel.managerOpenBtn.ownerPanel = panel
+  panel.managerOpenBtn.actionStatus = "open"
+  panel.managerOpenBtn:SetScript("OnClick", function()
+    local eventRecord = this.ownerPanel.selectedEvent
+    if not eventRecord then return end
+    local stored, err = LeafVE:SetRaidEventStatus(eventRecord.id, this.actionStatus)
+    if not stored then
+      this.ownerPanel.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to update raid status.") .. "|r")
+      return
+    end
+    this.ownerPanel.detailFeedbackText:SetText("|cFF88FF88Raid event updated.|r")
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.managerLockBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerLockBtn:SetWidth(58)
+  panel.managerLockBtn:SetHeight(20)
+  panel.managerLockBtn:SetPoint("LEFT", panel.managerOpenBtn, "RIGHT", 6, 0)
+  panel.managerLockBtn:SetText("Lock")
+  panel.managerLockBtn.ownerPanel = panel
+  panel.managerLockBtn.actionStatus = "locked"
+  panel.managerLockBtn:SetScript("OnClick", panel.managerOpenBtn:GetScript("OnClick"))
+
+  panel.managerCompleteBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerCompleteBtn:SetWidth(66)
+  panel.managerCompleteBtn:SetHeight(20)
+  panel.managerCompleteBtn:SetPoint("LEFT", panel.managerLockBtn, "RIGHT", 6, 0)
+  panel.managerCompleteBtn:SetText("Complete")
+  panel.managerCompleteBtn.ownerPanel = panel
+  panel.managerCompleteBtn.actionStatus = "completed"
+  panel.managerCompleteBtn:SetScript("OnClick", panel.managerOpenBtn:GetScript("OnClick"))
+
+  panel.managerCancelBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerCancelBtn:SetWidth(60)
+  panel.managerCancelBtn:SetHeight(20)
+  panel.managerCancelBtn:SetPoint("LEFT", panel.managerCompleteBtn, "RIGHT", 6, 0)
+  panel.managerCancelBtn:SetText("Cancel")
+  panel.managerCancelBtn.ownerPanel = panel
+  panel.managerCancelBtn.actionStatus = "cancelled"
+  panel.managerCancelBtn:SetScript("OnClick", panel.managerOpenBtn:GetScript("OnClick"))
+
+  panel.roleButtons = {}
+  local lastRole = nil
+  for _, role in ipairs(LeafVE_RaidUIRoleOrder) do
+    local btn = CreateWorkOrderModeButton(panel.detailPane, GetRaidRoleLabel(role))
+    btn:SetWidth(58)
+    if lastRole then
+      btn:SetPoint("LEFT", lastRole, "RIGHT", 4, 0)
+    else
+      btn:SetPoint("TOPLEFT", panel.managerOpenBtn, "BOTTOMLEFT", 0, -10)
+    end
+    btn.ownerPanel = panel
+    btn.roleValue = role
+    btn:SetScript("OnClick", function()
+      this.ownerPanel.selectedRole = NormalizeRaidRole(this.roleValue)
+      LeafVE.UI:RefreshRaidSignupPanel(true)
+    end)
+    panel.roleButtons[role] = btn
+    lastRole = btn
+  end
+
+  panel.statusButtons = {}
+  local lastStatus = nil
+  for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do
+    local btn = CreateWorkOrderModeButton(panel.detailPane, GetRaidSignupStatusLabel(signupStatus))
+    btn:SetWidth(signupStatus == "unavailable" and 88 or 76)
+    if lastStatus then
+      btn:SetPoint("LEFT", lastStatus, "RIGHT", 4, 0)
+    else
+      btn:SetPoint("TOPLEFT", lastRole, "BOTTOMLEFT", -238, -6)
+    end
+    btn.ownerPanel = panel
+    btn.statusValue = signupStatus
+    btn:SetScript("OnClick", function()
+      this.ownerPanel.selectedSignupStatus = NormalizeRaidSignupStatus(this.statusValue)
+      LeafVE.UI:RefreshRaidSignupPanel(true)
+    end)
+    panel.statusButtons[signupStatus] = btn
+    lastStatus = btn
+  end
+
+  panel.signupNoteBG, panel.signupNoteInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 260, 22)
+  panel.signupNoteBG:SetPoint("TOPLEFT", lastStatus, "BOTTOMLEFT", -246, -10)
+  panel.signupNoteInput:SetMaxLetters(60)
+
+  panel.detailFeedbackText = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.detailFeedbackText:SetPoint("TOPLEFT", panel.signupNoteBG, "BOTTOMLEFT", 0, -6)
+  panel.detailFeedbackText:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailFeedbackText:SetHeight(32)
+  panel.detailFeedbackText:SetJustifyH("LEFT")
+
+  panel.softReserveBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.softReserveBtn:SetWidth(92)
+  panel.softReserveBtn:SetHeight(22)
+  panel.softReserveBtn:SetPoint("BOTTOMLEFT", panel.detailPane, "BOTTOMLEFT", 12, 10)
+  panel.softReserveBtn:SetText("Soft Res")
+  panel.softReserveBtn.ownerPanel = panel
+  panel.softReserveBtn:SetScript("OnClick", function()
+    LeafVE_RaidUIOpenSoftReservePopup(this.ownerPanel)
+  end)
+
+  panel.withdrawBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.withdrawBtn:SetWidth(72)
+  panel.withdrawBtn:SetHeight(22)
+  panel.withdrawBtn:SetPoint("BOTTOMRIGHT", panel.detailPane, "BOTTOMRIGHT", -108, 10)
+  panel.withdrawBtn:SetText("Withdraw")
+  panel.withdrawBtn.ownerPanel = panel
+  panel.withdrawBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local eventRecord = owner.selectedEvent
+    if not eventRecord then return end
+    local stored, err = LeafVE:SubmitRaidSignup(eventRecord.id, "unavailable", owner.selectedRole, owner.signupNoteInput:GetText() or "", {})
+    if not stored then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to update signup.") .. "|r")
+      return
+    end
+    owner.detailFeedbackText:SetText("|cFF88FF88Raid signup withdrawn.|r")
+    owner.lastDetailEventId = nil
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.saveSignupBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.saveSignupBtn:SetWidth(94)
+  panel.saveSignupBtn:SetHeight(22)
+  panel.saveSignupBtn:SetPoint("LEFT", panel.withdrawBtn, "RIGHT", 8, 0)
+  panel.saveSignupBtn:SetText("Save Signup")
+  panel.saveSignupBtn.ownerPanel = panel
+  panel.saveSignupBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local eventRecord = owner.selectedEvent
+    if not eventRecord then return end
+    local reserveCount = LeafVE:GetEffectiveRaidSoftReserveCount(eventRecord)
+    local reserveRows = LeafVE_RaidUICollectSoftReserveSlots(owner.selectedSoftReserveSlots, reserveCount)
+    local stored, err = LeafVE:SubmitRaidSignup(eventRecord.id, owner.selectedSignupStatus or "going", owner.selectedRole or "flex", owner.signupNoteInput:GetText() or "", reserveRows)
+    if not stored then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to save signup.") .. "|r")
+      return
+    end
+    owner.detailFeedbackText:SetText("|cFF88FF88Raid signup saved and broadcast.|r")
+    owner.lastDetailEventId = nil
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.raidPrevBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.raidPrevBtn:SetWidth(24)
+  panel.raidPrevBtn:SetHeight(20)
+  panel.raidPrevBtn:SetPoint("TOPLEFT", panel.detailBody, "BOTTOMLEFT", 0, -8)
+  panel.raidPrevBtn:SetText("<")
+  panel.raidPrevBtn.ownerPanel = panel
+  panel.raidPrevBtn:SetScript("OnClick", function()
+    LeafVE_RaidUIApplyCatalogSelection(this.ownerPanel, -1)
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.selectedRaidNameText = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  panel.selectedRaidNameText:SetPoint("LEFT", panel.raidPrevBtn, "RIGHT", 8, 0)
+  panel.selectedRaidNameText:SetWidth(220)
+  panel.selectedRaidNameText:SetJustifyH("LEFT")
+
+  panel.raidNextBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.raidNextBtn:SetWidth(24)
+  panel.raidNextBtn:SetHeight(20)
+  panel.raidNextBtn:SetPoint("LEFT", panel.selectedRaidNameText, "RIGHT", 8, 0)
+  panel.raidNextBtn:SetText(">")
+  panel.raidNextBtn.ownerPanel = panel
+  panel.raidNextBtn:SetScript("OnClick", function()
+    LeafVE_RaidUIApplyCatalogSelection(this.ownerPanel, 1)
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  panel.dateLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.dateLabel:SetPoint("TOPLEFT", panel.raidPrevBtn, "BOTTOMLEFT", 0, -12)
+  panel.dateLabel:SetText("Date")
+  panel.dateBG, panel.dateInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 98, 22)
+  panel.dateBG:SetPoint("TOPLEFT", panel.dateLabel, "BOTTOMLEFT", 0, -4)
+  panel.startLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.startLabel:SetPoint("LEFT", panel.dateBG, "RIGHT", 12, 18)
+  panel.startLabel:SetText("Start")
+  panel.startTimeBG, panel.startTimeInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 54, 22)
+  panel.startTimeBG:SetPoint("TOPLEFT", panel.startLabel, "BOTTOMLEFT", 0, -4)
+  panel.closeLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.closeLabel:SetPoint("LEFT", panel.startTimeBG, "RIGHT", 12, 18)
+  panel.closeLabel:SetText("Close")
+  panel.closeTimeBG, panel.closeTimeInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 54, 22)
+  panel.closeTimeBG:SetPoint("TOPLEFT", panel.closeLabel, "BOTTOMLEFT", 0, -4)
+
+  panel.softReserveCountLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.softReserveCountLabel:SetPoint("TOPLEFT", panel.dateBG, "BOTTOMLEFT", 0, -10)
+  panel.softReserveCountLabel:SetText("Soft Res")
+  panel.softReserveCountOneBtn = CreateWorkOrderModeButton(panel.detailPane, "1")
+  panel.softReserveCountOneBtn:SetWidth(28)
+  panel.softReserveCountOneBtn:SetPoint("TOPLEFT", panel.softReserveCountLabel, "BOTTOMLEFT", 0, -4)
+  panel.softReserveCountOneBtn.ownerPanel = panel
+  panel.softReserveCountOneBtn.softReserveCountValue = 1
+  panel.softReserveCountOneBtn:SetScript("OnClick", function()
+    this.ownerPanel.createSoftReserveCount = this.softReserveCountValue
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+  panel.softReserveCountTwoBtn = CreateWorkOrderModeButton(panel.detailPane, "2")
+  panel.softReserveCountTwoBtn:SetWidth(28)
+  panel.softReserveCountTwoBtn:SetPoint("LEFT", panel.softReserveCountOneBtn, "RIGHT", 6, 0)
+  panel.softReserveCountTwoBtn.ownerPanel = panel
+  panel.softReserveCountTwoBtn.softReserveCountValue = 2
+  panel.softReserveCountTwoBtn:SetScript("OnClick", panel.softReserveCountOneBtn:GetScript("OnClick"))
+  panel.softReserveCountText = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.softReserveCountText:SetPoint("LEFT", panel.softReserveCountTwoBtn, "RIGHT", 10, 0)
+  panel.softReserveCountText:SetJustifyH("LEFT")
+
+  panel.raidNotesLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.raidNotesLabel:SetPoint("TOPLEFT", panel.softReserveCountOneBtn, "BOTTOMLEFT", 0, -12)
+  panel.raidNotesLabel:SetText("Notes")
+  panel.raidNotesBG, panel.raidNotesInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 336, 22)
+  panel.raidNotesBG:SetPoint("TOPLEFT", panel.raidNotesLabel, "BOTTOMLEFT", 0, -4)
+  panel.raidNotesInput:SetMaxLetters(120)
+
+  panel.raidConsumablesLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.raidConsumablesLabel:SetPoint("TOPLEFT", panel.raidNotesBG, "BOTTOMLEFT", 0, -10)
+  panel.raidConsumablesLabel:SetText("Required Consumables")
+  panel.raidConsumablesBG, panel.raidConsumablesInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 336, 22)
+  panel.raidConsumablesBG:SetPoint("TOPLEFT", panel.raidConsumablesLabel, "BOTTOMLEFT", 0, -4)
+  panel.raidConsumablesInput:SetMaxLetters(120)
+
+  panel.createEventBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.createEventBtn:SetWidth(96)
+  panel.createEventBtn:SetHeight(22)
+  panel.createEventBtn:SetPoint("BOTTOMRIGHT", panel.detailPane, "BOTTOMRIGHT", -12, 10)
+  panel.createEventBtn:SetText("Post Raid")
+  panel.createEventBtn.ownerPanel = panel
+  panel.createEventBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local raidKey = owner.createRaidKey
+    if not raidKey then
+      owner.detailFeedbackText:SetText("|cFFFF6666No raid is selected.|r")
+      return
+    end
+    local startAt, startErr = LeafVE_RaidUIParseTimestamp(owner.dateInput:GetText() or "", owner.startTimeInput:GetText() or "")
+    if not startAt then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(startErr or "Invalid start time.") .. "|r")
+      return
+    end
+    local closeAt, closeErr = LeafVE_RaidUIParseTimestamp(owner.dateInput:GetText() or "", owner.closeTimeInput:GetText() or "")
+    if not closeAt then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(closeErr or "Invalid close time.") .. "|r")
+      return
+    end
+    if closeAt > startAt then closeAt = startAt end
+    local defaults = LeafVE:GetRaidDefaultRoleTargets(raidKey, nil)
+    local catalogEntry = LeafVE:GetRaidCatalogEntry(raidKey)
+    local raidSize = tonumber(catalogEntry and catalogEntry.raidSize) or 20
+    local stored, err = LeafVE:CreateRaidEvent(
+      raidKey,
+      owner.selectedRaidNameText:GetText() or "",
+      startAt,
+      closeAt,
+      raidSize,
+      defaults,
+      owner.raidNotesInput and (owner.raidNotesInput:GetText() or "") or "",
+      owner.raidConsumablesInput and (owner.raidConsumablesInput:GetText() or "") or "",
+      owner.createSoftReserveCount or 1
+    )
+    if not stored then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to create raid event.") .. "|r")
+      return
+    end
+    if owner.raidNotesInput then owner.raidNotesInput:SetText("") end
+    if owner.raidConsumablesInput then owner.raidConsumablesInput:SetText("") end
+    owner.mode = "upcoming"
+    owner.selectedEventId = stored.id
+    owner.lastDetailEventId = nil
+    owner.detailFeedbackText:SetText("|cFF88FF88Raid event posted and synced.|r")
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+
+  LeafVE_RaidUISeedAdminDefaults(panel)
+  LeafVE_RaidUIApplyCatalogSelection(panel, 0)
+  LeafVE_RaidUISetAdminVisible(panel, false)
+
+  panel.softReservePopup = LeafVE_RaidUICreateInset(panel.detailPane)
+  panel.softReservePopup:SetPoint("TOPLEFT", panel.detailPane, "TOPLEFT", 18, -42)
+  panel.softReservePopup:SetPoint("BOTTOMRIGHT", panel.detailPane, "BOTTOMRIGHT", -18, 44)
+  panel.softReservePopup:SetFrameStrata("FULLSCREEN_DIALOG")
+  panel.softReservePopup:SetFrameLevel(panel.detailPane:GetFrameLevel() + 20)
+  panel.softReservePopup:SetBackdropColor(0.00, 0.00, 0.00, 1.00)
+  panel.softReservePopup:SetBackdropBorderColor(0.60, 0.50, 0.18, 1.00)
+  panel.softReservePopup:SetAlpha(1)
+  panel.softReservePopup:Hide()
+  panel.softReservePopup.activeSlot = 1
+  panel.softReservePopup.bossVisibleRows = 7
+  panel.softReservePopup.lootVisibleRows = 8
+  panel.softReservePopup.ownerPanel = panel
+
+  panel.softReservePopup.titleText = panel.softReservePopup:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  panel.softReservePopup.titleText:SetPoint("TOPLEFT", panel.softReservePopup, "TOPLEFT", 10, -10)
+  panel.softReservePopup.metaText = panel.softReservePopup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.softReservePopup.metaText:SetPoint("TOPLEFT", panel.softReservePopup.titleText, "BOTTOMLEFT", 0, -5)
+  panel.softReservePopup.metaText:SetPoint("RIGHT", panel.softReservePopup, "RIGHT", -10, 0)
+  panel.softReservePopup.metaText:SetJustifyH("LEFT")
+  panel.softReservePopup.metaText:SetJustifyV("TOP")
+
+  panel.softReservePopup.searchLabel = panel.softReservePopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.softReservePopup.searchLabel:SetPoint("TOPLEFT", panel.softReservePopup.metaText, "BOTTOMLEFT", 0, -8)
+  panel.softReservePopup.searchLabel:SetText("Search Loot")
+  panel.softReservePopup.searchBG, panel.softReservePopup.searchInput = LeafVE_RaidUICreateEditBox(panel.softReservePopup, 220, 20)
+  panel.softReservePopup.searchBG:SetPoint("TOPLEFT", panel.softReservePopup.searchLabel, "BOTTOMLEFT", 0, -4)
+  panel.softReservePopup.searchInput:SetMaxLetters(40)
+  panel.softReservePopup.searchInput.ownerPanel = panel
+  panel.softReservePopup.searchInput:SetScript("OnTextChanged", function()
+    local owner = this.ownerPanel
+    if owner and owner.softReservePopup then
+      owner.softReservePopup.lootOffset = 0
+      LeafVE_RaidUIRefreshSoftReservePopup(owner)
+    end
+  end)
+
+  panel.softReservePopup.slotButtons = {}
+  panel.softReservePopup.slotTexts = {}
+  local lastSlotButton = nil
+  for i = 1, 2 do
+    local btn = CreateWorkOrderModeButton(panel.softReservePopup, "Reserve " .. tostring(i))
+    btn:SetWidth(74)
+    btn:SetPoint("TOPLEFT", lastSlotButton or panel.softReservePopup.searchBG, lastSlotButton and "TOPRIGHT" or "BOTTOMLEFT", lastSlotButton and 6 or 0, lastSlotButton and 0 or -10)
+    btn.ownerPanel = panel
+    btn.ownerPopup = panel.softReservePopup
+    btn.slotIndex = i
+    btn:SetScript("OnClick", function()
+      this.ownerPopup.activeSlot = this.slotIndex
+      LeafVE_RaidUIRefreshSoftReservePopup(this.ownerPanel)
+    end)
+    panel.softReservePopup.slotButtons[i] = btn
+    lastSlotButton = btn
+
+    local text = panel.softReservePopup:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    text:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
+    text:SetWidth(170)
+    text:SetJustifyH("LEFT")
+    panel.softReservePopup.slotTexts[i] = text
+  end
+
+  panel.softReservePopup.bossTitleText = panel.softReservePopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.softReservePopup.bossTitleText:SetPoint("TOPLEFT", panel.softReservePopup.slotTexts[1], "BOTTOMLEFT", 0, -10)
+  panel.softReservePopup.bossTitleText:SetText("Boss")
+  panel.softReservePopup.bossPane = LeafVE_RaidUICreateInset(panel.softReservePopup)
+  panel.softReservePopup.bossPane:SetPoint("TOPLEFT", panel.softReservePopup.bossTitleText, "BOTTOMLEFT", 0, -4)
+  panel.softReservePopup.bossPane:SetWidth(146)
+  panel.softReservePopup.bossPane:SetPoint("BOTTOMLEFT", panel.softReservePopup, "BOTTOMLEFT", 10, 42)
+  panel.softReservePopup.bossPane:SetBackdropColor(0.00, 0.00, 0.00, 1.00)
+  panel.softReservePopup.bossPane:SetBackdropBorderColor(0.32, 0.30, 0.24, 1.00)
+  panel.softReservePopup.bossPane.ownerPanel = panel
+  panel.softReservePopup.bossPane:SetScript("OnMouseWheel", function()
+    local popup = this:GetParent()
+    local totalRows = table.getn(popup.bossRowsData or {})
+    local maxOffset = math.max(0, totalRows - (popup.bossVisibleRows or 5))
+    local nextOffset = (popup.bossOffset or 0) - (arg1 or 0)
+    if nextOffset < 0 then nextOffset = 0 end
+    if nextOffset > maxOffset then nextOffset = maxOffset end
+    if nextOffset ~= (popup.bossOffset or 0) then
+      popup.bossOffset = nextOffset
+      LeafVE_RaidUIRefreshSoftReservePopup(popup.ownerPanel)
+    end
+  end)
+  panel.softReservePopup.bossPane:EnableMouseWheel(true)
+
+  panel.softReservePopup.lootTitleText = panel.softReservePopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.softReservePopup.lootTitleText:SetPoint("TOPLEFT", panel.softReservePopup.bossPane, "TOPRIGHT", 10, 24)
+  panel.softReservePopup.lootPane = LeafVE_RaidUICreateInset(panel.softReservePopup)
+  panel.softReservePopup.lootPane:SetPoint("TOPLEFT", panel.softReservePopup.lootTitleText, "BOTTOMLEFT", 0, -4)
+  panel.softReservePopup.lootPane:SetPoint("RIGHT", panel.softReservePopup, "RIGHT", -10, 0)
+  panel.softReservePopup.lootPane:SetPoint("BOTTOMRIGHT", panel.softReservePopup, "BOTTOMRIGHT", -10, 42)
+  panel.softReservePopup.lootPane:SetBackdropColor(0.00, 0.00, 0.00, 1.00)
+  panel.softReservePopup.lootPane:SetBackdropBorderColor(0.32, 0.30, 0.24, 1.00)
+  panel.softReservePopup.lootPane.ownerPanel = panel
+  panel.softReservePopup.lootPane:SetScript("OnMouseWheel", function()
+    local popup = this:GetParent()
+    local totalRows = table.getn(popup.lootRowsData or {})
+    local maxOffset = math.max(0, totalRows - (popup.lootVisibleRows or 6))
+    local nextOffset = (popup.lootOffset or 0) - (arg1 or 0)
+    if nextOffset < 0 then nextOffset = 0 end
+    if nextOffset > maxOffset then nextOffset = maxOffset end
+    if nextOffset ~= (popup.lootOffset or 0) then
+      popup.lootOffset = nextOffset
+      LeafVE_RaidUIRefreshSoftReservePopup(popup.ownerPanel)
+    end
+  end)
+  panel.softReservePopup.lootPane:EnableMouseWheel(true)
+
+  panel.softReservePopup.lootEmptyText = panel.softReservePopup.lootPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.softReservePopup.lootEmptyText:SetPoint("TOPLEFT", panel.softReservePopup.lootPane, "TOPLEFT", 8, -8)
+  panel.softReservePopup.lootEmptyText:SetPoint("RIGHT", panel.softReservePopup.lootPane, "RIGHT", -8, 0)
+  panel.softReservePopup.lootEmptyText:SetJustifyH("LEFT")
+  panel.softReservePopup.lootEmptyText:SetJustifyV("TOP")
+  panel.softReservePopup.lootEmptyText:Hide()
+
+  panel.softReservePopup.bossRowButtons = {}
+  local lastBossButton = nil
+  for i = 1, panel.softReservePopup.bossVisibleRows do
+    local row = CreateFrame("Button", nil, panel.softReservePopup.bossPane)
+    row:SetHeight(22)
+    row:SetPoint("TOPLEFT", lastBossButton or panel.softReservePopup.bossPane, lastBossButton and "BOTTOMLEFT" or "TOPLEFT", lastBossButton and 0 or 6, lastBossButton and 0 or -6)
+    row:SetPoint("TOPRIGHT", lastBossButton or panel.softReservePopup.bossPane, lastBossButton and "BOTTOMRIGHT" or "TOPRIGHT", lastBossButton and 0 or -6, lastBossButton and 0 or -6)
+    row:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8X8",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = false, tileSize = 8, edgeSize = 10,
+      insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    row:SetBackdropColor(0.05, 0.05, 0.07, 0.95)
+    row:SetBackdropBorderColor(0.30, 0.30, 0.35, 1.0)
+    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.label:SetPoint("LEFT", row, "LEFT", 6, 0)
+    row.label:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+    row.label:SetJustifyH("LEFT")
+    row.ownerPanel = panel
+    row:SetScript("OnClick", function()
+      if not this.bossInfo then return end
+      this.ownerPanel.softReservePopup.selectedBossKey = this.bossInfo.key
+      this.ownerPanel.softReservePopup.lootOffset = 0
+      LeafVE_RaidUIRefreshSoftReservePopup(this.ownerPanel)
+    end)
+    panel.softReservePopup.bossRowButtons[i] = row
+    lastBossButton = row
+  end
+
+  panel.softReservePopup.lootRowButtons = {}
+  local lastLootButton = nil
+  for i = 1, panel.softReservePopup.lootVisibleRows do
+    local row = CreateFrame("Button", nil, panel.softReservePopup.lootPane)
+    row:SetHeight(28)
+    row:SetPoint("TOPLEFT", lastLootButton or panel.softReservePopup.lootPane, lastLootButton and "BOTTOMLEFT" or "TOPLEFT", lastLootButton and 0 or 6, lastLootButton and 0 or -6)
+    row:SetPoint("TOPRIGHT", lastLootButton or panel.softReservePopup.lootPane, lastLootButton and "BOTTOMRIGHT" or "TOPRIGHT", lastLootButton and 0 or -6, lastLootButton and 0 or -6)
+    row:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8X8",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = false, tileSize = 8, edgeSize = 10,
+      insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    row:SetBackdropColor(0.05, 0.05, 0.07, 0.95)
+    row:SetBackdropBorderColor(0.30, 0.30, 0.35, 1.0)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetWidth(16)
+    row.icon:SetHeight(16)
+    row.icon:SetPoint("LEFT", row, "LEFT", 4, 3)
+    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.label:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 8, 1)
+    row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.label:SetJustifyH("LEFT")
+    row.label:SetJustifyV("TOP")
+    row.subText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.subText:SetPoint("TOPLEFT", row.label, "BOTTOMLEFT", 0, -1)
+    row.subText:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.subText:SetJustifyH("LEFT")
+    row.subText:SetJustifyV("TOP")
+    row.subText:Hide()
+    row.ownerPanel = panel
+    row:SetScript("OnClick", function()
+      local owner = this.ownerPanel
+      local popup = owner.softReservePopup
+      if not popup or not this.lootInfo then return end
+      local eventRecord = owner.selectedEvent
+      local reserveCount = LeafVE:GetEffectiveRaidSoftReserveCount(eventRecord)
+      local slotIndex = math.min(math.max(1, tonumber(popup.activeSlot) or 1), reserveCount)
+      local chosenBossKey = tostring((this.lootInfo and this.lootInfo.bossKey) or popup.selectedBossKey or "")
+      if chosenBossKey ~= "" then
+        popup.selectedBossKey = chosenBossKey
+      end
+      owner.selectedSoftReserveSlots = owner.selectedSoftReserveSlots or {}
+      owner.selectedSoftReserveSlots[slotIndex] = {
+        bossKey = chosenBossKey,
+        bossName = LeafVE:GetRaidBossName(eventRecord and eventRecord.raidKey, chosenBossKey),
+        itemId = tonumber(this.lootInfo.itemId) or 0,
+        itemName = tostring(this.lootInfo.name or ""),
+        icon = tostring(this.lootInfo.icon or ""),
+        quality = tonumber(this.lootInfo.quality) or 0,
+        slot = tostring(this.lootInfo.slot or ""),
+      }
+      for reserveIndex = 1, reserveCount do
+        if reserveIndex ~= slotIndex then
+          local other = owner.selectedSoftReserveSlots[reserveIndex]
+          if type(other) == "table"
+            and tonumber(other.itemId) == tonumber(this.lootInfo.itemId)
+            and tostring(other.bossKey or "") == chosenBossKey then
+            owner.selectedSoftReserveSlots[reserveIndex] = nil
+          end
+        end
+      end
+      if reserveCount == 2 and slotIndex == 1 and owner.selectedSoftReserveSlots[2] == nil then
+        popup.activeSlot = 2
+      end
+      LeafVE_RaidUIRefreshSoftReservePopup(owner)
+    end)
+    row:SetScript("OnEnter", function()
+      this:SetBackdropColor(0.10, 0.10, 0.14, 0.98)
+      this:SetBackdropBorderColor(0.75, 0.62, 0.22, 1.00)
+      if this.lootInfo and tonumber(this.lootInfo.itemId) and tonumber(this.lootInfo.itemId) > 0 then
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:ClearLines()
+        GameTooltip:SetHyperlink("item:" .. tostring(this.lootInfo.itemId))
+        GameTooltip:Show()
+      end
+    end)
+    row:SetScript("OnLeave", function()
+      this:SetBackdropColor(0.05, 0.05, 0.07, 0.95)
+      this:SetBackdropBorderColor(0.30, 0.30, 0.35, 1.0)
+      GameTooltip:Hide()
+    end)
+    panel.softReservePopup.lootRowButtons[i] = row
+    lastLootButton = row
+  end
+
+  panel.softReservePopup.clearBtn = CreateFrame("Button", nil, panel.softReservePopup, "UIPanelButtonTemplate")
+  panel.softReservePopup.clearBtn:SetWidth(72)
+  panel.softReservePopup.clearBtn:SetHeight(20)
+  panel.softReservePopup.clearBtn:SetPoint("BOTTOMLEFT", panel.softReservePopup, "BOTTOMLEFT", 10, 10)
+  panel.softReservePopup.clearBtn:SetText("Clear")
+  panel.softReservePopup.clearBtn.ownerPanel = panel
+  panel.softReservePopup.clearBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local popup = owner.softReservePopup
+    local reserveCount = LeafVE:GetEffectiveRaidSoftReserveCount(owner.selectedEvent)
+    local slotIndex = math.min(math.max(1, tonumber(popup.activeSlot) or 1), reserveCount)
+    owner.selectedSoftReserveSlots = owner.selectedSoftReserveSlots or {}
+    owner.selectedSoftReserveSlots[slotIndex] = nil
+    LeafVE_RaidUIRefreshSoftReservePopup(owner)
+  end)
+
+  panel.softReservePopup.doneBtn = CreateFrame("Button", nil, panel.softReservePopup, "UIPanelButtonTemplate")
+  panel.softReservePopup.doneBtn:SetWidth(72)
+  panel.softReservePopup.doneBtn:SetHeight(20)
+  panel.softReservePopup.doneBtn:SetPoint("BOTTOMRIGHT", panel.softReservePopup, "BOTTOMRIGHT", -10, 10)
+  panel.softReservePopup.doneBtn:SetText("Done")
+  panel.softReservePopup.doneBtn.ownerPanel = panel
+  panel.softReservePopup.doneBtn:SetScript("OnClick", function()
+    LeafVE_RaidUICloseSoftReservePopup(this.ownerPanel)
+    LeafVE.UI:RefreshRaidSignupPanel(true)
+  end)
+end
+
+function LeafVE.UI:RefreshRaidSignupPanel(skipRequest)
+  local panel = self.panels and self.panels.raidSignups
+  if not panel then return end
+
+  if not skipRequest then
+    LeafVE:RequestRaidSignupSync(false)
+  end
+
+  UpdateWorkOrderModeButtonVisual(panel.modeUpcomingBtn, panel.mode == "upcoming")
+  UpdateWorkOrderModeButtonVisual(panel.modeMineBtn, panel.mode == "mine")
+  UpdateWorkOrderModeButtonVisual(panel.modeAdminBtn, panel.mode == "admin")
+
+  if panel.mode == "admin" then
+    local canCreate = LeafVE:IsRaidOrganizerRank()
+    panel.listPane:Hide()
+    panel.detailPane:Show()
+    panel.summaryText:SetText("|cFF88CCFFRaid Sign-Ups|r lets Jonin+ post guild raid events and lets the whole guild sign up.")
+    panel.detailTitle:SetText("|cFFFFD700Create Raid Event|r")
+    panel.detailMeta:SetText(canCreate and "|cFF88FF88Jonin, Anbu, Sannin, and Hokage can post guild raid events here.|r" or "|cFFFF6666Only Jonin, Anbu, Sannin, and Hokage can post raid events. Everyone else can still sign up.|r")
+    LeafVE_RaidUISeedAdminDefaults(panel)
+    LeafVE_RaidUIApplyCatalogSelection(panel, 0)
+    panel.detailBody:SetText((panel.createRaidKey and LeafVE_RaidUIGetBossSectionText(panel.createRaidKey) or "|cFF888888No raid catalog available.|r"))
+    LeafVE_RaidUISetAdminVisible(panel, true)
+    panel.managerOpenBtn:Hide()
+    panel.managerLockBtn:Hide()
+    panel.managerCompleteBtn:Hide()
+    panel.managerCancelBtn:Hide()
+    for _, role in ipairs(LeafVE_RaidUIRoleOrder) do panel.roleButtons[role]:Hide() end
+    for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do panel.statusButtons[signupStatus]:Hide() end
+    panel.rosterTitle:Hide()
+    panel.rosterPane:Hide()
+    panel.signupNoteBG:Hide()
+    panel.softReserveBtn:Hide()
+    panel.withdrawBtn:Hide()
+    panel.saveSignupBtn:Hide()
+    LeafVE_RaidUICloseSoftReservePopup(panel)
+    UpdateWorkOrderModeButtonVisual(panel.softReserveCountOneBtn, NormalizeRaidSoftReserveCount(panel.createSoftReserveCount) == 1)
+    UpdateWorkOrderModeButtonVisual(panel.softReserveCountTwoBtn, NormalizeRaidSoftReserveCount(panel.createSoftReserveCount) == 2)
+    if panel.softReserveCountText then
+      panel.softReserveCountText:SetText("|cFFAAAAAAPlayers get " .. tostring(panel.createSoftReserveCount or 1) .. " soft reserve" .. ((panel.createSoftReserveCount or 1) ~= 1 and "s" or "") .. ".|r")
+    end
+    LeafVE_RaidUISetButtonEnabled(panel.raidPrevBtn, canCreate)
+    LeafVE_RaidUISetButtonEnabled(panel.raidNextBtn, canCreate)
+    LeafVE_RaidUISetButtonEnabled(panel.softReserveCountOneBtn, canCreate)
+    LeafVE_RaidUISetButtonEnabled(panel.softReserveCountTwoBtn, canCreate)
+    LeafVE_RaidUISetButtonEnabled(panel.createEventBtn, canCreate)
+    if panel.dateInput then panel.dateInput:EnableKeyboard(canCreate) end
+    if panel.startTimeInput then panel.startTimeInput:EnableKeyboard(canCreate) end
+    if panel.closeTimeInput then panel.closeTimeInput:EnableKeyboard(canCreate) end
+    if panel.raidNotesInput then panel.raidNotesInput:EnableKeyboard(canCreate) end
+    if panel.raidConsumablesInput then panel.raidConsumablesInput:EnableKeyboard(canCreate) end
+    return
+  end
+
+  panel.listPane:Show()
+  panel.detailPane:Show()
+  LeafVE_RaidUISetAdminVisible(panel, false)
+  panel.rosterTitle:Show()
+  panel.rosterPane:Show()
+  panel.managerOpenBtn:Show()
+  panel.managerLockBtn:Show()
+  panel.managerCompleteBtn:Show()
+  panel.managerCancelBtn:Show()
+  for _, role in ipairs(LeafVE_RaidUIRoleOrder) do panel.roleButtons[role]:Show() end
+  for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do panel.statusButtons[signupStatus]:Show() end
+  panel.signupNoteBG:Show()
+  panel.softReserveBtn:Show()
+  panel.withdrawBtn:Show()
+  panel.saveSignupBtn:Show()
+
+  local eventRows = LeafVE:GetVisibleRaidEvents(panel.mode == "mine" and "mine" or "all")
+  panel.visibleEvents = eventRows
+  panel.summaryText:SetText(panel.mode == "mine" and ("|cFF88CCFFMy Sign-Ups|r  " .. tostring(table.getn(eventRows)) .. " active raids with your signup saved.") or ("|cFF88CCFFUpcoming Raids|r  " .. tostring(table.getn(eventRows)) .. " events cached across the guild."))
+  panel.listTitle:SetText(panel.mode == "mine" and "|cFFFFD700My Raid Events|r" or "|cFFFFD700Upcoming Raids|r")
+
+  local maxOffset = math.max(0, table.getn(eventRows) - (panel.eventVisibleRows or 7))
+  if (panel.eventOffset or 0) > maxOffset then panel.eventOffset = maxOffset end
+  if panel.selectedEventId and not LeafVE_RaidUIFindEventById(eventRows, panel.selectedEventId) then
+    panel.selectedEventId = nil
+    panel.lastDetailEventId = nil
+  end
+  if not panel.selectedEventId and table.getn(eventRows) > 0 then
+    panel.selectedEventId = eventRows[1].id
+  end
+
+  panel.noEventsText:SetText(table.getn(eventRows) == 0 and "|cFF888888No raid events are cached yet.|r" or "")
+  for i = 1, table.getn(panel.eventRows or {}) do
+    local row = panel.eventRows[i]
+    local eventRecord = eventRows[(panel.eventOffset or 0) + i]
+    if row and eventRecord then
+      local counts = LeafVE:GetRaidRosterCounts(eventRecord.id)
+      local raidSize = tonumber(eventRecord.raidSize) or 20
+      local statusText = LeafVE_RaidUIGetStatusMarkup(eventRecord.status)
+      local needText = LeafVE_RaidUIGetNeedMarkup(eventRecord)
+      local isSelected = tostring(eventRecord.id or "") == tostring(panel.selectedEventId or "")
+      local borderR, borderG, borderB = LeafVE_RaidUIGetStatusColor(eventRecord.status)
+      local bgR, bgG, bgB = 0.06, 0.06, 0.08
+      if NormalizeRaidEventStatus(eventRecord.status) == "open" then
+        bgR, bgG, bgB = 0.05, 0.08, 0.05
+      elseif NormalizeRaidEventStatus(eventRecord.status) == "locked" then
+        bgR, bgG, bgB = 0.10, 0.07, 0.03
+      elseif NormalizeRaidEventStatus(eventRecord.status) == "completed" then
+        bgR, bgG, bgB = 0.04, 0.06, 0.10
+      elseif NormalizeRaidEventStatus(eventRecord.status) == "cancelled" then
+        bgR, bgG, bgB = 0.10, 0.04, 0.04
+      end
+      if isSelected then
+        bgR = math.min(1, bgR + 0.05)
+        bgG = math.min(1, bgG + 0.05)
+        bgB = math.min(1, bgB + 0.05)
+      end
+      row.eventRecord = eventRecord
+      row.titleText:SetText("|cFFFFD700" .. tostring(eventRecord.title or eventRecord.raidName or "Raid Event") .. "|r")
+      row.metaText:SetText("|cFF88CCFF" .. tostring(eventRecord.raidName or "Raid") .. "|r  " .. LeafVE_RaidUIColorText(LeafVE_RaidUIFormatTime(eventRecord.startAt), 0.88, 0.88, 0.90) .. "  " .. statusText .. "\n|cFFFFD700Roster|r " .. tostring(counts.total or 0) .. "/" .. tostring(raidSize) .. "  " .. needText)
+      row:SetBackdropColor(bgR, bgG, bgB, 0.92)
+      row:SetBackdropBorderColor(isSelected and 1 or borderR, isSelected and 0.84 or borderG, isSelected and 0.18 or borderB, isSelected and 0.98 or 0.85)
+      row:Show()
+    elseif row then
+      row.eventRecord = nil
+      row:Hide()
+    end
+  end
+
+  local selectedEvent = LeafVE_RaidUIFindEventById(eventRows, panel.selectedEventId)
+  panel.selectedEvent = selectedEvent
+  if not selectedEvent then
+    panel.detailTitle:SetText("|cFFFFD700Raid Details|r")
+    panel.detailMeta:SetText("|cFF888888Select a raid event from the left list.|r")
+    panel.detailBody:SetText("|cFF888888No raid selected.|r")
+    panel.rosterDisplayRows = {}
+    panel.rosterEmptyText:SetText("|cFF888888No raid selected.|r")
+    for i = 1, table.getn(panel.rosterRows or {}) do
+      panel.rosterRows[i]:Hide()
+    end
+    panel.detailFeedbackText:SetText("")
+    panel.selectedSoftReserveSlots = {}
+    LeafVE_RaidUISetButtonEnabled(panel.managerOpenBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.managerLockBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.managerCompleteBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.managerCancelBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.softReserveBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.withdrawBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.saveSignupBtn, false)
+    for _, role in ipairs(LeafVE_RaidUIRoleOrder) do UpdateWorkOrderModeButtonVisual(panel.roleButtons[role], false) end
+    for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do UpdateWorkOrderModeButtonVisual(panel.statusButtons[signupStatus], false) end
+    LeafVE_RaidUICloseSoftReservePopup(panel)
+    return
+  end
+
+  local me = ShortName(UnitName("player"))
+  local mySignup = me and LeafVE:FindRaidSignupRecord(selectedEvent.id, me) or nil
+  local canManage = LeafVE:CanManageRaidEvent(selectedEvent, me)
+  local eventStatus = NormalizeRaidEventStatus(selectedEvent.status)
+  local isClosed = eventStatus == "completed" or eventStatus == "cancelled" or eventStatus == "archived"
+  local isSoftReserveLocked = eventStatus == "locked" or isClosed
+  local reserveCount = LeafVE:GetEffectiveRaidSoftReserveCount(selectedEvent)
+  if panel.lastDetailEventId ~= selectedEvent.id then
+    panel.selectedRole = NormalizeRaidRole(mySignup and mySignup.preferredRole or LeafVE:GetSuggestedRaidRoleForPlayer(me))
+    panel.selectedSignupStatus = NormalizeRaidSignupStatus(mySignup and mySignup.signupStatus or "going")
+    panel.signupNoteInput:SetText(mySignup and (mySignup.note or "") or "")
+    panel.selectedSoftReserveSlots = LeafVE_RaidUICopySoftReserveSlots(mySignup and mySignup.softReserves or {}, reserveCount)
+    panel.lastDetailEventId = selectedEvent.id
+  elseif reserveCount > 0 and type(panel.selectedSoftReserveSlots) ~= "table" then
+    panel.selectedSoftReserveSlots = LeafVE_RaidUICopySoftReserveSlots(mySignup and mySignup.softReserves or {}, reserveCount)
+  end
+
+  local statusText = LeafVE_RaidUIGetStatusMarkup(selectedEvent.status)
+  local countdownText = LeafVE_RaidUIFormatCountdown(selectedEvent.startAt)
+  local countdownMarkup = LeafVE_RaidUIColorText(countdownText, 0.85, 0.85, 0.88)
+  if string.find(countdownText, "Started ", 1, true) then
+    countdownMarkup = LeafVE_RaidUIColorText(countdownText, 1.00, 0.72, 0.28)
+  end
+
+  local reserveLabel = reserveCount > 0 and (tostring(reserveCount) .. " per player") or "Disabled"
+  local reserveSummary = LeafVE_RaidUIGetSoftReserveMarkup({ softReserves = LeafVE_RaidUICollectSoftReserveSlots(panel.selectedSoftReserveSlots, reserveCount) }, selectedEvent, false)
+  if reserveSummary == "" then
+    reserveSummary = reserveCount > 0 and "|cFF888888None selected yet.|r" or "|cFF888888Not enabled for this raid.|r"
+  end
+  if isSoftReserveLocked and reserveCount > 0 then
+    reserveSummary = reserveSummary .. "\n|cFFFFAA55Soft reserves are locked for this raid.|r"
+  end
+  panel.detailTitle:SetText("|cFFFFD700" .. tostring(selectedEvent.title or selectedEvent.raidName or "Raid Details") .. "|r")
+  panel.detailMeta:SetText("|cFF88CCFF" .. tostring(selectedEvent.raidName or "Raid") .. "|r  " .. statusText .. "\n|cFFFFD700Lead:|r " .. tostring(selectedEvent.postedBy or "") .. "  |cFFFFD700Start:|r " .. LeafVE_RaidUIFormatTime(selectedEvent.startAt) .. "  |cFFFFD700Close:|r " .. LeafVE_RaidUIFormatTime(selectedEvent.signupCloseAt) .. "\n|cFFFFD700Soft Res:|r " .. reserveLabel .. "  " .. countdownMarkup)
+  panel.detailBody:SetText(
+    "|cFFFFD700Need|r\n" .. LeafVE_RaidUIGetNeedMarkup(selectedEvent) ..
+    "\n\n|cFF88CCFFNotes|r\n" .. ((selectedEvent.notes and selectedEvent.notes ~= "") and tostring(selectedEvent.notes) or "|cFF888888None|r") ..
+    "\n\n|cFFFFD700Required Consumables|r\n" .. ((selectedEvent.consumables and selectedEvent.consumables ~= "") and tostring(selectedEvent.consumables) or "|cFF888888None listed.|r") ..
+    "\n\n|cFFFFD700Your Soft Res|r\n" .. reserveSummary ..
+    "\n\n|cFFFFD700Bosses|r\n" .. LeafVE_RaidUIGetBossSectionText(selectedEvent.raidKey)
+  )
+
+  panel.rosterDisplayRows = LeafVE_RaidUIBuildRosterDisplayRows(selectedEvent.id)
+  local maxRosterOffset = math.max(0, table.getn(panel.rosterDisplayRows or {}) - (panel.rosterVisibleRows or 6))
+  if (panel.rosterOffset or 0) > maxRosterOffset then
+    panel.rosterOffset = maxRosterOffset
+  end
+  panel.rosterEmptyText:SetText(table.getn(panel.rosterDisplayRows or {}) == 0 and "|cFF888888No sign-ups recorded yet.|r" or "")
+  for i = 1, table.getn(panel.rosterRows or {}) do
+    local row = panel.rosterRows[i]
+    local display = panel.rosterDisplayRows[(panel.rosterOffset or 0) + i]
+    if row and display then
+      row:Show()
+      if display.kind == "header" then
+        row.icon:Hide()
+        row.leftText:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -1)
+        row.leftText:SetText(LeafVE_RaidUIGetRosterBucketTitle(display.bucket) .. " |cFFAAAAAA(" .. tostring(display.count or 0) .. ")|r")
+        row.rightText:SetText("")
+      else
+        local signup = display.signup
+        local signupReserves = LeafVE_RaidUIGetSoftReserveMarkup(signup, selectedEvent, true)
+        row.icon:Show()
+        row.icon:SetTexture(LeafVE_RaidUIGetSignupIconPath(signup) or LEAF_FALLBACK)
+        row.leftText:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 6, 0)
+        row.leftText:SetText(
+          LeafVE_RaidUIGetColoredPlayerName(signup.player or "", signup.classTag) .. "  " .. LeafVE_RaidUIGetSignupProfileMarkup(signup) ..
+          (signupReserves ~= "" and ("  " .. signupReserves) or "")
+        )
+        row.rightText:SetText(LeafVE_RaidUIGetSignupStatusMarkup(signup.signupStatus))
+      end
+    elseif row then
+      row:Hide()
+    end
+  end
+
+  LeafVE_RaidUISetButtonEnabled(panel.managerOpenBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.managerLockBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.managerCompleteBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.managerCancelBtn, canManage)
+  panel.softReserveBtn:SetText(reserveCount > 0 and ((isSoftReserveLocked and "Soft Res Locked " or "Soft Res ") .. tostring(table.getn(LeafVE_RaidUICollectSoftReserveSlots(panel.selectedSoftReserveSlots, reserveCount))) .. "/" .. tostring(reserveCount)) or "Soft Res")
+  LeafVE_RaidUISetButtonEnabled(panel.softReserveBtn, reserveCount > 0 and not isSoftReserveLocked)
+  LeafVE_RaidUISetButtonEnabled(panel.withdrawBtn, not isClosed)
+  LeafVE_RaidUISetButtonEnabled(panel.saveSignupBtn, not isClosed)
+  for _, role in ipairs(LeafVE_RaidUIRoleOrder) do UpdateWorkOrderModeButtonVisual(panel.roleButtons[role], NormalizeRaidRole(panel.selectedRole) == role) end
+  for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do UpdateWorkOrderModeButtonVisual(panel.statusButtons[signupStatus], NormalizeRaidSignupStatus(panel.selectedSignupStatus) == signupStatus) end
+  if panel.softReservePopup and panel.softReservePopup:IsShown() and isSoftReserveLocked then
+    LeafVE_RaidUICloseSoftReservePopup(panel)
+  elseif panel.softReservePopup and panel.softReservePopup:IsShown() then
+    LeafVE_RaidUIRefreshSoftReservePopup(panel)
+  end
+end
+
+function LeafVE_GuildEventUICycleCategory(panel, direction)
+  local order = LeafVE_GuildEventCategoryOrder or {"Guild Meeting", "Other"}
+  if table.getn(order) == 0 then return end
+  local index = tonumber(panel.createCategoryIndex) or 1
+  if direction and direction ~= 0 then
+    index = index + direction
+    if index < 1 then index = table.getn(order) end
+    if index > table.getn(order) then index = 1 end
+  end
+  panel.createCategoryIndex = index
+  panel.createCategory = NormalizeGuildEventCategory(order[index])
+  if panel.categoryNameText then
+    panel.categoryNameText:SetText(panel.createCategory or "")
+  end
+end
+
+function LeafVE_GuildEventUIBuildResponseText(eventId)
+  local rows = LeafVE:GetGuildEventRSVPs(eventId, true)
+  if table.getn(rows) == 0 then
+    return "|cFF888888No responses saved yet.|r"
+  end
+
+  local buckets = {
+    going = {},
+    tentative = {},
+    late = {},
+    unavailable = {},
+  }
+
+  for i = 1, table.getn(rows) do
+    local record = rows[i]
+    table.insert(buckets[NormalizeRaidSignupStatus(record.signupStatus)], record)
+  end
+
+  local lines = {}
+  local order = {"going", "tentative", "late", "unavailable"}
+  for _, status in ipairs(order) do
+    local bucketRows = buckets[status]
+    if table.getn(bucketRows) > 0 then
+      table.insert(lines, LeafVE_RaidUIGetSignupStatusMarkup(status) .. " |cFFAAAAAA(" .. tostring(table.getn(bucketRows)) .. ")|r")
+      for i = 1, table.getn(bucketRows) do
+        local record = bucketRows[i]
+        table.insert(lines, "  - " .. LeafVE_RaidUIGetColoredPlayerName(record.player or "", record.classTag) .. "  " .. LeafVE_RaidUIGetSignupProfileMarkup(record))
+      end
+      table.insert(lines, "")
+    end
+  end
+
+  if table.getn(lines) > 0 and lines[table.getn(lines)] == "" then
+    table.remove(lines, table.getn(lines))
+  end
+  return table.concat(lines, "\n")
+end
+
+function LeafVE_GuildEventUICycleMonth(panel, direction)
+  local today = date("*t")
+  local year = tonumber(panel and panel.viewYear) or today.year
+  local month = tonumber(panel and panel.viewMonth) or today.month
+  month = month + (tonumber(direction) or 0)
+  while month < 1 do
+    month = month + 12
+    year = year - 1
+  end
+  while month > 12 do
+    month = month - 12
+    year = year + 1
+  end
+  if panel then
+    panel.viewYear = year
+    panel.viewMonth = month
+    panel.selectedDayKey = nil
+    panel.selectedEventId = nil
+    panel.lastDetailEventId = nil
+  end
+end
+
+function LeafVE_GuildEventUIBuildDayMap(eventRows)
+  local dayMap = {}
+  for _, eventRecord in ipairs(eventRows or {}) do
+    if type(eventRecord) == "table" then
+      local dayKey = DayKeyFromTS(tonumber(eventRecord.startAt) or 0)
+      if not dayMap[dayKey] then
+        dayMap[dayKey] = {}
+      end
+      table.insert(dayMap[dayKey], eventRecord)
+    end
+  end
+  for _, rows in pairs(dayMap) do
+    table.sort(rows, function(a, b)
+      local aStart = tonumber(a.startAt or 0) or 0
+      local bStart = tonumber(b.startAt or 0) or 0
+      if aStart == bStart then
+        return Lower(a.title or "") < Lower(b.title or "")
+      end
+      return aStart < bStart
+    end)
+  end
+  return dayMap
+end
+
+function BuildGuildEventsPanel(panel)
+  if not panel or panel.isGuildEventBuilt then return end
+
+  panel.isGuildEventBuilt = true
+  panel.mode = "upcoming"
+  panel.eventOffset = 0
+  panel.eventVisibleRows = 7
+
+  panel.modeUpcomingBtn = CreateWorkOrderModeButton(panel, "Upcoming")
+  panel.modeUpcomingBtn:SetWidth(96)
+  panel.modeUpcomingBtn:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -12)
+  panel.modeUpcomingBtn.ownerPanel = panel
+  panel.modeUpcomingBtn:SetScript("OnClick", function()
+    this.ownerPanel.mode = "upcoming"
+    this.ownerPanel.lastDetailEventId = nil
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.modeMineBtn = CreateWorkOrderModeButton(panel, "My RSVPs")
+  panel.modeMineBtn:SetWidth(96)
+  panel.modeMineBtn:SetPoint("LEFT", panel.modeUpcomingBtn, "RIGHT", 8, 0)
+  panel.modeMineBtn.ownerPanel = panel
+  panel.modeMineBtn:SetScript("OnClick", function()
+    this.ownerPanel.mode = "mine"
+    this.ownerPanel.lastDetailEventId = nil
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.modeAdminBtn = CreateWorkOrderModeButton(panel, "Admin")
+  panel.modeAdminBtn:SetWidth(82)
+  panel.modeAdminBtn:SetPoint("LEFT", panel.modeMineBtn, "RIGHT", 8, 0)
+  panel.modeAdminBtn.ownerPanel = panel
+  panel.modeAdminBtn:SetScript("OnClick", function()
+    this.ownerPanel.mode = "admin"
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.summaryText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.summaryText:SetPoint("TOPLEFT", panel.modeUpcomingBtn, "BOTTOMLEFT", 0, -10)
+  panel.summaryText:SetPoint("RIGHT", panel, "RIGHT", -12, 0)
+  panel.summaryText:SetJustifyH("LEFT")
+
+  panel.listPane = LeafVE_RaidUICreateInset(panel)
+  panel.listPane:SetPoint("TOPLEFT", panel.summaryText, "BOTTOMLEFT", 0, -8)
+  panel.listPane:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 12)
+  panel.listPane:SetWidth(276)
+
+  panel.detailPane = LeafVE_RaidUICreateInset(panel)
+  panel.detailPane:SetPoint("TOPLEFT", panel.listPane, "TOPRIGHT", 10, 0)
+  panel.detailPane:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -12, 12)
+
+  panel.listTitle = panel.listPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  panel.listTitle:SetPoint("TOPLEFT", panel.listPane, "TOPLEFT", 10, -10)
+  panel.listTitle:SetText("|cFFFFD700Guild Events|r")
+
+  panel.listHint = panel.listPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.listHint:SetPoint("TOPLEFT", panel.listTitle, "BOTTOMLEFT", 0, -5)
+  panel.listHint:SetPoint("RIGHT", panel.listPane, "RIGHT", -10, 0)
+  panel.listHint:SetJustifyH("LEFT")
+  panel.listHint:SetText("|cFFAAAAAAClick a day to view guild events on the calendar.|r")
+
+  panel.monthPrevBtn = CreateFrame("Button", nil, panel.listPane, "UIPanelButtonTemplate")
+  panel.monthPrevBtn:SetWidth(24)
+  panel.monthPrevBtn:SetHeight(20)
+  panel.monthPrevBtn:SetPoint("TOPLEFT", panel.listHint, "BOTTOMLEFT", 0, -8)
+  panel.monthPrevBtn:SetText("<")
+  panel.monthPrevBtn.ownerPanel = panel
+  panel.monthPrevBtn:SetScript("OnClick", function()
+    LeafVE_GuildEventUICycleMonth(this.ownerPanel, -1)
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.monthTitleText = panel.listPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  panel.monthTitleText:SetPoint("LEFT", panel.monthPrevBtn, "RIGHT", 8, 0)
+  panel.monthTitleText:SetWidth(176)
+  panel.monthTitleText:SetJustifyH("CENTER")
+
+  panel.monthNextBtn = CreateFrame("Button", nil, panel.listPane, "UIPanelButtonTemplate")
+  panel.monthNextBtn:SetWidth(24)
+  panel.monthNextBtn:SetHeight(20)
+  panel.monthNextBtn:SetPoint("LEFT", panel.monthTitleText, "RIGHT", 8, 0)
+  panel.monthNextBtn:SetText(">")
+  panel.monthNextBtn.ownerPanel = panel
+  panel.monthNextBtn:SetScript("OnClick", function()
+    LeafVE_GuildEventUICycleMonth(this.ownerPanel, 1)
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.calendarDayHeaders = {}
+  local dayLabels = {"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"}
+  local lastDayHeader = nil
+  for i = 1, 7 do
+    local header = panel.listPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    if lastDayHeader then
+      header:SetPoint("LEFT", lastDayHeader, "RIGHT", 10, 0)
+    else
+      header:SetPoint("TOPLEFT", panel.monthPrevBtn, "BOTTOMLEFT", 8, -10)
+    end
+    header:SetWidth(24)
+    header:SetJustifyH("CENTER")
+    header:SetText(dayLabels[i])
+    panel.calendarDayHeaders[i] = header
+    lastDayHeader = header
+  end
+
+  panel.calendarFrame = CreateFrame("Frame", nil, panel.listPane)
+  panel.calendarFrame:SetPoint("TOPLEFT", panel.calendarDayHeaders[1], "BOTTOMLEFT", -8, -6)
+  panel.calendarFrame:SetWidth(252)
+  panel.calendarFrame:SetHeight(250)
+
+  panel.calendarCells = {}
+  local lastCell = nil
+  for i = 1, 42 do
+    local cell = CreateFrame("Button", nil, panel.calendarFrame)
+    cell:SetWidth(34)
+    cell:SetHeight(40)
+    cell:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8X8",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = false, tileSize = 8, edgeSize = 8,
+      insets = { left = 1, right = 1, top = 1, bottom = 1 }
+    })
+    cell:SetBackdropColor(0.05, 0.05, 0.07, 0.92)
+    cell:SetBackdropBorderColor(0.22, 0.22, 0.28, 0.8)
+    if i == 1 then
+      cell:SetPoint("TOPLEFT", panel.calendarFrame, "TOPLEFT", 0, 0)
+    elseif math.mod(i - 1, 7) == 0 then
+      cell:SetPoint("TOPLEFT", panel.calendarCells[i - 7], "BOTTOMLEFT", 0, -2)
+    else
+      cell:SetPoint("LEFT", panel.calendarCells[i - 1], "RIGHT", 2, 0)
+    end
+    cell.ownerPanel = panel
+    cell.dayText = cell:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    cell.dayText:SetPoint("TOPLEFT", cell, "TOPLEFT", 4, -4)
+    cell.dayText:SetJustifyH("LEFT")
+    cell.metaText = cell:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    cell.metaText:SetPoint("TOPLEFT", cell.dayText, "BOTTOMLEFT", 0, -2)
+    cell.metaText:SetPoint("RIGHT", cell, "RIGHT", -2, 0)
+    cell.metaText:SetJustifyH("LEFT")
+    cell.metaText:SetJustifyV("TOP")
+    cell:SetScript("OnClick", function()
+      this.ownerPanel.selectedDayKey = this.dayKey
+      this.ownerPanel.selectedEventId = this.primaryEventId
+      this.ownerPanel.lastDetailEventId = nil
+      LeafVE.UI:RefreshGuildEventsPanel(true)
+    end)
+    panel.calendarCells[i] = cell
+    lastCell = cell
+  end
+
+  panel.eventListFrame = CreateFrame("Frame", nil, panel.listPane)
+  panel.eventListFrame:SetPoint("TOPLEFT", panel.listHint, "BOTTOMLEFT", 0, -8)
+  panel.eventListFrame:SetPoint("BOTTOMRIGHT", panel.listPane, "BOTTOMRIGHT", -10, 10)
+  panel.eventListFrame:EnableMouse(true)
+  panel.eventListFrame:EnableMouseWheel(true)
+  panel.eventListFrame.ownerPanel = panel
+  panel.eventListFrame:SetScript("OnMouseWheel", function()
+    local owner = this.ownerPanel
+    local totalRows = table.getn(owner.visibleEvents or {})
+    local maxOffset = math.max(0, totalRows - (owner.eventVisibleRows or 7))
+    local nextOffset = (owner.eventOffset or 0) - (arg1 or 0)
+    if nextOffset < 0 then nextOffset = 0 end
+    if nextOffset > maxOffset then nextOffset = maxOffset end
+    if nextOffset ~= (owner.eventOffset or 0) then
+      owner.eventOffset = nextOffset
+      LeafVE.UI:RefreshGuildEventsPanel(true)
+    end
+  end)
+
+  panel.eventRows = {}
+  local lastRow = nil
+  for i = 1, panel.eventVisibleRows do
+    local row = CreateFrame("Button", nil, panel.eventListFrame)
+    row:SetHeight(62)
+    row:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8X8",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = false, tileSize = 8, edgeSize = 10,
+      insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    row:SetBackdropColor(0.06, 0.06, 0.08, 0.90)
+    row:SetBackdropBorderColor(0.28, 0.28, 0.34, 0.8)
+    row:SetPoint("TOPLEFT", lastRow or panel.eventListFrame, lastRow and "BOTTOMLEFT" or "TOPLEFT", 0, lastRow and -6 or 0)
+    row:SetPoint("TOPRIGHT", lastRow or panel.eventListFrame, lastRow and "BOTTOMRIGHT" or "TOPRIGHT", 0, lastRow and -6 or 0)
+    row.ownerPanel = panel
+    row.titleText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.titleText:SetPoint("TOPLEFT", row, "TOPLEFT", 8, -8)
+    row.titleText:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.titleText:SetJustifyH("LEFT")
+    row.metaText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.metaText:SetPoint("TOPLEFT", row.titleText, "BOTTOMLEFT", 0, -4)
+    row.metaText:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.metaText:SetJustifyH("LEFT")
+    row.metaText:SetJustifyV("TOP")
+    row:SetScript("OnClick", function()
+      if not this.eventRecord then return end
+      this.ownerPanel.selectedEventId = this.eventRecord.id
+      this.ownerPanel.lastDetailEventId = nil
+      LeafVE.UI:RefreshGuildEventsPanel(true)
+    end)
+    panel.eventRows[i] = row
+    lastRow = row
+  end
+
+  panel.noEventsText = panel.eventListFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.noEventsText:SetPoint("TOPLEFT", panel.eventListFrame, "TOPLEFT", 8, -8)
+  panel.noEventsText:SetPoint("RIGHT", panel.eventListFrame, "RIGHT", -8, 0)
+  panel.noEventsText:SetJustifyH("LEFT")
+  panel.eventListFrame:Hide()
+  panel.noEventsText:Hide()
+
+  panel.detailTitle = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  panel.detailTitle:SetPoint("TOPLEFT", panel.detailPane, "TOPLEFT", 10, -10)
+  panel.detailTitle:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailTitle:SetJustifyH("LEFT")
+
+  panel.detailMeta = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.detailMeta:SetPoint("TOPLEFT", panel.detailTitle, "BOTTOMLEFT", 0, -5)
+  panel.detailMeta:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailMeta:SetJustifyH("LEFT")
+  panel.detailMeta:SetJustifyV("TOP")
+
+  panel.detailBody = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.detailBody:SetPoint("TOPLEFT", panel.detailMeta, "BOTTOMLEFT", 0, -8)
+  panel.detailBody:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailBody:SetHeight(182)
+  panel.detailBody:SetJustifyH("LEFT")
+  panel.detailBody:SetJustifyV("TOP")
+
+  panel.dayEventsTitle = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.dayEventsTitle:SetPoint("TOPLEFT", panel.detailBody, "BOTTOMLEFT", 0, -8)
+  panel.dayEventsTitle:SetText("|cFFFFD700Selected Day|r")
+
+  panel.dayEventsFrame = CreateFrame("Frame", nil, panel.detailPane)
+  panel.dayEventsFrame:SetPoint("TOPLEFT", panel.dayEventsTitle, "BOTTOMLEFT", 0, -4)
+  panel.dayEventsFrame:SetPoint("TOPRIGHT", panel.detailPane, "TOPRIGHT", -10, -286)
+  panel.dayEventsFrame:SetHeight(96)
+
+  panel.dayEventsEmptyText = panel.dayEventsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.dayEventsEmptyText:SetPoint("TOPLEFT", panel.dayEventsFrame, "TOPLEFT", 0, 0)
+  panel.dayEventsEmptyText:SetPoint("RIGHT", panel.dayEventsFrame, "RIGHT", 0, 0)
+  panel.dayEventsEmptyText:SetJustifyH("LEFT")
+
+  panel.dayEventRows = {}
+  local lastDayRow = nil
+  for i = 1, 4 do
+    local row = CreateFrame("Button", nil, panel.dayEventsFrame)
+    row:SetHeight(22)
+    row:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8X8",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = false, tileSize = 8, edgeSize = 8,
+      insets = { left = 1, right = 1, top = 1, bottom = 1 }
+    })
+    row:SetBackdropColor(0.06, 0.06, 0.08, 0.90)
+    row:SetBackdropBorderColor(0.24, 0.24, 0.28, 0.8)
+    row:SetPoint("TOPLEFT", lastDayRow or panel.dayEventsFrame, lastDayRow and "BOTTOMLEFT" or "TOPLEFT", 0, lastDayRow and -3 or 0)
+    row:SetPoint("TOPRIGHT", lastDayRow or panel.dayEventsFrame, lastDayRow and "BOTTOMRIGHT" or "TOPRIGHT", 0, lastDayRow and -3 or 0)
+    row.ownerPanel = panel
+    row.titleText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.titleText:SetPoint("LEFT", row, "LEFT", 6, 0)
+    row.titleText:SetPoint("RIGHT", row, "RIGHT", -72, 0)
+    row.titleText:SetJustifyH("LEFT")
+    row.metaText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.metaText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+    row.metaText:SetWidth(68)
+    row.metaText:SetJustifyH("RIGHT")
+    row:SetScript("OnClick", function()
+      if not this.eventRecord then return end
+      this.ownerPanel.selectedEventId = this.eventRecord.id
+      this.ownerPanel.lastDetailEventId = nil
+      LeafVE.UI:RefreshGuildEventsPanel(true)
+    end)
+    panel.dayEventRows[i] = row
+    lastDayRow = row
+  end
+
+  panel.managerOpenBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerOpenBtn:SetWidth(58)
+  panel.managerOpenBtn:SetHeight(20)
+  panel.managerOpenBtn:SetPoint("TOPLEFT", panel.dayEventsFrame, "BOTTOMLEFT", 0, -8)
+  panel.managerOpenBtn:SetText("Open")
+  panel.managerOpenBtn.ownerPanel = panel
+  panel.managerOpenBtn.actionStatus = "open"
+  panel.managerOpenBtn:SetScript("OnClick", function()
+    local eventRecord = this.ownerPanel.selectedEvent
+    if not eventRecord then return end
+    local stored, err = LeafVE:SetGuildEventStatus(eventRecord.id, this.actionStatus)
+    if not stored then
+      this.ownerPanel.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to update event status.") .. "|r")
+      return
+    end
+    this.ownerPanel.detailFeedbackText:SetText("|cFF88FF88Guild event updated.|r")
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.managerLockBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerLockBtn:SetWidth(58)
+  panel.managerLockBtn:SetHeight(20)
+  panel.managerLockBtn:SetPoint("LEFT", panel.managerOpenBtn, "RIGHT", 6, 0)
+  panel.managerLockBtn:SetText("Lock")
+  panel.managerLockBtn.ownerPanel = panel
+  panel.managerLockBtn.actionStatus = "locked"
+  panel.managerLockBtn:SetScript("OnClick", panel.managerOpenBtn:GetScript("OnClick"))
+
+  panel.managerCompleteBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerCompleteBtn:SetWidth(66)
+  panel.managerCompleteBtn:SetHeight(20)
+  panel.managerCompleteBtn:SetPoint("LEFT", panel.managerLockBtn, "RIGHT", 6, 0)
+  panel.managerCompleteBtn:SetText("Complete")
+  panel.managerCompleteBtn.ownerPanel = panel
+  panel.managerCompleteBtn.actionStatus = "completed"
+  panel.managerCompleteBtn:SetScript("OnClick", panel.managerOpenBtn:GetScript("OnClick"))
+
+  panel.managerCancelBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.managerCancelBtn:SetWidth(60)
+  panel.managerCancelBtn:SetHeight(20)
+  panel.managerCancelBtn:SetPoint("LEFT", panel.managerCompleteBtn, "RIGHT", 6, 0)
+  panel.managerCancelBtn:SetText("Cancel")
+  panel.managerCancelBtn.ownerPanel = panel
+  panel.managerCancelBtn.actionStatus = "cancelled"
+  panel.managerCancelBtn:SetScript("OnClick", panel.managerOpenBtn:GetScript("OnClick"))
+
+  panel.statusButtons = {}
+  local lastStatus = nil
+  for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do
+    local btn = CreateWorkOrderModeButton(panel.detailPane, GetRaidSignupStatusLabel(signupStatus))
+    btn:SetWidth(signupStatus == "unavailable" and 88 or 76)
+    if lastStatus then
+      btn:SetPoint("LEFT", lastStatus, "RIGHT", 4, 0)
+    else
+      btn:SetPoint("TOPLEFT", panel.managerOpenBtn, "BOTTOMLEFT", 0, -10)
+    end
+    btn.ownerPanel = panel
+    btn.statusValue = signupStatus
+    btn:SetScript("OnClick", function()
+      this.ownerPanel.selectedSignupStatus = NormalizeRaidSignupStatus(this.statusValue)
+      LeafVE.UI:RefreshGuildEventsPanel(true)
+    end)
+    panel.statusButtons[signupStatus] = btn
+    lastStatus = btn
+  end
+
+  panel.signupNoteBG, panel.signupNoteInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 280, 22)
+  panel.signupNoteBG:SetPoint("TOPLEFT", lastStatus, "BOTTOMLEFT", -246, -10)
+  panel.signupNoteInput:SetMaxLetters(80)
+
+  panel.detailFeedbackText = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  panel.detailFeedbackText:SetPoint("TOPLEFT", panel.signupNoteBG, "BOTTOMLEFT", 0, -6)
+  panel.detailFeedbackText:SetPoint("RIGHT", panel.detailPane, "RIGHT", -10, 0)
+  panel.detailFeedbackText:SetHeight(32)
+  panel.detailFeedbackText:SetJustifyH("LEFT")
+
+  panel.withdrawBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.withdrawBtn:SetWidth(72)
+  panel.withdrawBtn:SetHeight(22)
+  panel.withdrawBtn:SetPoint("BOTTOMRIGHT", panel.detailPane, "BOTTOMRIGHT", -108, 10)
+  panel.withdrawBtn:SetText("Withdraw")
+  panel.withdrawBtn.ownerPanel = panel
+  panel.withdrawBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local eventRecord = owner.selectedEvent
+    if not eventRecord then return end
+    local stored, err = LeafVE:SubmitGuildEventRSVP(eventRecord.id, "unavailable", owner.signupNoteInput:GetText() or "")
+    if not stored then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to update RSVP.") .. "|r")
+      return
+    end
+    owner.detailFeedbackText:SetText("|cFF88FF88Guild event response withdrawn.|r")
+    owner.lastDetailEventId = nil
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.saveSignupBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.saveSignupBtn:SetWidth(94)
+  panel.saveSignupBtn:SetHeight(22)
+  panel.saveSignupBtn:SetPoint("LEFT", panel.withdrawBtn, "RIGHT", 8, 0)
+  panel.saveSignupBtn:SetText("Save RSVP")
+  panel.saveSignupBtn.ownerPanel = panel
+  panel.saveSignupBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local eventRecord = owner.selectedEvent
+    if not eventRecord then return end
+    local stored, err = LeafVE:SubmitGuildEventRSVP(eventRecord.id, owner.selectedSignupStatus or "going", owner.signupNoteInput:GetText() or "")
+    if not stored then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to save RSVP.") .. "|r")
+      return
+    end
+    owner.detailFeedbackText:SetText("|cFF88FF88Guild event response saved.|r")
+    owner.lastDetailEventId = nil
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.titleLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.titleLabel:SetPoint("TOPLEFT", panel.detailBody, "BOTTOMLEFT", 0, -8)
+  panel.titleLabel:SetText("Title")
+  panel.titleBG, panel.titleInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 250, 22)
+  panel.titleBG:SetPoint("TOPLEFT", panel.titleLabel, "BOTTOMLEFT", 0, -4)
+  panel.titleInput:SetMaxLetters(50)
+
+  panel.categoryPrevBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.categoryPrevBtn:SetWidth(24)
+  panel.categoryPrevBtn:SetHeight(20)
+  panel.categoryPrevBtn:SetPoint("TOPLEFT", panel.titleBG, "BOTTOMLEFT", 0, -10)
+  panel.categoryPrevBtn:SetText("<")
+  panel.categoryPrevBtn.ownerPanel = panel
+  panel.categoryPrevBtn:SetScript("OnClick", function()
+    LeafVE_GuildEventUICycleCategory(this.ownerPanel, -1)
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.categoryNameText = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  panel.categoryNameText:SetPoint("LEFT", panel.categoryPrevBtn, "RIGHT", 8, 0)
+  panel.categoryNameText:SetWidth(180)
+  panel.categoryNameText:SetJustifyH("LEFT")
+
+  panel.categoryNextBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.categoryNextBtn:SetWidth(24)
+  panel.categoryNextBtn:SetHeight(20)
+  panel.categoryNextBtn:SetPoint("LEFT", panel.categoryNameText, "RIGHT", 8, 0)
+  panel.categoryNextBtn:SetText(">")
+  panel.categoryNextBtn.ownerPanel = panel
+  panel.categoryNextBtn:SetScript("OnClick", function()
+    LeafVE_GuildEventUICycleCategory(this.ownerPanel, 1)
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  panel.dateLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.dateLabel:SetPoint("TOPLEFT", panel.categoryPrevBtn, "BOTTOMLEFT", 0, -12)
+  panel.dateLabel:SetText("Date")
+  panel.dateBG, panel.dateInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 98, 22)
+  panel.dateBG:SetPoint("TOPLEFT", panel.dateLabel, "BOTTOMLEFT", 0, -4)
+
+  panel.startLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.startLabel:SetPoint("LEFT", panel.dateBG, "RIGHT", 12, 18)
+  panel.startLabel:SetText("Start")
+  panel.startBG, panel.startInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 54, 22)
+  panel.startBG:SetPoint("TOPLEFT", panel.startLabel, "BOTTOMLEFT", 0, -4)
+
+  panel.closeLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.closeLabel:SetPoint("LEFT", panel.startBG, "RIGHT", 12, 18)
+  panel.closeLabel:SetText("Close")
+  panel.closeBG, panel.closeInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 54, 22)
+  panel.closeBG:SetPoint("TOPLEFT", panel.closeLabel, "BOTTOMLEFT", 0, -4)
+
+  panel.notesLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.notesLabel:SetPoint("TOPLEFT", panel.dateBG, "BOTTOMLEFT", 0, -10)
+  panel.notesLabel:SetText("Notes")
+  panel.notesBG, panel.notesInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 320, 22)
+  panel.notesBG:SetPoint("TOPLEFT", panel.notesLabel, "BOTTOMLEFT", 0, -4)
+  panel.notesInput:SetMaxLetters(120)
+
+  panel.rewardsLabel = panel.detailPane:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  panel.rewardsLabel:SetPoint("TOPLEFT", panel.notesBG, "BOTTOMLEFT", 0, -10)
+  panel.rewardsLabel:SetText("Rewards")
+  panel.rewardsBG, panel.rewardsInput = LeafVE_RaidUICreateEditBox(panel.detailPane, 320, 22)
+  panel.rewardsBG:SetPoint("TOPLEFT", panel.rewardsLabel, "BOTTOMLEFT", 0, -4)
+  panel.rewardsInput:SetMaxLetters(120)
+
+  panel.createEventBtn = CreateFrame("Button", nil, panel.detailPane, "UIPanelButtonTemplate")
+  panel.createEventBtn:SetWidth(96)
+  panel.createEventBtn:SetHeight(22)
+  panel.createEventBtn:SetPoint("BOTTOMRIGHT", panel.detailPane, "BOTTOMRIGHT", -12, 10)
+  panel.createEventBtn:SetText("Post Event")
+  panel.createEventBtn.ownerPanel = panel
+  panel.createEventBtn:SetScript("OnClick", function()
+    local owner = this.ownerPanel
+    local startAt, startErr = LeafVE_RaidUIParseTimestamp(owner.dateInput:GetText() or "", owner.startInput:GetText() or "")
+    if not startAt then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(startErr or "Invalid start time.") .. "|r")
+      return
+    end
+    local closeAt, closeErr = LeafVE_RaidUIParseTimestamp(owner.dateInput:GetText() or "", owner.closeInput:GetText() or "")
+    if not closeAt then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(closeErr or "Invalid close time.") .. "|r")
+      return
+    end
+    if closeAt > startAt then closeAt = startAt end
+    local stored, err = LeafVE:CreateGuildEvent(owner.titleInput:GetText() or "", owner.createCategory or LeafVE_GuildEventCategoryOrder[1], startAt, closeAt, owner.notesInput:GetText() or "", owner.rewardsInput:GetText() or "")
+    if not stored then
+      owner.detailFeedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to create guild event.") .. "|r")
+      return
+    end
+    owner.mode = "upcoming"
+    owner.selectedEventId = stored.id
+    owner.lastDetailEventId = nil
+    owner.detailFeedbackText:SetText("|cFF88FF88Guild event posted and synced.|r")
+    LeafVE.UI:RefreshGuildEventsPanel(true)
+  end)
+
+  local tomorrow = date("*t", time() + 86400)
+  panel.dateInput:SetText(string.format("%04d-%02d-%02d", tomorrow.year, tomorrow.month, tomorrow.day))
+  panel.startInput:SetText("20:00")
+  panel.closeInput:SetText("19:30")
+  panel.titleInput:SetText("")
+  panel.notesInput:SetText("")
+  panel.rewardsInput:SetText("")
+  LeafVE_GuildEventUICycleCategory(panel, 0)
+end
+
+function LeafVE.UI:RefreshGuildEventsPanel(skipRequest)
+  local panel = self.panels and self.panels.guildEvents
+  if not panel then return end
+
+  if not skipRequest then
+    LeafVE:RequestGuildEventSync(false)
+  end
+
+  UpdateWorkOrderModeButtonVisual(panel.modeUpcomingBtn, panel.mode == "upcoming")
+  UpdateWorkOrderModeButtonVisual(panel.modeMineBtn, panel.mode == "mine")
+  UpdateWorkOrderModeButtonVisual(panel.modeAdminBtn, panel.mode == "admin")
+
+  if panel.mode == "admin" then
+    local canCreate = LeafVE:IsRaidOrganizerRank()
+    panel.listPane:Hide()
+    panel.detailPane:Show()
+    panel.summaryText:SetText("|cFF88CCFFGuild Events|r lets Jonin+ post meetings, dungeon groups, social events, and more.")
+    panel.detailTitle:SetText("|cFFFFD700Create Guild Event|r")
+    panel.detailMeta:SetText(canCreate and "|cFF88FF88Jonin, Anbu, Sannin, and Hokage can post guild events here.|r" or "|cFFFF6666Only Jonin, Anbu, Sannin, and Hokage can post guild events. Everyone else can still RSVP.|r")
+    panel.detailBody:SetText("|cFFAAAAAAPost a guild event with a title, category, schedule, and short note. Everyone using the addon can see it, RSVP, and track the start countdown.|r")
+    panel.managerOpenBtn:Hide()
+    panel.managerLockBtn:Hide()
+    panel.managerCompleteBtn:Hide()
+    panel.managerCancelBtn:Hide()
+    for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do panel.statusButtons[signupStatus]:Hide() end
+    panel.monthPrevBtn:Hide()
+    panel.monthTitleText:Hide()
+    panel.monthNextBtn:Hide()
+    for i = 1, table.getn(panel.calendarDayHeaders or {}) do panel.calendarDayHeaders[i]:Hide() end
+    panel.calendarFrame:Hide()
+    panel.dayEventsTitle:Hide()
+    panel.dayEventsFrame:Hide()
+    panel.signupNoteBG:Hide()
+    panel.withdrawBtn:Hide()
+    panel.saveSignupBtn:Hide()
+    panel.titleLabel:Show()
+    panel.titleBG:Show()
+    panel.categoryPrevBtn:Show()
+    panel.categoryNameText:Show()
+    panel.categoryNextBtn:Show()
+    panel.dateLabel:Show()
+    panel.dateBG:Show()
+    panel.startLabel:Show()
+    panel.startBG:Show()
+    panel.closeLabel:Show()
+    panel.closeBG:Show()
+    panel.notesLabel:Show()
+    panel.notesBG:Show()
+    panel.rewardsLabel:Show()
+    panel.rewardsBG:Show()
+    panel.createEventBtn:Show()
+    LeafVE_RaidUISetButtonEnabled(panel.categoryPrevBtn, canCreate)
+    LeafVE_RaidUISetButtonEnabled(panel.categoryNextBtn, canCreate)
+    LeafVE_RaidUISetButtonEnabled(panel.createEventBtn, canCreate)
+    if panel.titleInput then panel.titleInput:EnableKeyboard(canCreate) end
+    if panel.dateInput then panel.dateInput:EnableKeyboard(canCreate) end
+    if panel.startInput then panel.startInput:EnableKeyboard(canCreate) end
+    if panel.closeInput then panel.closeInput:EnableKeyboard(canCreate) end
+    if panel.notesInput then panel.notesInput:EnableKeyboard(canCreate) end
+    if panel.rewardsInput then panel.rewardsInput:EnableKeyboard(canCreate) end
+    return
+  end
+
+  panel.listPane:Show()
+  panel.detailPane:Show()
+  panel.monthPrevBtn:Show()
+  panel.monthTitleText:Show()
+  panel.monthNextBtn:Show()
+  for i = 1, table.getn(panel.calendarDayHeaders or {}) do panel.calendarDayHeaders[i]:Show() end
+  panel.calendarFrame:Show()
+  panel.dayEventsTitle:Show()
+  panel.dayEventsFrame:Show()
+  panel.managerOpenBtn:Show()
+  panel.managerLockBtn:Show()
+  panel.managerCompleteBtn:Show()
+  panel.managerCancelBtn:Show()
+  for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do panel.statusButtons[signupStatus]:Show() end
+  panel.signupNoteBG:Show()
+  panel.withdrawBtn:Show()
+  panel.saveSignupBtn:Show()
+  panel.titleLabel:Hide()
+  panel.titleBG:Hide()
+  panel.categoryPrevBtn:Hide()
+  panel.categoryNameText:Hide()
+  panel.categoryNextBtn:Hide()
+  panel.dateLabel:Hide()
+  panel.dateBG:Hide()
+  panel.startLabel:Hide()
+  panel.startBG:Hide()
+  panel.closeLabel:Hide()
+  panel.closeBG:Hide()
+  panel.notesLabel:Hide()
+  panel.notesBG:Hide()
+  panel.rewardsLabel:Hide()
+  panel.rewardsBG:Hide()
+  panel.createEventBtn:Hide()
+
+  local eventRows = LeafVE:GetVisibleGuildEvents(panel.mode == "mine" and "mine" or "all")
+  panel.visibleEvents = eventRows
+  panel.summaryText:SetText(panel.mode == "mine" and ("|cFF88CCFFMy Guild Events|r  " .. tostring(table.getn(eventRows)) .. " events with your RSVP saved.") or ("|cFF88CCFFGuild Events|r  " .. tostring(table.getn(eventRows)) .. " events cached across the guild."))
+  panel.listTitle:SetText(panel.mode == "mine" and "|cFFFFD700My RSVP Calendar|r" or "|cFFFFD700Guild Event Calendar|r")
+  panel.eventListFrame:Hide()
+  panel.noEventsText:Hide()
+  for i = 1, table.getn(panel.eventRows or {}) do
+    panel.eventRows[i]:Hide()
+  end
+
+  local today = date("*t")
+  if not panel.viewYear or not panel.viewMonth then
+    panel.viewYear = today.year
+    panel.viewMonth = today.month
+  end
+  local monthStartTS = time({year = tonumber(panel.viewYear), month = tonumber(panel.viewMonth), day = 1, hour = 12, min = 0, sec = 0})
+  if not monthStartTS then
+    panel.viewYear = today.year
+    panel.viewMonth = today.month
+    monthStartTS = time({year = today.year, month = today.month, day = 1, hour = 12, min = 0, sec = 0})
+  end
+  panel.monthTitleText:SetText(date("%B %Y", monthStartTS))
+
+  local dayMap = LeafVE_GuildEventUIBuildDayMap(eventRows)
+  local displayedMonth = date("*t", monthStartTS)
+  local displayedMonthKey = string.format("%04d-%02d", displayedMonth.year, displayedMonth.month)
+
+  if panel.selectedEventId then
+    local found = nil
+    for _, eventRecord in ipairs(eventRows) do
+      if tostring(eventRecord.id or "") == tostring(panel.selectedEventId or "") then
+        found = eventRecord
+        break
+      end
+    end
+    if found then
+      panel.selectedDayKey = DayKeyFromTS(found.startAt)
+    else
+      panel.selectedEventId = nil
+      panel.lastDetailEventId = nil
+    end
+  end
+
+  if panel.selectedDayKey and string.sub(panel.selectedDayKey, 1, 7) ~= displayedMonthKey then
+    panel.selectedDayKey = nil
+  end
+  if not panel.selectedDayKey then
+    local todayKey = DayKey()
+    if string.sub(todayKey, 1, 7) == displayedMonthKey then
+      panel.selectedDayKey = todayKey
+    else
+      panel.selectedDayKey = string.format("%04d-%02d-01", displayedMonth.year, displayedMonth.month)
+    end
+    for offset = 0, 41 do
+      local dayTS = monthStartTS + (offset * SECONDS_PER_DAY)
+      local dayKey = DayKeyFromTS(dayTS)
+      if string.sub(dayKey, 1, 7) == displayedMonthKey and type(dayMap[dayKey]) == "table" and table.getn(dayMap[dayKey]) > 0 then
+        panel.selectedDayKey = dayKey
+        break
+      end
+    end
+  end
+
+  local firstMonthInfo = date("*t", monthStartTS)
+  local startOffset = (tonumber(firstMonthInfo.wday) or 1) - 1
+  local calendarStartTS = monthStartTS - (startOffset * SECONDS_PER_DAY)
+  local todayKey = DayKey()
+  for i = 1, table.getn(panel.calendarCells or {}) do
+    local cell = panel.calendarCells[i]
+    local dayTS = calendarStartTS + ((i - 1) * SECONDS_PER_DAY)
+    local dayInfo = date("*t", dayTS)
+    local dayKey = DayKeyFromTS(dayTS)
+    local isCurrentMonth = dayInfo.month == displayedMonth.month and dayInfo.year == displayedMonth.year
+    local isSelected = dayKey == panel.selectedDayKey
+    local isToday = dayKey == todayKey
+    local dayEvents = dayMap[dayKey] or {}
+    local hasEvents = table.getn(dayEvents) > 0
+    cell.dayKey = dayKey
+    cell.primaryEventId = hasEvents and dayEvents[1].id or nil
+    cell.dayText:SetText((isCurrentMonth and "|cFFFFFFFF" or "|cFF777777") .. tostring(dayInfo.day) .. "|r")
+    if hasEvents then
+      local countText = tostring(table.getn(dayEvents)) .. " evt"
+      if table.getn(dayEvents) == 1 then
+        countText = LeafVE_RaidUIColorText(date("%H:%M", tonumber(dayEvents[1].startAt) or 0), 0.52, 1.00, 0.62)
+      else
+        countText = LeafVE_RaidUIColorText(countText, 0.52, 1.00, 0.62)
+      end
+      cell.metaText:SetText(countText)
+    else
+      cell.metaText:SetText("")
+    end
+    if isSelected then
+      cell:SetBackdropColor(0.14, 0.14, 0.08, 0.96)
+      cell:SetBackdropBorderColor(1.00, 0.84, 0.18, 0.96)
+    elseif isToday then
+      cell:SetBackdropColor(0.06, 0.09, 0.12, 0.94)
+      cell:SetBackdropBorderColor(0.46, 0.76, 1.00, 0.90)
+    elseif hasEvents then
+      cell:SetBackdropColor(0.05, 0.10, 0.06, 0.94)
+      cell:SetBackdropBorderColor(0.34, 0.86, 0.48, 0.88)
+    elseif isCurrentMonth then
+      cell:SetBackdropColor(0.05, 0.05, 0.07, 0.92)
+      cell:SetBackdropBorderColor(0.22, 0.22, 0.28, 0.80)
+    else
+      cell:SetBackdropColor(0.03, 0.03, 0.05, 0.88)
+      cell:SetBackdropBorderColor(0.14, 0.14, 0.18, 0.70)
+    end
+    cell:Show()
+  end
+
+  local selectedDayEvents = dayMap[panel.selectedDayKey or ""] or {}
+  if (not panel.selectedEventId or table.getn(selectedDayEvents) == 0) then
+    panel.selectedEventId = table.getn(selectedDayEvents) > 0 and selectedDayEvents[1].id or nil
+  else
+    local foundSelectedDayEvent = false
+    for i = 1, table.getn(selectedDayEvents) do
+      if tostring(selectedDayEvents[i].id or "") == tostring(panel.selectedEventId or "") then
+        foundSelectedDayEvent = true
+        break
+      end
+    end
+    if not foundSelectedDayEvent then
+      panel.selectedEventId = table.getn(selectedDayEvents) > 0 and selectedDayEvents[1].id or nil
+    end
+  end
+
+  panel.dayEventsTitle:SetText("|cFFFFD700Selected Day|r  " .. tostring(panel.selectedDayKey or ""))
+  panel.dayEventsEmptyText:SetText(table.getn(selectedDayEvents) == 0 and "|cFF888888No events on this day.|r" or "")
+  for i = 1, table.getn(panel.dayEventRows or {}) do
+    local row = panel.dayEventRows[i]
+    local eventRecord = selectedDayEvents[i]
+    if row and eventRecord then
+      local counts = LeafVE:GetGuildEventResponseCounts(eventRecord.id)
+      local isSelected = tostring(eventRecord.id or "") == tostring(panel.selectedEventId or "")
+      local borderR, borderG, borderB = LeafVE_RaidUIGetStatusColor(eventRecord.status)
+      row.eventRecord = eventRecord
+      row.titleText:SetText("|cFFFFD700" .. tostring(eventRecord.title or "Guild Event") .. "|r")
+      row.metaText:SetText(LeafVE_RaidUIColorText(date("%H:%M", tonumber(eventRecord.startAt) or 0), 0.88, 0.88, 0.90) .. "  |cFF88FF88" .. tostring(counts.going or 0) .. "|r")
+      row:SetBackdropBorderColor(isSelected and 1 or borderR, isSelected and 0.84 or borderG, isSelected and 0.18 or borderB, isSelected and 0.98 or 0.82)
+      row:SetBackdropColor(isSelected and 0.12 or 0.06, isSelected and 0.10 or 0.06, isSelected and 0.06 or 0.08, 0.92)
+      row:Show()
+    elseif row then
+      row.eventRecord = nil
+      row:Hide()
+    end
+  end
+
+  local selectedEvent = nil
+  for i = 1, table.getn(selectedDayEvents) do
+    if tostring(selectedDayEvents[i].id or "") == tostring(panel.selectedEventId or "") then
+      selectedEvent = selectedDayEvents[i]
+      break
+    end
+  end
+  panel.selectedEvent = selectedEvent
+  if not selectedEvent then
+    panel.detailTitle:SetText("|cFFFFD700Guild Events|r")
+    panel.detailMeta:SetText("|cFF888888Select a highlighted day or event card.|r")
+    panel.detailBody:SetText("|cFF888888No guild event selected for this day.|r")
+    panel.detailFeedbackText:SetText("")
+    LeafVE_RaidUISetButtonEnabled(panel.managerOpenBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.managerLockBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.managerCompleteBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.managerCancelBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.withdrawBtn, false)
+    LeafVE_RaidUISetButtonEnabled(panel.saveSignupBtn, false)
+    for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do UpdateWorkOrderModeButtonVisual(panel.statusButtons[signupStatus], false) end
+    return
+  end
+
+  local me = ShortName(UnitName("player"))
+  local myRSVP = me and LeafVE:FindGuildEventRSVP(selectedEvent.id, me) or nil
+  local canManage = LeafVE:CanManageRaidEvent(selectedEvent, me)
+  local eventStatus = NormalizeRaidEventStatus(selectedEvent.status)
+  local isClosed = eventStatus == "completed" or eventStatus == "cancelled" or eventStatus == "archived"
+  if panel.lastDetailEventId ~= selectedEvent.id then
+    panel.selectedSignupStatus = NormalizeRaidSignupStatus(myRSVP and myRSVP.signupStatus or "going")
+    panel.signupNoteInput:SetText(myRSVP and (myRSVP.note or "") or "")
+    panel.lastDetailEventId = selectedEvent.id
+  end
+
+  local statusText = LeafVE_RaidUIGetStatusMarkup(selectedEvent.status)
+  local countdownText = LeafVE_RaidUIFormatCountdown(selectedEvent.startAt)
+  local countdownMarkup = LeafVE_RaidUIColorText(countdownText, 0.85, 0.85, 0.88)
+  if string.find(countdownText, "Started ", 1, true) then
+    countdownMarkup = LeafVE_RaidUIColorText(countdownText, 1.00, 0.72, 0.28)
+  end
+  local counts = LeafVE:GetGuildEventResponseCounts(selectedEvent.id)
+
+  panel.detailTitle:SetText("|cFFFFD700" .. tostring(selectedEvent.title or "Guild Event") .. "|r")
+  panel.detailMeta:SetText("|cFF88CCFF" .. tostring(selectedEvent.category or "Event") .. "|r  " .. statusText .. "\n|cFFFFD700Host:|r " .. tostring(selectedEvent.postedBy or "") .. "  |cFFFFD700Start:|r " .. LeafVE_RaidUIFormatTime(selectedEvent.startAt) .. "  |cFFFFD700Close:|r " .. LeafVE_RaidUIFormatTime(selectedEvent.signupCloseAt) .. "\n" .. countdownMarkup)
+  panel.detailBody:SetText(
+    "|cFFFFD700Notes|r\n" .. ((selectedEvent.notes and selectedEvent.notes ~= "") and tostring(selectedEvent.notes) or "|cFF888888No extra notes.|r") ..
+    "\n\n|cFFFFD700Rewards|r\n" .. ((selectedEvent.rewards and selectedEvent.rewards ~= "") and tostring(selectedEvent.rewards) or "|cFF888888No listed rewards.|r") ..
+    "\n\n|cFFFFD700Responses|r\n" ..
+    "|cFF88FF88Going:|r " .. tostring(counts.going or 0) .. "  " ..
+    "|cFFFFDD66Tentative:|r " .. tostring(counts.tentative or 0) .. "  " ..
+    "|cFFFFAA55Late:|r " .. tostring(counts.late or 0) .. "  " ..
+    "|cFFFF6666Unavailable:|r " .. tostring(counts.unavailable or 0) ..
+    "\n\n" .. LeafVE_GuildEventUIBuildResponseText(selectedEvent.id)
+  )
+
+  LeafVE_RaidUISetButtonEnabled(panel.managerOpenBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.managerLockBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.managerCompleteBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.managerCancelBtn, canManage)
+  LeafVE_RaidUISetButtonEnabled(panel.withdrawBtn, not isClosed)
+  LeafVE_RaidUISetButtonEnabled(panel.saveSignupBtn, not isClosed)
+  for _, signupStatus in ipairs(LeafVE_RaidUIStatusOrder) do
+    UpdateWorkOrderModeButtonVisual(panel.statusButtons[signupStatus], NormalizeRaidSignupStatus(panel.selectedSignupStatus) == signupStatus)
+  end
+end
