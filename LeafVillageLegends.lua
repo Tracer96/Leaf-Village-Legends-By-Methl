@@ -21,7 +21,7 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "14.0"
+LeafVE.version = "14.1"
 LeafVE.guildBankOwner = "Methllyy"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
@@ -29,7 +29,7 @@ LeafVE.guildBankOwner = "Methllyy"
 LeafVE.minCompatVersion = "13.0"
 
 -- The latest published version; used to detect when the running addon is outdated.
-local LATEST_VERSION = "14.0"
+local LATEST_VERSION = "14.1"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
@@ -39,6 +39,7 @@ local GROUP_COOLDOWN = 900
 local GROUP_POINT_INTERVAL = 3600
 local GUILD_ROSTER_CACHE_DURATION = 30
 local SHOUTOUT_MAX_PER_DAY = 2
+local WORK_ORDER_LOGIN_ALERT_COOLDOWN = 24 * SECONDS_PER_HOUR
 local LBOARD_RESYNC_COOLDOWN = 30  -- seconds between outgoing LBOARDREQ messages
 local LBOARD_RESPOND_COOLDOWN = 30 -- seconds between responses to LBOARDREQ
 local MYSTATS_RESPOND_COOLDOWN = 5 -- seconds between responses to explicit self-stats requests
@@ -92,6 +93,7 @@ local EMPTY_SLOT_TEXTURES = {
 
 local INSTANCE_BOSS_POINTS = 10       -- dungeon boss
 local RAID_BOSS_POINTS = 25           -- raid boss
+local BOSS_GUILDIE_BONUS_POINTS = 5   -- extra LP per guildie on boss kills
 local BOSS_KILL_DEDUP_WINDOW = 10     -- seconds to suppress duplicate boss-kill awards
 local INSTANCE_COMPLETION_POINTS = 10 -- dungeon completion (flat)
 local RAID_COMPLETION_POINTS = 25     -- raid completion (flat)
@@ -289,6 +291,19 @@ WORK_ORDER_PROFESSION_ORDER = {
   "Tailoring",
 }
 
+WORK_ORDER_REQUEST_CATEGORY_ORDER = {
+  "Alchemy",
+  "Blacksmithing",
+  "Cooking",
+  "Enchanting",
+  "Engineering",
+  "First Aid",
+  "Jewelcrafting",
+  "Leatherworking",
+  "Tailoring",
+  "Gathering",
+}
+
 WORK_ORDER_MAIN_PROFESSION_ORDER = {
   "Alchemy",
   "Blacksmithing",
@@ -314,6 +329,7 @@ WORK_ORDER_PROFESSION_META = {
   ["Cooking"] = {icon = "Interface\\Icons\\INV_Misc_Food_15"},
   ["Enchanting"] = {icon = "Interface\\Icons\\Trade_Engraving"},
   ["Engineering"] = {icon = "Interface\\Icons\\Trade_Engineering"},
+  ["Farming"] = {icon = "Interface\\Icons\\INV_Fabric_Silk_03"},
   ["Fishing"] = {icon = "Interface\\Icons\\Trade_Fishing"},
   ["First Aid"] = {icon = "Interface\\Icons\\Spell_Holy_SealOfSacrifice"},
   ["Herbalism"] = {icon = "Interface\\Icons\\Trade_Herbalism"},
@@ -322,6 +338,7 @@ WORK_ORDER_PROFESSION_META = {
   ["Mining"] = {icon = "Interface\\Icons\\Trade_Mining"},
   ["Skinning"] = {icon = "Interface\\Icons\\INV_Misc_Pelt_Wolf_01"},
   ["Tailoring"] = {icon = "Interface\\Icons\\Trade_Tailoring"},
+  ["Gathering"] = {icon = "Interface\\Icons\\INV_Misc_Bag_10_Blue"},
 }
 
 WORK_ORDER_PROFESSION_BY_ICON = {
@@ -397,6 +414,108 @@ WORK_ORDER_ALWAYS_TRADEABLE_ITEM_IDS = {
   [61784] = true, -- Arcanite Belt Buckle
   [61785] = true, -- Dreamsteel Belt Buckle
   [61810] = true, -- Bloody Belt Buckle
+}
+
+WORK_ORDER_GATHERING_ITEMS = {
+  -- Herbalism
+  {profession = "Herbalism", itemId = 2447, name = "Peacebloom"},
+  {profession = "Herbalism", itemId = 765, name = "Silverleaf"},
+  {profession = "Herbalism", itemId = 2449, name = "Earthroot"},
+  {profession = "Herbalism", itemId = 785, name = "Mageroyal"},
+  {profession = "Herbalism", itemId = 2450, name = "Briarthorn"},
+  {profession = "Herbalism", itemId = 2452, name = "Swiftthistle"},
+  {profession = "Herbalism", itemId = 3820, name = "Stranglekelp"},
+  {profession = "Herbalism", itemId = 2453, name = "Bruiseweed"},
+  {profession = "Herbalism", itemId = 3355, name = "Wild Steelbloom"},
+  {profession = "Herbalism", itemId = 3369, name = "Grave Moss"},
+  {profession = "Herbalism", itemId = 3356, name = "Kingsblood"},
+  {profession = "Herbalism", itemId = 3357, name = "Liferoot"},
+  {profession = "Herbalism", itemId = 3818, name = "Fadeleaf"},
+  {profession = "Herbalism", itemId = 3821, name = "Goldthorn"},
+  {profession = "Herbalism", itemId = 4625, name = "Firebloom"},
+  {profession = "Herbalism", itemId = 8831, name = "Purple Lotus"},
+  {profession = "Herbalism", itemId = 8836, name = "Arthas' Tears"},
+  {profession = "Herbalism", itemId = 8838, name = "Sungrass"},
+  {profession = "Herbalism", itemId = 8839, name = "Blindweed"},
+  {profession = "Herbalism", itemId = 8845, name = "Ghost Mushroom"},
+  {profession = "Herbalism", itemId = 8846, name = "Gromsblood"},
+  {profession = "Herbalism", itemId = 13463, name = "Dreamfoil"},
+  {profession = "Herbalism", itemId = 13464, name = "Golden Sansam"},
+  {profession = "Herbalism", itemId = 13465, name = "Mountain Silversage"},
+  {profession = "Herbalism", itemId = 13466, name = "Plaguebloom"},
+  {profession = "Herbalism", itemId = 13467, name = "Icecap"},
+  {profession = "Herbalism", itemId = 13468, name = "Black Lotus"},
+
+  -- Mining
+  {profession = "Mining", itemId = 2770, name = "Copper Ore"},
+  {profession = "Mining", itemId = 2771, name = "Tin Ore"},
+  {profession = "Mining", itemId = 2775, name = "Silver Ore"},
+  {profession = "Mining", itemId = 2772, name = "Iron Ore"},
+  {profession = "Mining", itemId = 2776, name = "Gold Ore"},
+  {profession = "Mining", itemId = 3858, name = "Mithril Ore"},
+  {profession = "Mining", itemId = 7911, name = "Truesilver Ore"},
+  {profession = "Mining", itemId = 10620, name = "Thorium Ore"},
+  {profession = "Mining", itemId = 11370, name = "Dark Iron Ore"},
+  {profession = "Mining", itemId = 2835, name = "Rough Stone"},
+  {profession = "Mining", itemId = 2836, name = "Coarse Stone"},
+  {profession = "Mining", itemId = 2838, name = "Heavy Stone"},
+  {profession = "Mining", itemId = 7912, name = "Solid Stone"},
+  {profession = "Mining", itemId = 12365, name = "Dense Stone"},
+  {profession = "Mining", itemId = 1529, name = "Jade"},
+  {profession = "Mining", itemId = 1705, name = "Lesser Moonstone"},
+  {profession = "Mining", itemId = 3864, name = "Citrine"},
+  {profession = "Mining", itemId = 7909, name = "Aquamarine"},
+  {profession = "Mining", itemId = 7910, name = "Star Ruby"},
+  {profession = "Mining", itemId = 12361, name = "Blue Sapphire"},
+  {profession = "Mining", itemId = 12799, name = "Large Opal"},
+  {profession = "Mining", itemId = 12800, name = "Azerothian Diamond"},
+  {profession = "Mining", itemId = 12363, name = "Arcane Crystal"},
+  {profession = "Mining", itemId = 12364, name = "Huge Emerald"},
+
+  -- Skinning
+  {profession = "Skinning", itemId = 2318, name = "Light Leather"},
+  {profession = "Skinning", itemId = 2319, name = "Medium Leather"},
+  {profession = "Skinning", itemId = 4234, name = "Heavy Leather"},
+  {profession = "Skinning", itemId = 4304, name = "Thick Leather"},
+  {profession = "Skinning", itemId = 8170, name = "Rugged Leather"},
+  {profession = "Skinning", itemId = 783, name = "Light Hide"},
+  {profession = "Skinning", itemId = 4232, name = "Medium Hide"},
+  {profession = "Skinning", itemId = 4235, name = "Heavy Hide"},
+  {profession = "Skinning", itemId = 8169, name = "Thick Hide"},
+  {profession = "Skinning", itemId = 8171, name = "Rugged Hide"},
+  {profession = "Skinning", itemId = 8167, name = "Turtle Scale"},
+  {profession = "Skinning", itemId = 15417, name = "Devilsaur Leather"},
+  {profession = "Skinning", itemId = 15419, name = "Warbear Leather"},
+  {profession = "Skinning", itemId = 17012, name = "Core Leather"},
+
+  -- Fishing
+  {profession = "Fishing", itemId = 6290, name = "Brilliant Smallfish"},
+  {profession = "Fishing", itemId = 6289, name = "Raw Longjaw Mud Snapper"},
+  {profession = "Fishing", itemId = 787, name = "Slitherskin Mackerel"},
+  {profession = "Fishing", itemId = 6303, name = "Raw Bristle Whisker Catfish"},
+  {profession = "Fishing", itemId = 6317, name = "Raw Loch Frenzy"},
+  {profession = "Fishing", itemId = 21071, name = "Raw Sagefish"},
+  {profession = "Fishing", itemId = 6361, name = "Raw Rainbow Fin Albacore"},
+  {profession = "Fishing", itemId = 8365, name = "Raw Mithril Head Trout"},
+  {profession = "Fishing", itemId = 6362, name = "Raw Rockscale Cod"},
+  {profession = "Fishing", itemId = 13754, name = "Raw Glossy Mightfish"},
+  {profession = "Fishing", itemId = 13756, name = "Raw Summer Bass"},
+  {profession = "Fishing", itemId = 13755, name = "Winter Squid"},
+  {profession = "Fishing", itemId = 13758, name = "Raw Redgill"},
+  {profession = "Fishing", itemId = 13759, name = "Raw Nightfin Snapper"},
+  {profession = "Fishing", itemId = 4603, name = "Raw Spotted Yellowtail"},
+  {profession = "Fishing", itemId = 13889, name = "Raw Whitescale Salmon"},
+  {profession = "Fishing", itemId = 6358, name = "Oily Blackmouth"},
+  {profession = "Fishing", itemId = 6359, name = "Firefin Snapper"},
+  {profession = "Fishing", itemId = 13422, name = "Stonescale Eel"},
+
+  -- Farming
+  {profession = "Farming", itemId = 2589, name = "Linen Cloth"},
+  {profession = "Farming", itemId = 2592, name = "Wool Cloth"},
+  {profession = "Farming", itemId = 4306, name = "Silk Cloth"},
+  {profession = "Farming", itemId = 4338, name = "Mageweave Cloth"},
+  {profession = "Farming", itemId = 14047, name = "Runecloth"},
+  {profession = "Farming", itemId = 14256, name = "Felcloth"},
 }
 
 WORK_ORDER_QUALITY_COLORS = {
@@ -479,6 +598,13 @@ BADGES = {
   {id = "guild_age_30",  name = "One Month Strong",    desc = "Be in guild for 30 days",  icon = "Interface\\Icons\\INV_Helmet_66",                category = "Loyalty", quality = BADGE_QUALITY.UNCOMMON},
   {id = "guild_age_90",  name = "Three Month Veteran", desc = "Be in guild for 90 days",  icon = "Interface\\Icons\\INV_Shield_06",                category = "Loyalty", quality = BADGE_QUALITY.RARE},
   {id = "guild_age_365", name = "One Year Legend",     desc = "Be in guild for 1 year",   icon = "Interface\\Icons\\Ability_Creature_Cursed_02",   category = "Loyalty", quality = BADGE_QUALITY.LEGENDARY},
+
+  -- Work Orders (AUTO-TRACKED)
+  {id = "work_order_rep_50",   name = "First Contract",   desc = "Reach 50 Work Order Reputation",   icon = "Interface\\Icons\\INV_Letter_15",       category = "Work Orders", quality = BADGE_QUALITY.COMMON},
+  {id = "work_order_rep_150",  name = "Trusted Hand",     desc = "Reach 150 Work Order Reputation",  icon = "Interface\\Icons\\Trade_Alchemy",       category = "Work Orders", quality = BADGE_QUALITY.UNCOMMON},
+  {id = "work_order_rep_400",  name = "Village Artisan",  desc = "Reach 400 Work Order Reputation",  icon = "Interface\\Icons\\Trade_BlackSmithing", category = "Work Orders", quality = BADGE_QUALITY.RARE},
+  {id = "work_order_rep_800",  name = "Master Supplier",  desc = "Reach 800 Work Order Reputation",  icon = "Interface\\Icons\\INV_Crate_01",        category = "Work Orders", quality = BADGE_QUALITY.EPIC},
+  {id = "work_order_rep_1500", name = "Leaf Legend",      desc = "Reach 1500 Work Order Reputation", icon = "Interface\\Icons\\INV_Crown_02",        category = "Work Orders", quality = BADGE_QUALITY.LEGENDARY},
 }
 
 local REMOVED_BADGE_IDS = {
@@ -982,6 +1108,34 @@ local function WeekKey(ts)
   return string.format("%04d%02d%02d", d.year, d.month, d.day)
 end
 
+function PreviousWeekKey(ts)
+  local currentWeekStart = WeekStartTS(ts or Now())
+  return WeekKey(currentWeekStart - 1)
+end
+
+function WeekStartTSFromKey(wk)
+  wk = tostring(wk or "")
+  if string.len(wk) ~= 8 then
+    return nil
+  end
+
+  local year = tonumber(string.sub(wk, 1, 4))
+  local month = tonumber(string.sub(wk, 5, 6))
+  local day = tonumber(string.sub(wk, 7, 8))
+  if not year or not month or not day then
+    return nil
+  end
+
+  return time({
+    year = year,
+    month = month,
+    day = day,
+    hour = 0,
+    min = 0,
+    sec = 0,
+  })
+end
+
 local function SkinFrameModern(f)
   f:SetBackdrop({
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -1122,7 +1276,7 @@ local function EnsureDB()
   if not LeafVE_DB.badgesAnnounced then LeafVE_DB.badgesAnnounced = {} end
   if not LeafVE_DB.attendance then LeafVE_DB.attendance = {} end
   if not LeafVE_DB.guildJoinDate then LeafVE_DB.guildJoinDate = {} end
-  if not LeafVE_DB.weeklyRecap then LeafVE_DB.weeklyRecap = {} end
+  if type(LeafVE_DB.weeklyRecap) ~= "table" then LeafVE_DB.weeklyRecap = {} end
   if not LeafVE_DB.loginStreaks then LeafVE_DB.loginStreaks = {} end
   if not LeafVE_DB.persistentRoster then LeafVE_DB.persistentRoster = {} end
   if not LeafVE_DB.instanceTracking then LeafVE_DB.instanceTracking = {} end
@@ -1130,6 +1284,8 @@ local function EnsureDB()
   if not LeafVE_DB.questCompletions then LeafVE_DB.questCompletions = {} end
   if not LeafVE_DB.groupSessions then LeafVE_DB.groupSessions = {} end
   if not LeafVE_DB.groupPointsToday then LeafVE_DB.groupPointsToday = {} end
+  if LeafVE_DB.lastLogoutAt == nil then LeafVE_DB.lastLogoutAt = 0 end
+  if LeafVE_DB.workOrderLoginAlertAt == nil then LeafVE_DB.workOrderLoginAlertAt = 0 end
   if not LeafVE_DB.workOrderFinalRewardDaily then LeafVE_DB.workOrderFinalRewardDaily = {} end
   if not LeafVE_DB.workOrderFinalRewardClaims then LeafVE_DB.workOrderFinalRewardClaims = {} end
   if not LeafVE_DB.guildieGroupHours then LeafVE_DB.guildieGroupHours = {} end
@@ -1161,6 +1317,7 @@ local function EnsureDB()
   if LeafVE_DB.options.enablePointNotifications == nil then LeafVE_DB.options.enablePointNotifications = true end
   if LeafVE_DB.options.enableBadgeNotifications == nil then LeafVE_DB.options.enableBadgeNotifications = true end
   if LeafVE_DB.options.enableWorkOrderChatMessages == nil then LeafVE_DB.options.enableWorkOrderChatMessages = true end
+  if LeafVE_DB.options.enableWorkOrderLoginAlerts == nil then LeafVE_DB.options.enableWorkOrderLoginAlerts = true end
   if LeafVE_DB.options.bossPoints == nil then LeafVE_DB.options.bossPoints = INSTANCE_BOSS_POINTS end
   if LeafVE_DB.options.instanceCompletionPoints == nil then LeafVE_DB.options.instanceCompletionPoints = INSTANCE_COMPLETION_POINTS end
   if LeafVE_DB.options.questPoints == nil then LeafVE_DB.options.questPoints = QUEST_POINTS end
@@ -2451,6 +2608,25 @@ function LeafVE:CheckBadgeMilestones(playerName)
     end
   end
 
+  -- === WORK ORDER REPUTATION ===
+  local repEntry = self:GetWorkOrderReputationForPlayer(playerName)
+  local workOrderRep = repEntry and (tonumber(repEntry.totalRep) or 0) or 0
+  if workOrderRep >= 50 then
+    self:CheckAndAwardBadge(playerName, "work_order_rep_50")
+  end
+  if workOrderRep >= 150 then
+    self:CheckAndAwardBadge(playerName, "work_order_rep_150")
+  end
+  if workOrderRep >= 400 then
+    self:CheckAndAwardBadge(playerName, "work_order_rep_400")
+  end
+  if workOrderRep >= 800 then
+    self:CheckAndAwardBadge(playerName, "work_order_rep_800")
+  end
+  if workOrderRep >= 1500 then
+    self:CheckAndAwardBadge(playerName, "work_order_rep_1500")
+  end
+
   self:CacheBadgeProgress(playerName)
 end
 
@@ -2533,6 +2709,16 @@ function LeafVE:GetBadgeProgress(playerName, badgeId)
       if badgeId == "guild_age_90" then return days, 90 end
       return days, 365
     end
+  elseif badgeId == "work_order_rep_50" or badgeId == "work_order_rep_150"
+    or badgeId == "work_order_rep_400" or badgeId == "work_order_rep_800"
+    or badgeId == "work_order_rep_1500" then
+    local repEntry = self:GetWorkOrderReputationForPlayer(name)
+    local totalRep = repEntry and (tonumber(repEntry.totalRep) or 0) or 0
+    if badgeId == "work_order_rep_50" then return totalRep, 50 end
+    if badgeId == "work_order_rep_150" then return totalRep, 150 end
+    if badgeId == "work_order_rep_400" then return totalRep, 400 end
+    if badgeId == "work_order_rep_800" then return totalRep, 800 end
+    return totalRep, 1500
   end
   return nil, nil
 end
@@ -3306,8 +3492,8 @@ function LeafVE:OnBossKillChat(msg)
 
   -- Require at least one other guildie in the group (solo runs don't count)
   local guildies = self:GetGroupGuildies()
-  local hasGuildie = table.getn(guildies) > 0
-  if not hasGuildie then return end
+  local numGuildies = table.getn(guildies)
+  if numGuildies <= 0 then return end
 
   -- Dedup: ignore if this boss was already awarded within the last 10 seconds
   local now = Now()
@@ -3315,16 +3501,17 @@ function LeafVE:OnBossKillChat(msg)
   self.recentBossKills[bossName] = now
 
   self.instanceBossesKilledThisRun = self.instanceBossesKilledThisRun + 1
-  local bossPts = self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS
+  local bossPts = (self.instanceIsRaid and RAID_BOSS_POINTS or INSTANCE_BOSS_POINTS)
+    + (numGuildies * BOSS_GUILDIE_BONUS_POINTS)
   self.suppressPointNotification = true
   local awarded = self:AddPoints(me, "G", bossPts)
   self.suppressPointNotification = false
   if awarded and awarded > 0 then
-    self:AddToHistory(me, "G", awarded, bossName.." slain (guild group)")
+    self:AddToHistory(me, "G", awarded, bossName.." slain with "..tostring(numGuildies).." guildie"..(numGuildies ~= 1 and "s" or ""))
     if LeafVE_DB.options.enableNotifications ~= false and LeafVE_DB.options.enablePointNotifications ~= false then
       self:ShowNotification("Boss Slain!", string.format("%s  +%d LP", bossName, awarded), LEAF_EMBLEM, THEME.gold)
     end
-    Print(string.format("Boss slain: %s! +%d LP", bossName, awarded))
+    Print(string.format("Boss slain: %s! +%d LP (%d guildie%s)", bossName, awarded, numGuildies, numGuildies ~= 1 and "s" or ""))
     if LeafVE.UI and LeafVE.UI.Refresh then LeafVE.UI:Refresh() end
     self:BroadcastLeaderboardData()
   end
@@ -3432,7 +3619,7 @@ function LeafVE:GiveShoutout(targetName, reason)
     end
   end
   
-  local maxDaily = (LeafVE_DB.options and LeafVE_DB.options.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  local maxDaily = self:GetShoutoutDailyLimitForPlayer(giverName)
   if count >= maxDaily then 
     Print(string.format("You've used all %d shoutouts for today!", maxDaily)) 
     return false 
@@ -9235,14 +9422,59 @@ end
 function LeafVE:PurgeStaleWeeklyData()
   EnsureDB()
   local currentWk = WeekKey()
-  for wk in pairs(LeafVE_DB.lboard.weekly) do
+  local staleWeeks = {}
+
+  for wk in pairs(LeafVE_DB.lboard.weekly or {}) do
     if wk ~= currentWk then
-      LeafVE_DB.lboard.weekly[wk] = nil
-      if LeafVE_DB.lboard.weeklyVersion then
-        LeafVE_DB.lboard.weeklyVersion[wk] = nil
+      staleWeeks[wk] = true
+    end
+  end
+
+  local sharedWeekly = LeafVE_GlobalDB and LeafVE_GlobalDB.lboardCache and LeafVE_GlobalDB.lboardCache.weekly
+  if type(sharedWeekly) == "table" then
+    for wk in pairs(sharedWeekly) do
+      if wk ~= currentWk then
+        staleWeeks[wk] = true
       end
     end
   end
+
+  for wk in pairs(staleWeeks) do
+    self:SnapshotWeeklyLeaderboardWinner(wk, Now())
+    LeafVE_DB.lboard.weekly[wk] = nil
+    if LeafVE_DB.lboard.weeklyVersion then
+      LeafVE_DB.lboard.weeklyVersion[wk] = nil
+    end
+    if sharedWeekly then
+      sharedWeekly[wk] = nil
+    end
+  end
+end
+
+function AggForWeekKey(wk)
+  EnsureDB()
+  local startTS = WeekStartTSFromKey(wk)
+  local agg = {}
+  local bucket = CurrentWipeVersion()
+  if not startTS then
+    return agg, nil
+  end
+
+  for d = 0, 6 do
+    local dk = DayKeyFromTS(startTS + d * SECONDS_PER_DAY)
+    if LeafVE_DB.global[dk] then
+      for name, t in pairs(LeafVE_DB.global[dk]) do
+        if PointBucketForEntry(t) == bucket then
+          if not agg[name] then agg[name] = {L = 0, G = 0, S = 0} end
+          agg[name].L = agg[name].L + (t.L or 0)
+          agg[name].G = agg[name].G + (t.G or 0)
+          agg[name].S = agg[name].S + (t.S or 0)
+        end
+      end
+    end
+  end
+
+  return agg, startTS
 end
 
 function AggForThisWeek()
@@ -9262,6 +9494,135 @@ function AggForThisWeek()
     end
   end
   return agg, startTS
+end
+
+function LeafVE:GetWeeklyLeaderboardLeadersForWeek(wk)
+  EnsureDB()
+  wk = tostring(wk or WeekKey())
+
+  local mergedSyncedWeek = {}
+  local localWeekly = type(LeafVE_DB.lboard.weekly[wk]) == "table" and LeafVE_DB.lboard.weekly[wk] or {}
+  local sharedWeekly = LeafVE_GlobalDB and LeafVE_GlobalDB.lboardCache and type(LeafVE_GlobalDB.lboardCache.weekly[wk]) == "table"
+    and LeafVE_GlobalDB.lboardCache.weekly[wk] or {}
+
+  for name, pts in pairs(sharedWeekly) do
+    mergedSyncedWeek[name] = {L = pts.L or 0, G = pts.G or 0, S = pts.S or 0}
+  end
+  for name, pts in pairs(localWeekly) do
+    if LboardEntryTotal(pts) > LboardEntryTotal(mergedSyncedWeek[name]) then
+      mergedSyncedWeek[name] = {L = pts.L or 0, G = pts.G or 0, S = pts.S or 0}
+    end
+  end
+
+  local localWeek = nil
+  if wk == WeekKey() then
+    localWeek = AggForThisWeek()
+  else
+    localWeek = AggForWeekKey(wk)
+  end
+
+  local me = ShortName(UnitName("player"))
+  local leaders = {}
+  local seen = {}
+
+  for name in pairs(localWeek or {}) do
+    seen[name] = true
+  end
+  for name in pairs(mergedSyncedWeek) do
+    seen[name] = true
+  end
+
+  for name in pairs(seen) do
+    local localPts = localWeek and localWeek[name] or nil
+    local syncedPts = mergedSyncedWeek[name]
+    local pts = nil
+    if SamePlayerName(name, me) then
+      pts = localPts or syncedPts
+    else
+      pts = syncedPts or localPts
+    end
+
+    local total = LboardEntryTotal(pts)
+    if total > 0 then
+      table.insert(leaders, {
+        name = name,
+        total = total,
+        L = pts and (pts.L or 0) or 0,
+        G = pts and (pts.G or 0) or 0,
+        S = pts and (pts.S or 0) or 0,
+      })
+    end
+  end
+
+  table.sort(leaders, function(a, b)
+    if a.total == b.total then
+      return Lower(a.name or "") < Lower(b.name or "")
+    end
+    return a.total > b.total
+  end)
+
+  return leaders
+end
+
+function LeafVE:SnapshotWeeklyLeaderboardWinner(wk, capturedAt, forceReplace)
+  EnsureDB()
+  wk = tostring(wk or WeekKey())
+  if wk == "" then
+    return nil
+  end
+
+  local recap = type(LeafVE_DB.weeklyRecap) == "table" and LeafVE_DB.weeklyRecap or {}
+  LeafVE_DB.weeklyRecap = recap
+  if type(recap.byWeek) ~= "table" then
+    recap.byWeek = {}
+  end
+
+  local existing = recap.byWeek[wk]
+  if type(existing) == "table" and not forceReplace then
+    local lastWinnerWeek = tonumber(recap.lastWinnerWeek) or 0
+    if (tonumber(wk) or 0) >= lastWinnerWeek then
+      recap.lastWinner = existing
+      recap.lastWinnerWeek = wk
+    end
+    return existing
+  end
+
+  local leaders = self:GetWeeklyLeaderboardLeadersForWeek(wk)
+  local winner = leaders[1]
+  if not winner then
+    return nil
+  end
+
+  local snapshot = {
+    weekKey = wk,
+    name = winner.name,
+    total = winner.total,
+    L = winner.L or 0,
+    G = winner.G or 0,
+    S = winner.S or 0,
+    capturedAt = tonumber(capturedAt) or Now(),
+  }
+
+  recap.byWeek[wk] = snapshot
+  local lastWinnerWeek = tonumber(recap.lastWinnerWeek) or 0
+  if (tonumber(wk) or 0) >= lastWinnerWeek then
+    recap.lastWinner = snapshot
+    recap.lastWinnerWeek = wk
+  end
+
+  return snapshot
+end
+
+function LeafVE:GetCachedWeeklyWinnerSnapshot(wk)
+  EnsureDB()
+  wk = tostring(wk or PreviousWeekKey())
+  local recap = type(LeafVE_DB.weeklyRecap) == "table" and LeafVE_DB.weeklyRecap or {}
+  local byWeek = type(recap.byWeek) == "table" and recap.byWeek or nil
+  local snapshot = byWeek and byWeek[wk] or nil
+  if not snapshot and type(recap.lastWinner) == "table" and tostring(recap.lastWinner.weekKey or "") == wk then
+    snapshot = recap.lastWinner
+  end
+  return snapshot
 end
 
 function LeafVE:ToggleUI()
@@ -10192,6 +10553,51 @@ leafEmblem:SetVertexColor(THEME.leaf[1], THEME.leaf[2], THEME.leaf[3], 1.0)
   self.cardWorkOrderRepBadge:SetScript("OnLeave", function()
     GameTooltip:Hide()
   end)
+
+  self.cardWorkOrderCrafterRankBadge = CreateFrame("Button", nil, c)
+  self.cardWorkOrderCrafterRankBadge:SetWidth(cardButtonMiddleWidth + 18)
+  self.cardWorkOrderCrafterRankBadge:SetHeight(20)
+  self.cardWorkOrderCrafterRankBadge:SetPoint("TOP", self.cardWorkOrderRepBadge, "BOTTOM", 0, -4)
+  self.cardWorkOrderCrafterRankBadge:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8X8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = false, tileSize = 8, edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2}
+  })
+  self.cardWorkOrderCrafterRankBadge:SetBackdropColor(0.08, 0.08, 0.1, 0.9)
+  self.cardWorkOrderCrafterRankBadge:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.8)
+  self.cardWorkOrderCrafterRankBadge:Hide()
+
+  self.cardWorkOrderCrafterRankBadgeIcon = self.cardWorkOrderCrafterRankBadge:CreateTexture(nil, "ARTWORK")
+  self.cardWorkOrderCrafterRankBadgeIcon:SetPoint("LEFT", self.cardWorkOrderCrafterRankBadge, "LEFT", 8, 0)
+  self.cardWorkOrderCrafterRankBadgeIcon:SetWidth(14)
+  self.cardWorkOrderCrafterRankBadgeIcon:SetHeight(14)
+  self.cardWorkOrderCrafterRankBadgeIcon:SetTexture("Interface\\Icons\\INV_Crown_01")
+
+  self.cardWorkOrderCrafterRankBadgeText = self.cardWorkOrderCrafterRankBadge:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  self.cardWorkOrderCrafterRankBadgeText:SetPoint("LEFT", self.cardWorkOrderCrafterRankBadgeIcon, "RIGHT", 6, 0)
+  self.cardWorkOrderCrafterRankBadgeText:SetPoint("RIGHT", self.cardWorkOrderCrafterRankBadge, "RIGHT", -8, 0)
+  self.cardWorkOrderCrafterRankBadgeText:SetJustifyH("CENTER")
+  self.cardWorkOrderCrafterRankBadgeText:SetText("|cFFFFD700#1 Ranked Crafter|r")
+
+  self.cardWorkOrderCrafterRankBadge:SetScript("OnEnter", function()
+    if not LeafVE or not LeafVE.UI or not LeafVE.UI.cardCurrentPlayer then return end
+
+    local rank, rankEntry = LeafVE:GetWorkOrderCrafterRankInfo(LeafVE.UI.cardCurrentPlayer)
+    if not rank then return end
+    local entry = rankEntry or LeafVE:GetWorkOrderReputationForPlayer(LeafVE.UI.cardCurrentPlayer)
+
+    GameTooltip:SetOwner(this, "ANCHOR_TOP")
+    GameTooltip:ClearLines()
+    GameTooltip:SetText("Top Crafter Rank", THEME.gold[1], THEME.gold[2], THEME.gold[3], 1, true)
+    GameTooltip:AddLine(tostring(GetWorkOrderCrafterRankLabel(rank) or ""), 1.0, 0.82, 0.2)
+    GameTooltip:AddLine("Crafter Rep: " .. tostring(entry and entry.crafterRep or 0), 0.75, 0.95, 0.75)
+    GameTooltip:AddLine("Total Rep: " .. tostring(entry and entry.totalRep or 0), 0.75, 0.85, 1.0)
+    GameTooltip:Show()
+  end)
+  self.cardWorkOrderCrafterRankBadge:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
  end
 
 function LeafVE.UI:ShowAllBadgesPanel(playerName)
@@ -10674,28 +11080,7 @@ function LeafVE.UI:ShowPlayerCard(playerName)
     local repEntry = LeafVE:GetWorkOrderReputationForPlayer(playerName)
     local repTierInfo = repEntry and (repEntry.tierInfo or LeafVE:GetWorkOrderReputationTierInfo(repEntry.totalRep or 0))
       or LeafVE:GetWorkOrderReputationTierInfo(0)
-    local repTierName = tostring(repTierInfo.current and repTierInfo.current.name or "Leaf Apprentice")
-    local repTierIndex = 1
-
-    for i = 1, table.getn(WORK_ORDER_REPUTATION_TIERS or {}) do
-      local tier = WORK_ORDER_REPUTATION_TIERS[i]
-      if tier and tier.name == repTierName then
-        repTierIndex = i
-        break
-      end
-    end
-
-    local repBadgeIconIndex = 6 - repTierIndex
-    local repColor = {THEME.leaf[1], THEME.leaf[2], THEME.leaf[3]}
-    if repTierIndex == 2 then
-      repColor = {0.65, 0.85, 1.0}
-    elseif repTierIndex == 3 then
-      repColor = {0.82, 0.7, 1.0}
-    elseif repTierIndex == 4 then
-      repColor = {1.0, 0.84, 0.35}
-    elseif repTierIndex >= 5 then
-      repColor = {1.0, 0.55, 0.2}
-    end
+    local repTierName, _, repBadgeIconIndex, repColor = GetWorkOrderReputationTierVisual(repTierInfo)
 
     self.cardWorkOrderRepBadgeText:SetText("|cFFFFD700" .. repTierName .. "|r")
     if self.cardWorkOrderRepBadgeIcon then
@@ -10704,6 +11089,22 @@ function LeafVE.UI:ShowPlayerCard(playerName)
     end
     if self.cardWorkOrderRepBadge then
       self.cardWorkOrderRepBadge:SetBackdropBorderColor(repColor[1], repColor[2], repColor[3], 0.85)
+    end
+  end
+  if self.cardWorkOrderCrafterRankBadge then
+    local crafterRank = LeafVE:GetWorkOrderCrafterRankInfo(playerName)
+    local rankLabel = GetWorkOrderCrafterRankLabel(crafterRank)
+    if rankLabel then
+      local rr, rg, rb = GetWorkOrderCrafterRankColor(crafterRank)
+      self.cardWorkOrderCrafterRankBadgeText:SetText("|cFFFFD700" .. rankLabel .. "|r")
+      if self.cardWorkOrderCrafterRankBadgeIcon then
+        self.cardWorkOrderCrafterRankBadgeIcon:SetTexture("Interface\\Icons\\INV_Crown_01")
+        self.cardWorkOrderCrafterRankBadgeIcon:SetVertexColor(rr, rg, rb, 1)
+      end
+      self.cardWorkOrderCrafterRankBadge:SetBackdropBorderColor(rr, rg, rb, 0.85)
+      self.cardWorkOrderCrafterRankBadge:Show()
+    else
+      self.cardWorkOrderCrafterRankBadge:Hide()
     end
   end
 
@@ -12670,6 +13071,39 @@ function ClampWorkOrderTipCopper(value)
   return value
 end
 
+function SplitWorkOrderTipCopper(tipCopper)
+  tipCopper = ClampWorkOrderTipCopper(tipCopper)
+  local gold = math.floor(tipCopper / 10000)
+  local silver = math.floor(math.mod(tipCopper, 10000) / 100)
+  local copper = math.mod(tipCopper, 100)
+  return gold, silver, copper
+end
+
+function ParseWorkOrderTipCoinField(rawValue)
+  local text = Trim(tostring(rawValue or ""))
+  if text == "" then
+    return 0
+  end
+  if not string.find(text, "^%d+$") then
+    return nil
+  end
+  local value = tonumber(text)
+  if not value or value < 0 then
+    return nil
+  end
+  return math.floor(value)
+end
+
+function ParseWorkOrderTipCoinInputs(goldValue, silverValue, copperValue)
+  local gold = ParseWorkOrderTipCoinField(goldValue)
+  local silver = ParseWorkOrderTipCoinField(silverValue)
+  local copper = ParseWorkOrderTipCoinField(copperValue)
+  if gold == nil or silver == nil or copper == nil then
+    return nil
+  end
+  return ClampWorkOrderTipCopper((gold * 10000) + (silver * 100) + copper)
+end
+
 function ParseWorkOrderTipInput(rawValue)
   local text = Trim(tostring(rawValue or ""))
   if text == "" then
@@ -12692,9 +13126,21 @@ function FormatWorkOrderTipText(tipCopper)
     return "No tip"
   end
 
-  local gold = string.format("%.2f", tipCopper / 10000)
-  gold = string.gsub(gold, "%.?0+$", "")
-  return gold .. "g"
+  local gold, silver, copper = SplitWorkOrderTipCopper(tipCopper)
+  local parts = {}
+  if gold > 0 then
+    table.insert(parts, tostring(gold) .. "g")
+  end
+  if silver > 0 then
+    table.insert(parts, tostring(silver) .. "s")
+  end
+  if copper > 0 then
+    table.insert(parts, tostring(copper) .. "c")
+  end
+  if table.getn(parts) < 1 then
+    return "No tip"
+  end
+  return table.concat(parts, " ")
 end
 
 function FormatWorkOrderTipInputValue(tipCopper)
@@ -12718,14 +13164,20 @@ function NormalizeWorkOrderMatsMode(value)
   return "requester"
 end
 
-function GetWorkOrderMatsTag(mode)
+function GetWorkOrderMatsTag(mode, profession)
+  if LeafVE and LeafVE:IsGatheringWorkOrderProfession(profession) then
+    return "Gathering Request"
+  end
   if NormalizeWorkOrderMatsMode(mode) == "crafter" then
     return "Crafter Mats"
   end
   return "My Mats"
 end
 
-function GetWorkOrderMatsLine(mode, requesterName)
+function GetWorkOrderMatsLine(mode, requesterName, profession)
+  if LeafVE and LeafVE:IsGatheringWorkOrderProfession(profession) then
+    return "Gatherer collects the requested materials."
+  end
   if NormalizeWorkOrderMatsMode(mode) == "crafter" then
     return "Crafter provides the mats."
   end
@@ -12737,7 +13189,10 @@ function GetWorkOrderMatsLine(mode, requesterName)
   return "Requester provides the mats."
 end
 
-function GetWorkOrderRequesterInstructionText(mode)
+function GetWorkOrderRequesterInstructionText(mode, profession)
+  if LeafVE and LeafVE:IsGatheringWorkOrderProfession(profession) then
+    return "You have requested gathered materials from guildmates. Adding a tip is a great way to reward the gatherer for their time. Please click Verify once the requested materials are fully delivered so the gatherer receives Leaf Points."
+  end
   if NormalizeWorkOrderMatsMode(mode) == "crafter" then
     return "You have requested a work order utilizing the crafter's materials. It's common courtesy to add a tip to cover the cost of the materials, or if they already have their own materials, the crafter will communicate that once the order is picked up. Please click Verify once an order is 100% complete to reward the crafter Leaf Points."
   end
@@ -12745,7 +13200,10 @@ function GetWorkOrderRequesterInstructionText(mode)
   return "You have requested a work order utilizing your own mats. When it is picked up, you'll need to send the mats to the crafter via mail or trade so they can fulfill your order. Please click Verify once an order is 100% complete to reward the crafter Leaf Points."
 end
 
-function GetWorkOrderFulfillerInstructionText(mode)
+function GetWorkOrderFulfillerInstructionText(mode, profession)
+  if LeafVE and LeafVE:IsGatheringWorkOrderProfession(profession) then
+    return "You have selected to fulfill a gathering request. Gather the requested materials and deliver them to the requester by trade or mail. Please select Complete once the full order has been delivered so the requester can Verify and reward you Leaf Points."
+  end
   if NormalizeWorkOrderMatsMode(mode) == "crafter" then
     return "You have selected to fulfill a work order using your own materials. It's common courtesy for the requester to add a tip to cover that cost. If not, communicate the desired outcome with the requester via in-game chat or mail. Please select Complete once you 100% fulfill the order so the requester can Verify and reward you Leaf Points."
   end
@@ -12757,14 +13215,20 @@ StaticPopupDialogs["LEAFVE_WORKORDER_CONFIRM"] = {
   text = "%s",
   button1 = "Continue",
   button2 = CANCEL or "Cancel",
-  OnAccept = function()
-    local data = this.data
+  OnAccept = function(dialog, data)
+    data = data or (dialog and dialog.data)
+    if not data and this then
+      data = this.data or (this.GetParent and this:GetParent() and this:GetParent().data)
+    end
     if type(data) == "table" and type(data.onAccept) == "function" then
       data.onAccept()
     end
   end,
-  OnCancel = function()
-    local data = this.data
+  OnCancel = function(dialog, data)
+    data = data or (dialog and dialog.data)
+    if not data and this then
+      data = this.data or (this.GetParent and this:GetParent() and this:GetParent().data)
+    end
     if type(data) == "table" and type(data.onCancel) == "function" then
       data.onCancel()
     end
@@ -12797,9 +13261,11 @@ function LeafVE:ShowWorkOrderInstructionPopup(message, confirmLabel, onAccept, o
     onCancel = onCancel,
   })
   if dialog and dialog.button1 then
+    dialog.button1.data = dialog.data
     dialog.button1:SetText(confirmLabel or "Continue")
   end
   if dialog and dialog.button2 then
+    dialog.button2.data = dialog.data
     dialog.button2:SetText(CANCEL or "Cancel")
   end
 end
@@ -13145,6 +13611,10 @@ function CanonicalSecondaryProfession(name)
 end
 
 function CanonicalWorkOrderProfession(name)
+  local trimmed = Trim(tostring(name or ""))
+  if Lower(trimmed) == "farming" then
+    return "Farming"
+  end
   return CanonicalMainProfession(name) or CanonicalSecondaryProfession(name)
 end
 
@@ -13308,6 +13778,49 @@ function LeafVE:HasProfessionDesignation(playerName, profession)
     end
   end
   return false
+end
+
+function LeafVE:IsGatheringWorkOrderProfession(profession)
+  local canonicalProfession = CanonicalWorkOrderProfession(profession) or Trim(tostring(profession or ""))
+  local lowered = Lower(canonicalProfession or "")
+  return lowered == "herbalism"
+    or lowered == "mining"
+    or lowered == "skinning"
+    or lowered == "fishing"
+    or lowered == "farming"
+end
+
+function LeafVE:DoesWorkOrderRequireDesignation(order)
+  if type(order) ~= "table" then
+    return true
+  end
+  local profession = CanonicalWorkOrderProfession(order.profession) or Trim(tostring(order.profession or ""))
+  return Lower(profession or "") ~= "farming"
+end
+
+function LeafVE:GetNormalizedGuildRankName(playerName)
+  local info = self:GetGuildInfo(playerName)
+  if not info and LeafVE_DB and LeafVE_DB.persistentRoster then
+    info = LeafVE_DB.persistentRoster[Lower(ShortName(playerName) or "")]
+  end
+  return info and info.rank and Lower(Trim(info.rank)) or ""
+end
+
+function LeafVE:GetShoutoutDailyLimitForPlayer(playerName)
+  local baseLimit = (LeafVE_DB and LeafVE_DB.options and tonumber(LeafVE_DB.options.shoutoutMaxDaily)) or SHOUTOUT_MAX_PER_DAY
+  if not baseLimit or baseLimit < 1 then
+    baseLimit = SHOUTOUT_MAX_PER_DAY
+  end
+
+  local rank = self:GetNormalizedGuildRankName(playerName)
+  if rank == "sannin" or rank == "anbu" or rank == "hokage" then
+    return math.max(baseLimit, 10)
+  end
+  if rank == "jonin" then
+    return math.max(baseLimit, 3)
+  end
+
+  return baseLimit
 end
 
 function GetWorkOrderCrafterRecipeToken(recipe)
@@ -13519,6 +14032,20 @@ function LeafVE:GetWorkOrderCrafterSignupGroup(playerName)
     summaryText = "",
     icon = LEAF_FALLBACK,
   }
+
+  local repEntry, repSnapshot = self:GetWorkOrderReputationForPlayer(shortName)
+  local repTierInfo = repEntry and (repEntry.tierInfo or self:GetWorkOrderReputationTierInfo(repEntry.totalRep or 0))
+    or self:GetWorkOrderReputationTierInfo(0)
+  local repTierName, _, repBadgeIconIndex, repColor = GetWorkOrderReputationTierVisual(repTierInfo)
+  local crafterRank = self:GetWorkOrderCrafterRankInfo(shortName, repSnapshot)
+  group.repTotal = tonumber(repEntry and repEntry.totalRep) or 0
+  group.repCrafterRep = tonumber(repEntry and repEntry.crafterRep) or 0
+  group.repRequesterRep = tonumber(repEntry and repEntry.requesterRep) or 0
+  group.repTierName = repTierName
+  group.repTierInfo = repTierInfo
+  group.repBadgeIconIndex = repBadgeIconIndex
+  group.repColor = repColor
+  group.crafterRank = crafterRank
 
   local summaryParts = {}
   for i = 1, table.getn(WORK_ORDER_PROFESSION_ORDER) do
@@ -14525,6 +15052,92 @@ function LeafVE:GetWorkOrderReputationForPlayer(playerName)
   return emptyEntry, snapshot
 end
 
+function GetWorkOrderReputationTierVisual(tierInfo)
+  local tierName = tostring(tierInfo and tierInfo.current and tierInfo.current.name or "Leaf Apprentice")
+  local tierIndex = 1
+  for i = 1, table.getn(WORK_ORDER_REPUTATION_TIERS or {}) do
+    local tier = WORK_ORDER_REPUTATION_TIERS[i]
+    if tier and tier.name == tierName then
+      tierIndex = i
+      break
+    end
+  end
+
+  local badgeIconIndex = 6 - tierIndex
+  if badgeIconIndex < 1 then
+    badgeIconIndex = 1
+  end
+
+  local color = {THEME.leaf[1], THEME.leaf[2], THEME.leaf[3]}
+  if tierIndex == 2 then
+    color = {0.65, 0.85, 1.0}
+  elseif tierIndex == 3 then
+    color = {0.82, 0.7, 1.0}
+  elseif tierIndex == 4 then
+    color = {1.0, 0.84, 0.35}
+  elseif tierIndex >= 5 then
+    color = {1.0, 0.55, 0.2}
+  end
+
+  return tierName, tierIndex, badgeIconIndex, color
+end
+
+function GetWorkOrderCrafterRankLabel(rank)
+  rank = tonumber(rank) or 0
+  if rank < 1 or rank > 5 then
+    return nil
+  end
+  return "#" .. tostring(rank) .. " Ranked Crafter"
+end
+
+function GetWorkOrderCrafterRankColor(rank)
+  rank = tonumber(rank) or 0
+  if rank == 1 then
+    return 1.0, 0.82, 0.2
+  elseif rank == 2 then
+    return 0.78, 0.86, 1.0
+  elseif rank == 3 then
+    return 0.93, 0.66, 0.4
+  elseif rank == 4 then
+    return 0.6, 0.9, 0.6
+  elseif rank == 5 then
+    return 0.76, 0.76, 0.76
+  end
+  return THEME.gold[1], THEME.gold[2], THEME.gold[3]
+end
+
+function LeafVE:GetWorkOrderCrafterRankInfo(playerName, snapshot)
+  playerName = ShortName(playerName)
+  if not playerName then
+    return nil, nil
+  end
+
+  snapshot = snapshot or self:GetWorkOrderReputationSnapshot()
+  local identityName = self:GetWorkOrderReputationIdentityName(playerName) or playerName
+  local targetKey = Lower(identityName or "")
+  if targetKey == "" then
+    return nil, nil
+  end
+
+  local visibleRank = 0
+  for i = 1, table.getn(snapshot and snapshot.topCrafters or {}) do
+    local leader = snapshot.topCrafters[i]
+    if leader and (tonumber(leader.crafterRep) or 0) > 0 then
+      visibleRank = visibleRank + 1
+      if Lower(leader.name or "") == targetKey then
+        if visibleRank <= 5 then
+          return visibleRank, leader
+        end
+        return nil, leader
+      end
+      if visibleRank >= 5 then
+        break
+      end
+    end
+  end
+  return nil, nil
+end
+
 function FormatWorkOrderRemainingTime(expiresAt, now)
   expiresAt = tonumber(expiresAt) or 0
   now = tonumber(now) or Now()
@@ -14598,7 +15211,143 @@ function LeafVE:CanPlayerFulfillWorkOrder(playerName, order)
   if order.requester and Lower(order.requester) == Lower(playerName) then
     return false
   end
+  if not self:DoesWorkOrderRequireDesignation(order) then
+    return true
+  end
   return self:HasProfessionDesignation(playerName, order.profession)
+end
+
+function LeafVE:GetOpenDesignatedWorkOrdersForPlayer(playerName, sinceAt)
+  playerName = ShortName(playerName)
+  if not playerName then
+    return {}
+  end
+
+  local orders = {}
+  local threshold = tonumber(sinceAt) or 0
+  local liveOrders = self:GetLiveWorkOrders()
+  for i = 1, table.getn(liveOrders) do
+    local order = liveOrders[i]
+    local orderSeenAt = math.max(tonumber(order.updatedAt or 0) or 0, tonumber(order.createdAt or 0) or 0)
+    if self:DoesWorkOrderRequireDesignation(order)
+      and self:CanPlayerFulfillWorkOrder(playerName, order)
+      and orderSeenAt > threshold then
+      table.insert(orders, order)
+    end
+  end
+
+  return orders
+end
+
+function LeafVE:BuildWorkOrderLoginAlertMessage(playerName, orders)
+  playerName = ShortName(playerName)
+  if not playerName or type(orders) ~= "table" or table.getn(orders) < 1 then
+    return ""
+  end
+
+  local grouped = {}
+  local orderedProfessions = {}
+  local totalOrders = 0
+
+  for i = 1, table.getn(orders) do
+    local order = orders[i]
+    local profession = CanonicalWorkOrderProfession(order.profession) or Trim(tostring(order.profession or "Work Order"))
+    if profession ~= "" then
+      if not grouped[profession] then
+        grouped[profession] = {count = 0, samples = {}, sampleSeen = {}}
+        table.insert(orderedProfessions, profession)
+      end
+      local bucket = grouped[profession]
+      bucket.count = bucket.count + 1
+      totalOrders = totalOrders + 1
+
+      local sampleName = Trim(tostring(order.recipeName or "Work Order"))
+      if sampleName ~= "" and not bucket.sampleSeen[Lower(sampleName)] and table.getn(bucket.samples) < 2 then
+        bucket.sampleSeen[Lower(sampleName)] = true
+        if string.len(sampleName) > 24 then
+          sampleName = string.sub(sampleName, 1, 21) .. "..."
+        end
+        table.insert(bucket.samples, sampleName)
+      end
+    end
+  end
+
+  table.sort(orderedProfessions, function(a, b)
+    return Lower(a or "") < Lower(b or "")
+  end)
+
+  local lines = {
+    "While you were offline, " .. tostring(totalOrders) .. " open work order" .. (totalOrders ~= 1 and "s" or "") .. " matched your designations.",
+    "",
+  }
+
+  local shownProfessions = 0
+  for i = 1, table.getn(orderedProfessions) do
+    local profession = orderedProfessions[i]
+    local bucket = grouped[profession]
+    if bucket then
+      local sampleText = table.getn(bucket.samples) > 0 and (" (" .. table.concat(bucket.samples, ", ") .. (bucket.count > table.getn(bucket.samples) and ", ..." or "") .. ")") or ""
+      table.insert(lines, profession .. ": " .. tostring(bucket.count) .. " open" .. sampleText)
+      shownProfessions = shownProfessions + 1
+      if shownProfessions >= 5 then
+        if table.getn(orderedProfessions) > shownProfessions then
+          table.insert(lines, "+" .. tostring(table.getn(orderedProfessions) - shownProfessions) .. " more profession" .. ((table.getn(orderedProfessions) - shownProfessions) ~= 1 and "s" or ""))
+        end
+        break
+      end
+    end
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "Open Work Orders to review and claim them.")
+
+  return table.concat(lines, "\n")
+end
+
+function LeafVE:MaybeShowWorkOrderLoginAlert(force)
+  EnsureDB()
+
+  if LeafVE_DB.options.enableWorkOrderLoginAlerts == false then
+    return false
+  end
+
+  local playerName = ShortName(UnitName("player"))
+  if not playerName then
+    return false
+  end
+
+  local designation = self:GetProfessionDesignation(playerName)
+  local hasDesignation = type(designation) == "table"
+    and ((type(designation.main) == "table" and table.getn(designation.main) > 0)
+      or (type(designation.secondary) == "table" and table.getn(designation.secondary) > 0))
+  if not hasDesignation then
+    return false
+  end
+
+  local now = Now()
+  local lastAlertAt = tonumber(LeafVE_DB.workOrderLoginAlertAt) or 0
+  if not force and lastAlertAt > 0 and (now - lastAlertAt) < WORK_ORDER_LOGIN_ALERT_COOLDOWN then
+    return false
+  end
+
+  local lastLogoutAt = tonumber(LeafVE_DB.lastLogoutAt) or 0
+  if not force and lastLogoutAt <= 0 then
+    return false
+  end
+
+  local orders = self:GetOpenDesignatedWorkOrdersForPlayer(playerName, force and 0 or lastLogoutAt)
+  if table.getn(orders) < 1 then
+    return false
+  end
+
+  local message = self:BuildWorkOrderLoginAlertMessage(playerName, orders)
+  if message == "" then
+    return false
+  end
+
+  LeafVE_DB.workOrderLoginAlertAt = now
+  self:ShowInfoPopup(message)
+  return true
 end
 
 function LeafVE:ClaimWorkOrder(orderId)
@@ -14613,7 +15362,10 @@ function LeafVE:ClaimWorkOrder(orderId)
     return nil, "Order not found."
   end
   if not self:CanPlayerFulfillWorkOrder(me, order) then
-    return nil, "You have not designated the required profession."
+    if self:DoesWorkOrderRequireDesignation(order) then
+      return nil, "You have not designated the required profession."
+    end
+    return nil, "You are not eligible to fulfill this order."
   end
 
   local now = Now()
@@ -14822,6 +15574,87 @@ function LeafVE:ReassignWorkOrder(orderId)
   return order
 end
 
+function BuildWorkOrderGatheringRecipe(entry)
+  if type(entry) ~= "table" then return nil end
+
+  local profession = CanonicalWorkOrderProfession(entry.profession)
+  local itemId = tonumber(entry.itemId)
+  local recipeName = Trim(tostring(entry.name or ""))
+  if not profession or not itemId or itemId < 1 or recipeName == "" then
+    return nil
+  end
+
+  local iconPath = NormalizeIconPath(GetItemIcon and GetItemIcon(itemId))
+  if not iconPath then
+    iconPath = (WORK_ORDER_PROFESSION_META[profession] and WORK_ORDER_PROFESSION_META[profession].icon)
+      or (WORK_ORDER_PROFESSION_META["Gathering"] and WORK_ORDER_PROFESSION_META["Gathering"].icon)
+      or LEAF_FALLBACK
+  end
+
+  local recipe = {
+    profession = profession,
+    requestCategory = "Gathering",
+    name = recipeName,
+    itemId = itemId,
+    spellId = nil,
+    icon = iconPath,
+    quality = 1,
+    sourceTable = "Gathering",
+  }
+  recipe.uid = GetWorkOrderRecipeKey(recipe)
+  recipe.searchKey = BuildWorkOrderSearchKey(recipe) .. " gathering"
+  return recipe
+end
+
+function BuildCustomGatheringWorkOrderRecipe(baseRecipe, customName)
+  customName = Trim(tostring(customName or ""))
+  if customName == "" then
+    return type(baseRecipe) == "table" and baseRecipe or nil
+  end
+
+  local profession = type(baseRecipe) == "table" and baseRecipe.profession or nil
+  if not LeafVE or not LeafVE:IsGatheringWorkOrderProfession(profession) then
+    profession = "Farming"
+  end
+
+  local iconPath = type(baseRecipe) == "table" and baseRecipe.icon or nil
+  if not iconPath then
+    iconPath = (WORK_ORDER_PROFESSION_META[profession] and WORK_ORDER_PROFESSION_META[profession].icon)
+      or (WORK_ORDER_PROFESSION_META["Gathering"] and WORK_ORDER_PROFESSION_META["Gathering"].icon)
+      or LEAF_FALLBACK
+  end
+
+  local recipe = {
+    profession = profession,
+    requestCategory = "Gathering",
+    name = customName,
+    itemId = nil,
+    spellId = nil,
+    icon = iconPath,
+    quality = 1,
+    sourceTable = "GatheringCustom",
+  }
+  recipe.uid = "gcustom:" .. Lower(profession or "gathering") .. ":" .. Lower(customName)
+  recipe.searchKey = BuildWorkOrderSearchKey(recipe) .. " gathering custom"
+  return recipe
+end
+
+function AppendGatheringWorkOrderCatalogRecipes(catalog, seen)
+  if type(catalog) ~= "table" or type(catalog.byProfession) ~= "table" then return end
+  if type(catalog.byProfession["Gathering"]) ~= "table" then
+    catalog.byProfession["Gathering"] = {}
+  end
+
+  for i = 1, table.getn(WORK_ORDER_GATHERING_ITEMS or {}) do
+    local recipe = BuildWorkOrderGatheringRecipe(WORK_ORDER_GATHERING_ITEMS[i])
+    if recipe and not seen[recipe.uid] then
+      seen[recipe.uid] = true
+      table.insert(catalog.byProfession["Gathering"], recipe)
+      catalog.totalRecipes = catalog.totalRecipes + 1
+    end
+  end
+end
+
 function LeafVE:EnsureWorkOrderCatalog()
   if self.workOrderCatalog then
     return self.workOrderCatalog
@@ -14834,50 +15667,47 @@ function LeafVE:EnsureWorkOrderCatalog()
     totalProfessions = 0,
   }
   local seen = {}
-  for i = 1, table.getn(WORK_ORDER_PROFESSION_ORDER) do
-    local profession = WORK_ORDER_PROFESSION_ORDER[i]
+  for i = 1, table.getn(WORK_ORDER_REQUEST_CATEGORY_ORDER) do
+    local profession = WORK_ORDER_REQUEST_CATEGORY_ORDER[i]
     table.insert(catalog.order, profession)
     catalog.byProfession[profession] = {}
   end
 
   local source = AtlasLoot_Data and AtlasLoot_Data["AtlasLootCrafting"]
-  if type(source) ~= "table" then
-    self.workOrderCatalog = catalog
-    return catalog
-  end
+  if type(source) == "table" then
+    for tableKey, entries in pairs(source) do
+      if type(entries) == "table" then
+        local currentProfession = ResolveWorkOrderProfessionForTable(tableKey)
+        for i = 1, table.getn(entries) do
+          local row = entries[i]
+          if type(row) == "table" then
+            local iconProfession = WORK_ORDER_PROFESSION_BY_ICON[tostring(row[2] or "")]
+            if iconProfession then
+              currentProfession = iconProfession
+            end
 
-  for tableKey, entries in pairs(source) do
-    if type(entries) == "table" then
-      local currentProfession = ResolveWorkOrderProfessionForTable(tableKey)
-      for i = 1, table.getn(entries) do
-        local row = entries[i]
-        if type(row) == "table" then
-          local iconProfession = WORK_ORDER_PROFESSION_BY_ICON[tostring(row[2] or "")]
-          if iconProfession then
-            currentProfession = iconProfession
-          end
-
-          local itemId, spellId = ParseWorkOrderIDToken(row[1])
-          local profession = currentProfession
-          if (itemId or spellId) and profession and catalog.byProfession[profession] then
-            local recipe = {
-              profession = profession,
-              name = ExtractWorkOrderRecipeName(row[3]),
-              itemId = itemId,
-              spellId = spellId,
-              icon = NormalizeIconPath(row[2]) or LEAF_FALLBACK,
-              quality = ExtractWorkOrderQuality(row[3]),
-              sourceTable = tableKey,
-            }
-            if recipe.name and recipe.name ~= "" then
-              self:ApplyWorkOrderSpellInfo(recipe)
-              if not self:IsWorkOrderItemBindOnPickup(recipe.itemId) then
-                recipe.uid = GetWorkOrderRecipeKey(recipe)
-                recipe.searchKey = BuildWorkOrderSearchKey(recipe)
-                if not seen[recipe.uid] then
-                  seen[recipe.uid] = true
-                  table.insert(catalog.byProfession[profession], recipe)
-                  catalog.totalRecipes = catalog.totalRecipes + 1
+            local itemId, spellId = ParseWorkOrderIDToken(row[1])
+            local profession = currentProfession
+            if (itemId or spellId) and profession and catalog.byProfession[profession] then
+              local recipe = {
+                profession = profession,
+                name = ExtractWorkOrderRecipeName(row[3]),
+                itemId = itemId,
+                spellId = spellId,
+                icon = NormalizeIconPath(row[2]) or LEAF_FALLBACK,
+                quality = ExtractWorkOrderQuality(row[3]),
+                sourceTable = tableKey,
+              }
+              if recipe.name and recipe.name ~= "" then
+                self:ApplyWorkOrderSpellInfo(recipe)
+                if not self:IsWorkOrderItemBindOnPickup(recipe.itemId) then
+                  recipe.uid = GetWorkOrderRecipeKey(recipe)
+                  recipe.searchKey = BuildWorkOrderSearchKey(recipe)
+                  if not seen[recipe.uid] then
+                    seen[recipe.uid] = true
+                    table.insert(catalog.byProfession[profession], recipe)
+                    catalog.totalRecipes = catalog.totalRecipes + 1
+                  end
                 end
               end
             end
@@ -14887,10 +15717,17 @@ function LeafVE:EnsureWorkOrderCatalog()
     end
   end
 
+  AppendGatheringWorkOrderCatalogRecipes(catalog, seen)
+
   for i = 1, table.getn(catalog.order) do
     local profession = catalog.order[i]
     local recipes = catalog.byProfession[profession]
     table.sort(recipes, function(a, b)
+      local ap = Lower(a.profession or "")
+      local bp = Lower(b.profession or "")
+      if ap ~= bp then
+        return ap < bp
+      end
       local an = Lower(a.name or "")
       local bn = Lower(b.name or "")
       if an == bn then
@@ -14909,12 +15746,8 @@ function LeafVE:EnsureWorkOrderCatalog()
   return catalog
 end
 
-function LeafVE:FindWorkOrderCatalogRecipe(profession, recipeName, itemId, spellId)
-  local catalog = self:EnsureWorkOrderCatalog()
-  local recipes = catalog.byProfession and catalog.byProfession[profession]
+function FindWorkOrderCatalogRecipeInList(recipes, expectedName, itemId, spellId)
   if type(recipes) ~= "table" then return nil end
-
-  local expectedName = Lower(recipeName or "")
   for i = 1, table.getn(recipes) do
     local recipe = recipes[i]
     if Lower(recipe.name or "") == expectedName then
@@ -14928,6 +15761,19 @@ function LeafVE:FindWorkOrderCatalogRecipe(profession, recipeName, itemId, spell
         return recipe
       end
     end
+  end
+  return nil
+end
+
+function LeafVE:FindWorkOrderCatalogRecipe(profession, recipeName, itemId, spellId)
+  local catalog = self:EnsureWorkOrderCatalog()
+  local expectedName = Lower(recipeName or "")
+  local recipe = FindWorkOrderCatalogRecipeInList(catalog.byProfession and catalog.byProfession[profession], expectedName, itemId, spellId)
+  if recipe then
+    return recipe
+  end
+  if profession ~= "Gathering" then
+    return FindWorkOrderCatalogRecipeInList(catalog.byProfession and catalog.byProfession["Gathering"], expectedName, itemId, spellId)
   end
   return nil
 end
@@ -14994,6 +15840,7 @@ function LeafVE:StoreWorkOrderRecord(order)
   end
 
   LeafVE_GlobalDB.workOrders[record.id] = record
+  local changed = false
   if not existing then
     self.workOrderReputationDirty = true
     if LeafVE and LeafVE.UI and LeafVE.UI.panels and LeafVE.UI.panels.workOrderRep
@@ -15001,25 +15848,24 @@ function LeafVE:StoreWorkOrderRecord(order)
       and LeafVE.UI.RefreshWorkOrderReputationPanel then
       LeafVE.UI:RefreshWorkOrderReputationPanel()
     end
-    return record, true
+    changed = true
   end
 
-  local changed = false
-  if existingUpdatedAt < record.updatedAt then
+  if existing and existingUpdatedAt < record.updatedAt then
     changed = true
-  elseif (existing.status or "open") ~= record.status then
+  elseif existing and (existing.status or "open") ~= record.status then
     changed = true
-  elseif tonumber(existing.quantity or 1) ~= record.quantity then
+  elseif existing and tonumber(existing.quantity or 1) ~= record.quantity then
     changed = true
-  elseif ClampWorkOrderTipCopper(existing.tipCopper) ~= record.tipCopper then
+  elseif existing and ClampWorkOrderTipCopper(existing.tipCopper) ~= record.tipCopper then
     changed = true
-  elseif NormalizeWorkOrderMatsMode(existing.matsMode) ~= record.matsMode then
+  elseif existing and NormalizeWorkOrderMatsMode(existing.matsMode) ~= record.matsMode then
     changed = true
-  elseif Lower(existing.fulfiller or "") ~= Lower(record.fulfiller or "") then
+  elseif existing and Lower(existing.fulfiller or "") ~= Lower(record.fulfiller or "") then
     changed = true
-  elseif tonumber(existing.claimExpiresAt or 0) ~= record.claimExpiresAt then
+  elseif existing and tonumber(existing.claimExpiresAt or 0) ~= record.claimExpiresAt then
     changed = true
-  elseif tonumber(existing.completedAt or 0) ~= tonumber(record.completedAt or 0) then
+  elseif existing and tonumber(existing.completedAt or 0) ~= tonumber(record.completedAt or 0) then
     changed = true
   end
 
@@ -15029,6 +15875,14 @@ function LeafVE:StoreWorkOrderRecord(order)
       and LeafVE.UI.panels.workOrderRep.IsVisible and LeafVE.UI.panels.workOrderRep:IsVisible()
       and LeafVE.UI.RefreshWorkOrderReputationPanel then
       LeafVE.UI:RefreshWorkOrderReputationPanel()
+    end
+  end
+  local previousStatus = existing and self:GetEffectiveWorkOrderStatus(existing) or nil
+  local currentStatus = self:GetEffectiveWorkOrderStatus(record)
+  if currentStatus == "finalized" and previousStatus ~= "finalized" then
+    self:CheckBadgeMilestones(record.requester)
+    if record.fulfiller then
+      self:CheckBadgeMilestones(record.fulfiller)
     end
   end
   return record, changed
@@ -15407,9 +16261,9 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
     and NormalizeWorkOrderStatus(stored.status) == "open"
     and me
     and Lower(stored.requester) ~= Lower(me)
-    and self:HasProfessionDesignation(me, stored.profession) then
+    and (self:IsGatheringWorkOrderProfession(stored.profession) or self:HasProfessionDesignation(me, stored.profession)) then
     local tipNote = ClampWorkOrderTipCopper(stored.tipCopper) > 0 and (" Tip: " .. FormatWorkOrderTipText(stored.tipCopper) .. ".") or ""
-    local matsNote = " " .. GetWorkOrderMatsLine(stored.matsMode, stored.requester)
+    local matsNote = " " .. GetWorkOrderMatsLine(stored.matsMode, stored.requester, stored.profession)
     PrintWorkOrderMessage(
       "|cFF88CCFFWork Order|r " .. tostring(stored.requester or "Someone") ..
       " created a |cFFFFD700" .. tostring(stored.profession or "Profession") .. "|r order for " ..
@@ -15850,6 +16704,153 @@ function CreateWorkOrderModeButton(parent, label)
   return btn
 end
 
+function CreateLeafVEStaticMoneyFrame(parent, frameName)
+  if not frameName or frameName == "" then
+    if not LeafVE then
+      LeafVE = {}
+    end
+    LeafVE.staticMoneyFrameSerial = (LeafVE.staticMoneyFrameSerial or 0) + 1
+    frameName = "LeafVE_StaticMoneyFrame" .. tostring(LeafVE.staticMoneyFrameSerial)
+  end
+  local display = CreateFrame("Frame", frameName, parent, "SmallMoneyFrameTemplate")
+  display:SetWidth(120)
+  display:SetHeight(16)
+  display.small = 1
+  display.staticMoney = 0
+
+  local prevThis = this
+  this = display
+  if SmallMoneyFrame_OnLoad then
+    SmallMoneyFrame_OnLoad()
+  end
+  if MoneyFrame_SetType then
+    MoneyFrame_SetType("STATIC")
+  end
+  this = prevThis
+  return display
+end
+
+function CreateWorkOrderCoinField(parent, width, iconTexture)
+  local bg = CreateFrame("Frame", nil, parent)
+  bg:SetWidth(width or 38)
+  bg:SetHeight(20)
+  bg:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 12,
+    insets = {left = 3, right = 3, top = 3, bottom = 3}
+  })
+  bg:SetBackdropColor(0.06, 0.06, 0.08, 0.92)
+  bg:SetBackdropBorderColor(0.3, 0.3, 0.35, 1)
+
+  local input = CreateFrame("EditBox", nil, bg)
+  input:SetPoint("TOPLEFT", bg, "TOPLEFT", 4, -3)
+  input:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -16, 3)
+  input:SetFontObject(GameFontHighlightSmall)
+  input:SetJustifyH("CENTER")
+  input:SetAutoFocus(false)
+  input:SetText("")
+
+  local icon = bg:CreateTexture(nil, "ARTWORK")
+  icon:SetWidth(12)
+  icon:SetHeight(12)
+  icon:SetPoint("RIGHT", bg, "RIGHT", -4, 0)
+  icon:SetTexture(iconTexture or "Interface\\MoneyFrame\\UI-CopperIcon")
+
+  bg.input = input
+  bg.icon = icon
+  return bg
+end
+
+function GetWorkOrderTipCopperFromPopup(popup)
+  if not popup or not popup.tipGoldInput or not popup.tipSilverInput or not popup.tipCopperInput then
+    return 0
+  end
+  return ParseWorkOrderTipCoinInputs(
+    popup.tipGoldInput:GetText() or "",
+    popup.tipSilverInput:GetText() or "",
+    popup.tipCopperInput:GetText() or ""
+  )
+end
+
+function UpdateWorkOrderTipPreviewFromPopup(popup)
+  if not popup or not popup.tipMoneyDisplay then return end
+  local tipCopper = GetWorkOrderTipCopperFromPopup(popup)
+  SetGuildBankMoneyDisplay(popup.tipMoneyDisplay, tipCopper or 0)
+  popup.tipMoneyDisplay:Show()
+end
+
+function SetWorkOrderTipInputsFromCopper(popup, tipCopper)
+  if not popup then return end
+  local gold, silver, copper = SplitWorkOrderTipCopper(tipCopper)
+  if popup.tipGoldInput then
+    popup.tipGoldInput:SetText(gold > 0 and tostring(gold) or "")
+  end
+  if popup.tipSilverInput then
+    popup.tipSilverInput:SetText(silver > 0 and tostring(silver) or "")
+  end
+  if popup.tipCopperInput then
+    popup.tipCopperInput:SetText(copper > 0 and tostring(copper) or "")
+  end
+  UpdateWorkOrderTipPreviewFromPopup(popup)
+end
+
+function BindWorkOrderCoinInput(input, popup)
+  if not input then return end
+  input.popup = popup
+  input:SetScript("OnEscapePressed", function() this:ClearFocus() end)
+  input:SetScript("OnTextChanged", function()
+    if this.popup then
+      UpdateWorkOrderTipPreviewFromPopup(this.popup)
+    end
+  end)
+  input:SetScript("OnEditFocusLost", function()
+    if not this.popup then return end
+    local tipCopper = GetWorkOrderTipCopperFromPopup(this.popup)
+    if tipCopper == nil then
+      this:SetText("")
+      tipCopper = GetWorkOrderTipCopperFromPopup(this.popup) or 0
+    end
+    SetWorkOrderTipInputsFromCopper(this.popup, tipCopper)
+  end)
+  input:SetScript("OnEnterPressed", function()
+    this:ClearFocus()
+    if this.popup and this.popup.submitBtn and this.popup.submitBtn:IsEnabled() then
+      this.popup.submitBtn:Click()
+    end
+  end)
+end
+
+function SetWorkOrderRowTipDisplay(btn, tipCopper)
+  if not btn or not btn.tipMoneyDisplay or not btn.tipLabel then return end
+  tipCopper = ClampWorkOrderTipCopper(tipCopper)
+  if tipCopper > 0 then
+    btn.tipLabel:Show()
+    SetGuildBankMoneyDisplay(btn.tipMoneyDisplay, tipCopper)
+    btn.tipMoneyDisplay:Show()
+  else
+    btn.tipLabel:Hide()
+    btn.tipMoneyDisplay:Hide()
+  end
+end
+
+function GetCustomGatheringNameFromPopup(popup)
+  if not popup or not popup.customGatherInput then
+    return ""
+  end
+  return Trim(popup.customGatherInput:GetText() or "")
+end
+
+function GetPopupSelectedWorkOrderRecipe(popup)
+  if not popup then
+    return nil
+  end
+  if popup.selectedProfession == "Gathering" then
+    return BuildCustomGatheringWorkOrderRecipe(popup.selectedRecipe, GetCustomGatheringNameFromPopup(popup))
+  end
+  return popup.selectedRecipe
+end
+
 function SyncWorkOrderSlider(scrollBar, offset, maxOffset)
   if not scrollBar then return end
 
@@ -16128,6 +17129,18 @@ function CreateWorkOrderOrderButton(parent)
   idText:SetText("")
   btn.idText = idText
 
+  local tipLabel = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  tipLabel:SetPoint("TOPRIGHT", btn, "TOPRIGHT", -10, -31)
+  tipLabel:SetText("Tip")
+  tipLabel:Hide()
+  btn.tipLabel = tipLabel
+
+  local tipMoneyDisplay = CreateLeafVEStaticMoneyFrame(btn)
+  tipMoneyDisplay:SetPoint("TOPRIGHT", tipLabel, "BOTTOMRIGHT", 0, -3)
+  tipMoneyDisplay:SetWidth(96)
+  tipMoneyDisplay:Hide()
+  btn.tipMoneyDisplay = tipMoneyDisplay
+
   local actionBtn = CreateFrame("Button", nil, btn, "UIPanelButtonTemplate")
   actionBtn:SetWidth(70)
   actionBtn:SetHeight(20)
@@ -16144,7 +17157,7 @@ function CreateWorkOrderOrderButton(parent)
     local changed
     local err
     if row.actionType == "fulfill" then
-      LeafVE:ShowWorkOrderInstructionPopup(GetWorkOrderFulfillerInstructionText(order.matsMode), "Fulfill Order", function()
+      LeafVE:ShowWorkOrderInstructionPopup(GetWorkOrderFulfillerInstructionText(order.matsMode, order.profession), "Fulfill Order", function()
         local claimedOrder
         local claimErr
         claimedOrder, claimErr = LeafVE:ClaimWorkOrder(order.id)
@@ -16291,7 +17304,7 @@ function CreateWorkOrderOrderButton(parent)
     end
     GameTooltip:AddLine("Profession: " .. tostring(this.order.profession or "Unknown"), 0.85, 0.85, 0.85)
     GameTooltip:AddLine("Quantity: " .. tostring(this.order.quantity or 1), 0.85, 0.85, 0.85)
-    GameTooltip:AddLine("Materials: " .. GetWorkOrderMatsLine(this.order.matsMode, this.order.requester), 0.85, 0.85, 0.85)
+    GameTooltip:AddLine("Materials: " .. GetWorkOrderMatsLine(this.order.matsMode, this.order.requester, this.order.profession), 0.85, 0.85, 0.85)
     GameTooltip:AddLine("Tip: " .. FormatWorkOrderTipText(this.order.tipCopper), 0.85, 0.85, 0.85)
     if status == "pending" and tonumber(this.order.claimExpiresAt or 0) > now then
       GameTooltip:AddLine("Status: Pending fulfillment (" .. FormatWorkOrderRemainingTime(this.order.claimExpiresAt, now) .. " left)", 0.95, 0.82, 0.45)
@@ -16341,7 +17354,7 @@ function CreateWorkOrderCrafterRowButton(parent)
 
   local nameText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   nameText:SetPoint("TOPLEFT", icon, "TOPRIGHT", 8, 0)
-  nameText:SetPoint("RIGHT", btn, "RIGHT", -58, 0)
+  nameText:SetPoint("RIGHT", btn, "RIGHT", -118, 0)
   nameText:SetJustifyH("LEFT")
   nameText:SetJustifyV("TOP")
   btn.nameText = nameText
@@ -16367,6 +17380,34 @@ function CreateWorkOrderCrafterRowButton(parent)
   viewText:SetText("|cFFFFD700View|r")
   btn.viewText = viewText
 
+  local repBadge = CreateFrame("Frame", nil, btn)
+  repBadge:SetWidth(58)
+  repBadge:SetHeight(16)
+  repBadge:SetPoint("TOPRIGHT", btn, "TOPRIGHT", -42, -7)
+  repBadge:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8X8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = false, tileSize = 8, edgeSize = 8,
+    insets = {left = 2, right = 2, top = 2, bottom = 2}
+  })
+  repBadge:SetBackdropColor(0.08, 0.08, 0.1, 0.92)
+  repBadge:SetBackdropBorderColor(THEME.gold[1], THEME.gold[2], THEME.gold[3], 0.75)
+  btn.repBadge = repBadge
+
+  local repBadgeIcon = repBadge:CreateTexture(nil, "ARTWORK")
+  repBadgeIcon:SetPoint("LEFT", repBadge, "LEFT", 4, 0)
+  repBadgeIcon:SetWidth(12)
+  repBadgeIcon:SetHeight(12)
+  repBadgeIcon:SetTexture(PVP_RANK_ICONS[5] or LEAF_EMBLEM)
+  btn.repBadgeIcon = repBadgeIcon
+
+  local repBadgeText = repBadge:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  repBadgeText:SetPoint("LEFT", repBadgeIcon, "RIGHT", 4, 0)
+  repBadgeText:SetPoint("RIGHT", repBadge, "RIGHT", -4, 0)
+  repBadgeText:SetJustifyH("CENTER")
+  repBadgeText:SetText("|cFFFFD7000|r")
+  btn.repBadgeText = repBadgeText
+
   btn:SetScript("OnClick", function()
     if not this.group or not LeafVE or not LeafVE.UI then return end
     local me = ShortName(UnitName("player"))
@@ -16379,6 +17420,10 @@ function CreateWorkOrderCrafterRowButton(parent)
     GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
     GameTooltip:ClearLines()
     GameTooltip:SetText(this.group.player or "Crafter", THEME.gold[1], THEME.gold[2], THEME.gold[3], 1, true)
+    GameTooltip:AddLine("Work Order Rep: " .. tostring(this.group.repTotal or 0) .. "  |  Tier: " .. tostring(this.group.repTierName or "Leaf Apprentice"), 0.75, 0.95, 0.75)
+    if this.group.crafterRank then
+      GameTooltip:AddLine(tostring(GetWorkOrderCrafterRankLabel(this.group.crafterRank) or ""), 1.0, 0.82, 0.2)
+    end
     GameTooltip:AddLine("Recipes Selected: " .. tostring(this.group.totalRecipes or 0), 0.75, 0.95, 0.75)
     if this.group.summaryText and this.group.summaryText ~= "" then
       GameTooltip:AddLine(this.group.summaryText, 0.85, 0.85, 0.85, 1)
@@ -17343,7 +18388,11 @@ function LeafVE.UI:RefreshWorkOrderCrafterSignupPopup(playerName, isEditable)
       btn:ClearAllPoints()
       btn:SetPoint("TOPLEFT", popup.recipeListFrame, "TOPLEFT", 2, -((row - 1) * rowHeight) - 2)
       btn.icon:SetTexture(recipe.icon or LEAF_FALLBACK)
-      btn.text:SetText((WORK_ORDER_QUALITY_COLORS[recipe.quality or 1] or "|cFFFFFFFF") .. tostring(recipe.name or "Recipe") .. "|r")
+      if selectedProfession == "Gathering" then
+        btn.text:SetText("|cFF88CCFF[" .. tostring(recipe.profession or "Gathering") .. "]|r " .. tostring(recipe.name or "Recipe"))
+      else
+        btn.text:SetText((WORK_ORDER_QUALITY_COLORS[recipe.quality or 1] or "|cFFFFFFFF") .. tostring(recipe.name or "Recipe") .. "|r")
+      end
       if recipe.itemId then
         btn.idText:SetText("#" .. tostring(recipe.itemId))
       elseif recipe.spellId then
@@ -17470,6 +18519,13 @@ function LeafVE.UI:RefreshWorkOrderCraftersView(playerName, popup)
       btn:SetPoint("TOPLEFT", popup.crafterListFrame, "TOPLEFT", 2, -((row - 1) * rowHeight) - 2)
       btn.icon:SetTexture(group.icon or LEAF_FALLBACK)
       btn.nameText:SetText("|cFFFFD700" .. tostring(group.player or "Crafter") .. "|r")
+      if btn.repBadge and btn.repBadgeIcon and btn.repBadgeText then
+        local repColor = group.repColor or {THEME.leaf[1], THEME.leaf[2], THEME.leaf[3]}
+        btn.repBadge:SetBackdropBorderColor(repColor[1], repColor[2], repColor[3], 0.85)
+        btn.repBadgeIcon:SetTexture(PVP_RANK_ICONS[group.repBadgeIconIndex or 5] or LEAF_EMBLEM)
+        btn.repBadgeIcon:SetVertexColor(repColor[1], repColor[2], repColor[3], 1)
+        btn.repBadgeText:SetText("|cFFFFD700" .. tostring(group.repTotal or 0) .. "|r")
+      end
       btn.detailText:SetText(LeafVEEllipsizeText(group.summaryText or "", 72))
       local updatedAt = tonumber(group.updatedAt) or 0
       local updatedText = updatedAt > 0 and date("%m/%d %H:%M", updatedAt) or "--/-- --:--"
@@ -17603,8 +18659,8 @@ function LeafVE.UI:CreateWorkOrderPopup()
   professionTitle:SetText("|cFFFFD700Professions|r")
 
   popup.professionButtons = {}
-  for i = 1, table.getn(WORK_ORDER_PROFESSION_ORDER) do
-    local profession = WORK_ORDER_PROFESSION_ORDER[i]
+  for i = 1, table.getn(WORK_ORDER_REQUEST_CATEGORY_ORDER) do
+    local profession = WORK_ORDER_REQUEST_CATEGORY_ORDER[i]
     local btn = CreateWorkOrderProfessionButton(professionPanel, profession)
     btn.popup = popup
     btn:SetPoint("TOPLEFT", professionPanel, "TOPLEFT", 10, -32 - ((i - 1) * 26))
@@ -17815,45 +18871,94 @@ function LeafVE.UI:CreateWorkOrderPopup()
 
   local tipLabel = selectionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   tipLabel:SetPoint("TOP", qtyBG, "BOTTOM", 0, -12)
-  tipLabel:SetText("Tip (g)")
+  tipLabel:SetText("Tip")
 
-  local tipBG = CreateFrame("Frame", nil, selectionPanel)
-  tipBG:SetPoint("TOPLEFT", tipLabel, "BOTTOMLEFT", -10, -4)
-  tipBG:SetWidth(54)
-  tipBG:SetHeight(20)
-  tipBG:SetBackdrop({
+  local tipMoneyDisplay = CreateLeafVEStaticMoneyFrame(selectionPanel, "LeafVE_WorkOrderTipMoneyFrame")
+  tipMoneyDisplay:SetPoint("TOP", tipLabel, "BOTTOM", 0, -4)
+  popup.tipMoneyDisplay = tipMoneyDisplay
+
+  local tipInputsRow = CreateFrame("Frame", nil, selectionPanel)
+  tipInputsRow:SetPoint("TOP", tipMoneyDisplay, "BOTTOM", 0, -6)
+  tipInputsRow:SetWidth(128)
+  tipInputsRow:SetHeight(20)
+  popup.tipInputsRow = tipInputsRow
+
+  local tipGoldField = CreateWorkOrderCoinField(tipInputsRow, 48, "Interface\\MoneyFrame\\UI-GoldIcon")
+  tipGoldField:SetPoint("LEFT", tipInputsRow, "LEFT", 0, 0)
+  popup.tipGoldInput = tipGoldField.input
+
+  local tipSilverField = CreateWorkOrderCoinField(tipInputsRow, 35, "Interface\\MoneyFrame\\UI-SilverIcon")
+  tipSilverField:SetPoint("LEFT", tipGoldField, "RIGHT", 5, 0)
+  popup.tipSilverInput = tipSilverField.input
+
+  local tipCopperField = CreateWorkOrderCoinField(tipInputsRow, 35, "Interface\\MoneyFrame\\UI-CopperIcon")
+  tipCopperField:SetPoint("LEFT", tipSilverField, "RIGHT", 5, 0)
+  popup.tipCopperInput = tipCopperField.input
+
+  BindWorkOrderCoinInput(popup.tipGoldInput, popup)
+  BindWorkOrderCoinInput(popup.tipSilverInput, popup)
+  BindWorkOrderCoinInput(popup.tipCopperInput, popup)
+  SetWorkOrderTipInputsFromCopper(popup, 0)
+
+  popup.matsMode = popup.matsMode or "requester"
+
+  local matsLabel = selectionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  matsLabel:SetPoint("TOP", tipInputsRow, "BOTTOM", 0, -10)
+  matsLabel:SetText("Materials")
+  popup.matsLabel = matsLabel
+
+  local customGatherLabel = selectionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  customGatherLabel:SetPoint("TOP", tipInputsRow, "BOTTOM", 0, -10)
+  customGatherLabel:SetText("Custom Gathering")
+  customGatherLabel:Hide()
+  popup.customGatherLabel = customGatherLabel
+
+  local customGatherBG = CreateFrame("Frame", nil, selectionPanel)
+  customGatherBG:SetPoint("TOP", customGatherLabel, "BOTTOM", 0, -4)
+  customGatherBG:SetWidth(150)
+  customGatherBG:SetHeight(20)
+  customGatherBG:SetBackdrop({
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 12,
     insets = {left = 3, right = 3, top = 3, bottom = 3}
   })
-  tipBG:SetBackdropColor(0.06, 0.06, 0.08, 0.92)
-  tipBG:SetBackdropBorderColor(0.3, 0.3, 0.35, 1)
+  customGatherBG:SetBackdropColor(0.06, 0.06, 0.08, 0.92)
+  customGatherBG:SetBackdropBorderColor(0.3, 0.3, 0.35, 1)
+  customGatherBG:Hide()
+  popup.customGatherBG = customGatherBG
 
-  local tipInput = CreateFrame("EditBox", nil, tipBG)
-  tipInput:SetPoint("TOPLEFT", tipBG, "TOPLEFT", 5, -3)
-  tipInput:SetPoint("BOTTOMRIGHT", tipBG, "BOTTOMRIGHT", -5, 3)
-  tipInput:SetFontObject(GameFontHighlightSmall)
-  tipInput:SetJustifyH("CENTER")
-  tipInput:SetAutoFocus(false)
-  tipInput:SetText("")
-  tipInput:SetScript("OnEscapePressed", function() this:ClearFocus() end)
-  tipInput:SetScript("OnEditFocusLost", function()
-    local tipCopper = ParseWorkOrderTipInput(this:GetText() or "")
-    if tipCopper == nil then
-      this:SetText("")
-      return
+  local customGatherInput = CreateFrame("EditBox", nil, customGatherBG)
+  customGatherInput:SetPoint("TOPLEFT", customGatherBG, "TOPLEFT", 5, -3)
+  customGatherInput:SetPoint("BOTTOMRIGHT", customGatherBG, "BOTTOMRIGHT", -5, 3)
+  customGatherInput:SetFontObject(GameFontHighlightSmall)
+  customGatherInput:SetJustifyH("LEFT")
+  customGatherInput:SetAutoFocus(false)
+  customGatherInput:SetText("")
+  customGatherInput:SetScript("OnEscapePressed", function() this:ClearFocus() end)
+  customGatherInput:SetScript("OnTextChanged", function()
+    if LeafVE and LeafVE.UI and LeafVE.UI.workOrderPopup and LeafVE.UI.workOrderPopup:IsVisible()
+      and LeafVE.UI.workOrderPopup.viewMode == "browse"
+      and LeafVE.UI.cardCurrentPlayer then
+      LeafVE.UI:RefreshWorkOrderPopup(LeafVE.UI.cardCurrentPlayer)
     end
-    this:SetText(FormatWorkOrderTipInputValue(tipCopper))
   end)
-  popup.tipInput = tipInput
+  customGatherInput:SetScript("OnEnterPressed", function()
+    this:ClearFocus()
+    if popup.submitBtn and popup.submitBtn:IsEnabled() then
+      popup.submitBtn:Click()
+    end
+  end)
+  popup.customGatherInput = customGatherInput
 
-  popup.matsMode = popup.matsMode or "requester"
-
-  local matsLabel = selectionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  matsLabel:SetPoint("TOP", tipBG, "BOTTOM", 0, -10)
-  matsLabel:SetText("Materials")
-  popup.matsLabel = matsLabel
+  local customGatherHint = selectionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  customGatherHint:SetPoint("TOP", customGatherBG, "BOTTOM", 0, -4)
+  customGatherHint:SetWidth(170)
+  customGatherHint:SetJustifyH("CENTER")
+  customGatherHint:SetJustifyV("TOP")
+  customGatherHint:SetText("|cFF888888Optional: type a custom name and keep a gathering type selected.|r")
+  customGatherHint:Hide()
+  popup.customGatherHint = customGatherHint
 
   local myMatsBtn = CreateWorkOrderModeButton(selectionPanel, "My Mats")
   myMatsBtn:SetWidth(62)
@@ -17888,29 +18993,33 @@ function LeafVE.UI:CreateWorkOrderPopup()
   SkinButtonAccent(submitBtn)
   submitBtn:Disable()
   submitBtn:SetScript("OnClick", function()
-    local selectedRecipe = popup.selectedRecipe
+    local selectedRecipe = GetPopupSelectedWorkOrderRecipe(popup)
     local quantity = tonumber(Trim(popup.qtyInput:GetText() or "")) or 1
-    local tipCopper = ParseWorkOrderTipInput(popup.tipInput:GetText() or "")
-    local matsMode = NormalizeWorkOrderMatsMode(popup.matsMode)
+    local tipCopper = GetWorkOrderTipCopperFromPopup(popup)
+    local isGatheringOrder = LeafVE and LeafVE:IsGatheringWorkOrderProfession(selectedRecipe and selectedRecipe.profession)
+    local matsMode = isGatheringOrder and "requester" or NormalizeWorkOrderMatsMode(popup.matsMode)
     if tipCopper == nil then
-      popup.feedbackText:SetText("|cFFFF6666Enter a valid tip in gold, or leave it blank.|r")
+      popup.feedbackText:SetText("|cFFFF6666Enter a valid tip using the gold, silver, and copper fields, or leave them blank.|r")
       return
     end
-    LeafVE:ShowWorkOrderInstructionPopup(GetWorkOrderRequesterInstructionText(matsMode), "Place Order", function()
+    LeafVE:ShowWorkOrderInstructionPopup(GetWorkOrderRequesterInstructionText(matsMode, selectedRecipe and selectedRecipe.profession), "Place Order", function()
       local order, err = LeafVE:SubmitWorkOrder(nil, selectedRecipe, quantity, tipCopper, matsMode)
       if not order then
         popup.feedbackText:SetText("|cFFFF6666" .. tostring(err or "Unable to place work order.") .. "|r")
         return
       end
       popup.qtyInput:SetText("1")
-      popup.tipInput:SetText("")
+      SetWorkOrderTipInputsFromCopper(popup, 0)
+      if popup.customGatherInput then
+        popup.customGatherInput:SetText("")
+      end
       if InGuild() then
         popup.feedbackText:SetText("|cFF88FF88Saved and broadcast to the guild.|r")
       else
         popup.feedbackText:SetText("|cFF88FF88Saved locally. Join guild chat to sync it.|r")
       end
       local tipNote = ClampWorkOrderTipCopper(order.tipCopper) > 0 and (" | Tip " .. FormatWorkOrderTipText(order.tipCopper)) or ""
-      PrintWorkOrderMessage("|cFF88CCFFWork Order|r Requested " .. order.recipeName .. " x" .. tostring(order.quantity) .. " | " .. GetWorkOrderMatsLine(order.matsMode, order.requester) .. tipNote)
+      PrintWorkOrderMessage("|cFF88CCFFWork Order|r Requested " .. order.recipeName .. " x" .. tostring(order.quantity) .. " | " .. GetWorkOrderMatsLine(order.matsMode, order.requester, order.profession) .. tipNote)
       if LeafVE.UI and LeafVE.UI.cardCurrentPlayer then
         LeafVE.UI:RefreshWorkOrderPopup(LeafVE.UI.cardCurrentPlayer)
       end
@@ -17919,13 +19028,6 @@ function LeafVE.UI:CreateWorkOrderPopup()
   popup.submitBtn = submitBtn
 
   qtyInput:SetScript("OnEnterPressed", function()
-    this:ClearFocus()
-    if popup.submitBtn and popup.submitBtn:IsEnabled() then
-      popup.submitBtn:Click()
-    end
-  end)
-
-  tipInput:SetScript("OnEnterPressed", function()
     this:ClearFocus()
     if popup.submitBtn and popup.submitBtn:IsEnabled() then
       popup.submitBtn:Click()
@@ -18072,12 +19174,6 @@ function LeafVE.UI:RefreshWorkOrderBrowseView(playerName, popup, catalog)
 
   popup.subtitleText:SetText("Create a guild work order")
   popup.matsMode = NormalizeWorkOrderMatsMode(popup.matsMode)
-  if popup.myMatsBtn then
-    UpdateWorkOrderModeButtonVisual(popup.myMatsBtn, popup.matsMode ~= "crafter")
-  end
-  if popup.yourMatsBtn then
-    UpdateWorkOrderModeButtonVisual(popup.yourMatsBtn, popup.matsMode == "crafter")
-  end
 
   local selectedProfession = popup.selectedProfession
   if not selectedProfession or not catalog.byProfession[selectedProfession] or table.getn(LeafVE:GetTradeableWorkOrderRecipes(catalog.byProfession[selectedProfession])) < 1 then
@@ -18131,8 +19227,7 @@ function LeafVE.UI:RefreshWorkOrderBrowseView(playerName, popup, catalog)
     popup.recipeOffset = 0
   end
 
-  local selectedRecipe = popup.selectedRecipe
-  local selectedKey = selectedRecipe and selectedRecipe.uid or nil
+  local selectedKey = popup.selectedRecipe and popup.selectedRecipe.uid or nil
   local selectionFound = nil
   if selectedKey then
     for i = 1, table.getn(filtered) do
@@ -18149,6 +19244,8 @@ function LeafVE.UI:RefreshWorkOrderBrowseView(playerName, popup, catalog)
   else
     popup.selectedRecipe = nil
   end
+
+  local selectedRecipe = GetPopupSelectedWorkOrderRecipe(popup)
 
   local rowHeight = popup.recipeRowHeight or 26
   local visibleRows = GetWorkOrderVisibleRowCount(popup.recipeListFrame, rowHeight, 12)
@@ -18193,7 +19290,11 @@ function LeafVE.UI:RefreshWorkOrderBrowseView(playerName, popup, catalog)
       btn:ClearAllPoints()
       btn:SetPoint("TOPLEFT", popup.recipeListFrame, "TOPLEFT", 2, -((row - 1) * rowHeight) - 2)
       btn.icon:SetTexture(recipe.icon or LEAF_FALLBACK)
-      btn.text:SetText((WORK_ORDER_QUALITY_COLORS[recipe.quality or 1] or "|cFFFFFFFF") .. tostring(recipe.name or "Recipe") .. "|r")
+      if selectedProfession == "Gathering" then
+        btn.text:SetText("|cFF88CCFF[" .. tostring(recipe.profession or "Gathering") .. "]|r " .. tostring(recipe.name or "Recipe"))
+      else
+        btn.text:SetText((WORK_ORDER_QUALITY_COLORS[recipe.quality or 1] or "|cFFFFFFFF") .. tostring(recipe.name or "Recipe") .. "|r")
+      end
       if recipe.itemId then
         btn.idText:SetText("#" .. tostring(recipe.itemId))
       elseif recipe.spellId then
@@ -18243,23 +19344,92 @@ function LeafVE.UI:RefreshWorkOrderBrowseView(playerName, popup, catalog)
     )
   else
     popup.summaryText:SetText(
-      "Loaded professions: " .. tostring(catalog.totalProfessions) ..
+      "Loaded categories: " .. tostring(catalog.totalProfessions) ..
       "  |  Live: " .. tostring(liveOpenCount) .. " open / " .. tostring(livePendingCount) ..
       " pending  |  Your claims: " .. tostring(myClaims)
     )
   end
 
-  if popup.selectedRecipe then
+  local isGatheringSelection = selectedProfession == "Gathering"
+  if popup.selectedRecipe and LeafVE:IsGatheringWorkOrderProfession(popup.selectedRecipe.profession) then
+    isGatheringSelection = true
+  end
+
+  if isGatheringSelection then
+    popup.matsMode = "requester"
+  end
+
+  if popup.myMatsBtn then
+    if isGatheringSelection then
+      popup.myMatsBtn:Hide()
+    else
+      popup.myMatsBtn:Show()
+      UpdateWorkOrderModeButtonVisual(popup.myMatsBtn, popup.matsMode ~= "crafter")
+    end
+  end
+  if popup.yourMatsBtn then
+    if isGatheringSelection then
+      popup.yourMatsBtn:Hide()
+    else
+      popup.yourMatsBtn:Show()
+      UpdateWorkOrderModeButtonVisual(popup.yourMatsBtn, popup.matsMode == "crafter")
+    end
+  end
+  if popup.matsLabel then
+    if isGatheringSelection then
+      popup.matsLabel:Hide()
+    else
+      popup.matsLabel:Show()
+    end
+  end
+  if popup.customGatherLabel then
+    if isGatheringSelection then
+      popup.customGatherLabel:Show()
+    else
+      popup.customGatherLabel:Hide()
+    end
+  end
+  if popup.customGatherBG then
+    if isGatheringSelection then
+      popup.customGatherBG:Show()
+    else
+      popup.customGatherBG:Hide()
+    end
+  end
+  if popup.customGatherHint then
+    if isGatheringSelection then
+      popup.customGatherHint:Show()
+    else
+      popup.customGatherHint:Hide()
+    end
+  end
+  if popup.submitBtn then
+    popup.submitBtn:ClearAllPoints()
+    if isGatheringSelection and popup.customGatherBG then
+      popup.submitBtn:SetPoint("TOP", popup.customGatherBG, "BOTTOM", 0, -26)
+    else
+      popup.submitBtn:SetPoint("TOP", popup.myMatsBtn, "BOTTOM", 40, -8)
+    end
+  end
+  UpdateWorkOrderTipPreviewFromPopup(popup)
+
+  if selectedRecipe then
     local selectedQuantity = tonumber(Trim(popup.qtyInput and popup.qtyInput:GetText() or "")) or 1
     if selectedQuantity < 1 then selectedQuantity = 1 end
     if selectedQuantity > 99 then selectedQuantity = 99 end
-    local reagentLines = LeafVE:GetWorkOrderReagentLines(popup.selectedRecipe, selectedQuantity)
-    popup.selectedText:SetText("|cFFFFD700Selected:|r " .. tostring(popup.selectedRecipe.name))
-    local idLabel = popup.selectedRecipe.itemId and ("Item ID " .. tostring(popup.selectedRecipe.itemId))
-      or (popup.selectedRecipe.spellId and ("Spell ID " .. tostring(popup.selectedRecipe.spellId)))
+    local reagentLines = LeafVE:GetWorkOrderReagentLines(selectedRecipe, selectedQuantity)
+    popup.selectedText:SetText("|cFFFFD700Selected:|r " .. tostring(selectedRecipe.name))
+    local idLabel = selectedRecipe.itemId and ("Item ID " .. tostring(selectedRecipe.itemId))
+      or (selectedRecipe.spellId and ("Spell ID " .. tostring(selectedRecipe.spellId)))
+      or (isGatheringSelection and "Custom Request")
       or "No ID"
-    popup.detailText:SetText(tostring(popup.selectedRecipe.profession or "") .. "  |  " .. idLabel .. "  |  " .. GetWorkOrderMatsTag(popup.matsMode))
-    if type(reagentLines) == "table" and table.getn(reagentLines) > 0 and popup.reagentsText then
+    popup.detailText:SetText(tostring(selectedRecipe.profession or "") .. "  |  " .. idLabel .. "  |  " .. GetWorkOrderMatsTag(popup.matsMode, selectedRecipe.profession))
+    if LeafVE:IsGatheringWorkOrderProfession(selectedRecipe.profession) and popup.reagentsText then
+      popup.reagentsText:SetText("Gather " .. tostring(selectedQuantity) .. "x " .. tostring(selectedRecipe.name or "materials") .. " and deliver them to the requester.")
+      if popup.reagentsLabel then
+        popup.reagentsLabel:SetText("Request")
+      end
+    elseif type(reagentLines) == "table" and table.getn(reagentLines) > 0 and popup.reagentsText then
       popup.reagentsText:SetText(table.concat(reagentLines, "\n"))
       if popup.reagentsLabel then
         popup.reagentsLabel:SetText(selectedQuantity > 1 and ("Reagents (x" .. tostring(selectedQuantity) .. ")") or "Reagents")
@@ -18302,7 +19472,7 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
     popup.ordersTitle:SetText("|cFFFFD700Live Orders|r")
   end
   if popup.ordersHint then
-    popup.ordersHint:SetText("|cFFAAAAAAOpen requests can be fulfilled by players who designated the required profession.\nTips and prices can and should be negotiated so both sides feel the order is fair.\nPending orders show who claimed them and how much time is left.|r")
+    popup.ordersHint:SetText("|cFFAAAAAACrafted and profession-based requests are fulfilled by matching designations.\nFarming requests can be picked up by anyone, and pending orders show who claimed them and how much time is left.|r")
   end
 
   local me = ShortName(UnitName("player"))
@@ -18352,8 +19522,8 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
       local order = orders[dataIndex]
       local status = LeafVE:GetEffectiveWorkOrderStatus(order, now)
       local fulfiller = LeafVE:GetEffectiveWorkOrderFulfiller(order, now)
-      local tipText = ClampWorkOrderTipCopper(order.tipCopper) > 0 and FormatWorkOrderTipText(order.tipCopper) or ""
       local timerText = tonumber(order.claimExpiresAt or 0) > now and FormatWorkOrderRemainingTime(order.claimExpiresAt, now) or "Expired"
+      local requiresDesignation = LeafVE:DoesWorkOrderRequireDesignation(order)
 
       btn.order = order
       btn.popup = popup
@@ -18363,15 +19533,14 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
       btn:SetPoint("TOPLEFT", popup.orderListFrame, "TOPLEFT", 2, -((row - 1) * rowHeight) - 2)
       btn.icon:SetTexture(order.icon or LEAF_FALLBACK)
       btn.text:SetText("|cFFFFD700" .. tostring(order.recipeName or "Work Order") .. "|r")
-      local matsLine = GetWorkOrderMatsLine(order.matsMode, order.requester)
+      local matsLine = GetWorkOrderMatsLine(order.matsMode, order.requester, order.profession)
       btn.detailText:SetText(
         "Requester: " .. tostring(order.requester or "Unknown") ..
         "  |  " .. tostring(order.profession or "Unknown") ..
         "  |  Qty " .. tostring(order.quantity or 1) ..
-        "\n" .. matsLine ..
-        (tipText ~= "" and ("  |  Tip " .. tostring(tipText))
-          or "")
+        "\n" .. matsLine
       )
+      SetWorkOrderRowTipDisplay(btn, order.tipCopper)
 
       btn.actionType = nil
       btn.secondaryActionType = nil
@@ -18386,11 +19555,23 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
         end
       elseif me and LeafVE:CanPlayerFulfillWorkOrder(me, order) then
         btn.actionType = "fulfill"
-        btn.statusText:SetText("|cFF88FF88Eligible to fulfill.|r Your designation matches this order.")
+        if requiresDesignation then
+          btn.statusText:SetText("|cFF88FF88Eligible to fulfill.|r Your designation matches this order.")
+        else
+          btn.statusText:SetText("|cFF88FF88Eligible to fulfill.|r This farming request can be claimed by anyone.")
+        end
       elseif me and order.requester and Lower(order.requester) == Lower(me) then
-        btn.statusText:SetText("|cFFAAAAAAYour request is live for qualified crafters.|r")
+        if requiresDesignation then
+          btn.statusText:SetText("|cFFAAAAAAYour request is live for qualified crafters.|r")
+        else
+          btn.statusText:SetText("|cFFAAAAAAYour farming request is live for anyone to claim.|r")
+        end
       else
-        btn.statusText:SetText("|cFFAAAAAARequires designated " .. tostring(order.profession or "profession") .. " to fulfill.|r")
+        if requiresDesignation then
+          btn.statusText:SetText("|cFFAAAAAARequires designated " .. tostring(order.profession or "profession") .. " to fulfill.|r")
+        else
+          btn.statusText:SetText("|cFFAAAAAAOpen farming request.|r Anyone can pick this up.")
+        end
       end
 
       if btn.idText then
@@ -18418,7 +19599,10 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
         btn.secondaryActionBtn:SetText("")
         btn.secondaryActionBtn:Hide()
       end
-      local reservedRight = btn.actionType and 96 or 18
+      local reservedRight = ClampWorkOrderTipCopper(order.tipCopper) > 0 and 118 or 18
+      if btn.actionType or btn.secondaryActionType then
+        reservedRight = math.max(reservedRight, 96)
+      end
       local textWidth = math.max(150, listWidth - reservedRight - 42)
       btn.text:SetWidth(textWidth)
       btn.detailText:SetWidth(textWidth)
@@ -18428,6 +19612,7 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
       btn.order = nil
       btn.actionType = nil
       btn.secondaryActionType = nil
+      SetWorkOrderRowTipDisplay(btn, 0)
       if btn.actionBtn then
         btn.actionBtn:SetText("")
         btn.actionBtn:Hide()
@@ -18525,8 +19710,8 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
       local order = orders[dataIndex]
       local status = LeafVE:GetEffectiveWorkOrderStatus(order, now)
       local fulfiller = LeafVE:GetStoredWorkOrderFulfiller(order)
-      local tipText = ClampWorkOrderTipCopper(order.tipCopper) > 0 and FormatWorkOrderTipText(order.tipCopper) or ""
       local timerText = tonumber(order.claimExpiresAt or 0) > now and FormatWorkOrderRemainingTime(order.claimExpiresAt, now) or "Expired"
+      local requiresDesignation = LeafVE:DoesWorkOrderRequireDesignation(order)
 
       btn.order = order
       btn.popup = popup
@@ -18536,15 +19721,14 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
       btn:SetPoint("TOPLEFT", popup.orderListFrame, "TOPLEFT", 2, -((row - 1) * rowHeight) - 2)
       btn.icon:SetTexture(order.icon or LEAF_FALLBACK)
       btn.text:SetText("|cFFFFD700" .. tostring(order.recipeName or "Work Order") .. "|r")
-      local matsLine = GetWorkOrderMatsLine(order.matsMode, order.requester)
+      local matsLine = GetWorkOrderMatsLine(order.matsMode, order.requester, order.profession)
       btn.detailText:SetText(
         "Requester: " .. tostring(order.requester or "Unknown") ..
         "  |  " .. tostring(order.profession or "Unknown") ..
         "  |  Qty " .. tostring(order.quantity or 1) ..
-        "\n" .. matsLine ..
-        (tipText ~= "" and ("  |  Tip " .. tostring(tipText))
-          or "")
+        "\n" .. matsLine
       )
+      SetWorkOrderRowTipDisplay(btn, order.tipCopper)
       if status == "pending" then
         btn.statusText:SetText("|cFFFFFF99Pending:|r " .. tostring(fulfiller or "Unknown") .. "  |  " .. tostring(timerText) .. " left. Reassign for a different crafter.")
         btn.actionType = "cancel"
@@ -18566,7 +19750,11 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
         btn.secondaryActionBtn:Show()
         btn.secondaryActionBtn:Enable()
       else
-        btn.statusText:SetText("|cFFAAAAAAOpen on the live board.|r Waiting for a qualified crafter.")
+        if requiresDesignation then
+          btn.statusText:SetText("|cFFAAAAAAOpen on the live board.|r Waiting for a qualified crafter.")
+        else
+          btn.statusText:SetText("|cFFAAAAAAOpen on the live board.|r Waiting for someone to farm it.")
+        end
         btn.actionType = "cancel"
         btn.actionBtn:SetText("Cancel")
         btn.actionBtn:Show()
@@ -18583,7 +19771,10 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
         btn.secondaryActionBtn:SetText("")
         btn.secondaryActionBtn:Hide()
       end
-      local reservedRight = (btn.actionType or btn.secondaryActionType) and 96 or 18
+      local reservedRight = ClampWorkOrderTipCopper(order.tipCopper) > 0 and 118 or 18
+      if btn.actionType or btn.secondaryActionType then
+        reservedRight = math.max(reservedRight, 96)
+      end
       local textWidth = math.max(150, listWidth - reservedRight - 42)
       btn.text:SetWidth(textWidth)
       btn.detailText:SetWidth(textWidth)
@@ -18593,6 +19784,7 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
       btn.order = nil
       btn.actionType = nil
       btn.secondaryActionType = nil
+      SetWorkOrderRowTipDisplay(btn, 0)
       if btn.actionBtn then
         btn.actionBtn:SetText("")
         btn.actionBtn:Hide()
@@ -20153,7 +21345,7 @@ end
 function LeafVE:GetGuildBankItemCategoryLine(item, sectionInfo)
   local tabKey = item and item.guildBankTabKey
   if not tabKey and item then
-    tabKey = select(1, self:ClassifyGuildBankDisplayItem(item))
+    tabKey = self:ClassifyGuildBankDisplayItem(item)
   end
   local tabInfo = self:GetGuildBankPanelTabInfo(tabKey)
   local label = tostring(tabInfo and tabInfo.label or "Guild Bank")
@@ -21658,11 +22850,13 @@ function BuildShoutoutsPanel(panel)
 
   local subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   subtitle:SetPoint("TOP", h, "BOTTOM", 0, -3)
-  subtitle:SetText("|cFF888888Give recognition to guild members! You can give 2 shoutouts per day.|r")
+  subtitle:SetText("|cFF888888Give recognition to guild members! Your daily shoutout limit depends on guild rank.|r")
+  panel.subtitleText = subtitle
   
   local usageText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   usageText:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -80)
-  usageText:SetText("Shoutouts remaining today: 2 / 2")
+  local initialMaxShoutouts = LeafVE:GetShoutoutDailyLimitForPlayer(UnitName("player"))
+  usageText:SetText("Shoutouts remaining today: " .. tostring(initialMaxShoutouts) .. " / " .. tostring(initialMaxShoutouts))
   panel.usageText = usageText
   
   local targetLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -23120,6 +24314,12 @@ function BuildOptionsPanel(panel)
     function(v) LeafVE_DB.options.enableWorkOrderChatMessages = v end)
   yBase = yBase - gap + 8
 
+  MakeToggleButton(subFrame, "Work Order Login Alerts",
+    yBase,
+    function() return LeafVE_DB.options.enableWorkOrderLoginAlerts ~= false end,
+    function(v) LeafVE_DB.options.enableWorkOrderLoginAlerts = v end)
+  yBase = yBase - gap + 8
+
   -- Divider
   local div1 = panel:CreateTexture(nil, "ARTWORK")
   div1:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, yBase)
@@ -23335,6 +24535,7 @@ function BuildAdminPanel(panel)
     "• Shoutout: 10 LP (2 per day)",
     "• Daily Total LP Cap: 700",
   }
+  ruleLines[3] = "* Dungeon Boss: 10 LP  |  Raid Boss: 25 LP  |  +5 LP per guildie"
   for _, ruleText in ipairs(ruleLines) do
     local ruleFS = subFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     ruleFS:SetPoint("TOPLEFT", subFrame, "TOPLEFT", 18, yBase)
@@ -24235,15 +25436,15 @@ function BuildWelcomePanel(panel)
   yOffset = yOffset - 4
 
   local soPoints = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.shoutoutPoints) or 10
-  local soMax = (LeafVE_DB and LeafVE_DB.options and LeafVE_DB.options.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  local soMax = LeafVE:GetShoutoutDailyLimitForPlayer(UnitName("player"))
   panel.welcomeSOHeader = AddLine(string.format("|cFFFFD700Shoutouts|r  (+%d LP each)", soPoints), 10)
   AddLine("Recognise a fellow shinobi's greatness! Both the giver and receiver", 20)
   panel.welcomeSODetail1 = AddLine(string.format("earn %d LP. Use |cFF00CCFF/so PlayerName [reason]|r. You have", soPoints), 20)
   panel.welcomeSODetail2 = AddLine(string.format("%d shoutouts per day, so spend them wisely!", soMax), 20)
   yOffset = yOffset - 4
 
-  panel.welcomeInstHeader = AddLine("|cFFFFD700Instance Runs|r  (+10 dungeon boss, +25 raid boss | +10 dungeon complete, +25 raid complete)", 10)
-  AddLine("Complete dungeons or raids with a guildmate. Earn boss kill points", 20)
+  panel.welcomeInstHeader = AddLine("|cFFFFD700Instance Runs|r  (+10 dungeon boss, +25 raid boss, +5 per guildie | +10 dungeon complete, +25 raid complete)", 10)
+  AddLine("Complete dungeons or raids with a guildmate. Boss kill points now scale with guildies in your group.", 20)
   panel.welcomeInstDetail = AddLine("plus a flat completion bonus. Boss and completion points are separate.", 20)
   yOffset = yOffset - 4
 
@@ -24476,6 +25677,11 @@ function LeafVE.UI:RefreshShoutoutsPanel()
   if not panel.shoutScrollChild then return end
 
   EnsureDB()
+  local me = ShortName(UnitName("player"))
+  local maxDaily = LeafVE:GetShoutoutDailyLimitForPlayer(me)
+  if panel.subtitleText then
+    panel.subtitleText:SetText("|cFF888888Give recognition to guild members! You can give " .. tostring(maxDaily) .. " shoutout" .. (maxDaily ~= 1 and "s" or "") .. " per day.|r")
+  end
 
   -- Collect all shoutout history entries from all players
   local allShouts = {}
@@ -25461,6 +26667,7 @@ end
 
 function LeafVE.UI:Refresh()
   EnsureDB()
+  LeafVE:PurgeStaleWeeklyData()
   
   -- Safety check: UI may not be built yet on early login events; silently skip.
   if not self.panels then 
@@ -25612,39 +26819,18 @@ function LeafVE.UI:Refresh()
   
     -- Calculate Last Week's Winner
     if self.panels.me.lastWeekWinner then
-      local lastWeekStart = WeekStartTS(Now()) - (7 * SECONDS_PER_DAY)
-      local lastWeekAgg = {}
-      
-      for d = 0, 6 do
-        local dk = DayKeyFromTS(lastWeekStart + d * SECONDS_PER_DAY)
-        if LeafVE_DB.global[dk] then
-          for name, t in pairs(LeafVE_DB.global[dk]) do
-            if IsPointEntryInCurrentBucket(t) then
-              if not lastWeekAgg[name] then lastWeekAgg[name] = {L = 0, G = 0, S = 0} end
-              lastWeekAgg[name].L = lastWeekAgg[name].L + (t.L or 0)
-              lastWeekAgg[name].G = lastWeekAgg[name].G + (t.G or 0)
-              lastWeekAgg[name].S = lastWeekAgg[name].S + (t.S or 0)
-            end
-          end
-        end
+      local previousWeekKey = PreviousWeekKey()
+      local cachedWinner = LeafVE:GetCachedWeeklyWinnerSnapshot(previousWeekKey)
+      if not cachedWinner then
+        cachedWinner = LeafVE:SnapshotWeeklyLeaderboardWinner(previousWeekKey)
       end
-      
-      local winner = nil
-      local maxPoints = 0
-      for name, pts in pairs(lastWeekAgg) do
-        local total = (pts.L or 0) + (pts.G or 0) + (pts.S or 0)
-        if total > maxPoints then
-          maxPoints = total
-          winner = name
-        end
+
+      if cachedWinner and cachedWinner.name and (tonumber(cachedWinner.total) or 0) > 0 then
+        self.panels.me.lastWeekWinner:SetText(string.format("%s with |cFFFFD700%d points|r", cachedWinner.name, cachedWinner.total))
+      else
+        self.panels.me.lastWeekWinner:SetText("|cFF888888No data available|r")
       end
-      
-    if winner then
-      self.panels.me.lastWeekWinner:SetText(string.format("%s with |cFFFFD700%d points|r", winner, maxPoints))
-    else
-      self.panels.me.lastWeekWinner:SetText("|cFF888888No data available|r")
     end
-   end
     
     -- Calculate All-Time Leader (union of local alltime and synced lboard.alltime)
     if self.panels.me.alltimeLeader then
@@ -25778,9 +26964,14 @@ function LeafVE.UI:Refresh()
           count = count + 1
         end
       end
-      local remaining = SHOUTOUT_MAX_PER_DAY - count
+      local maxDaily = LeafVE:GetShoutoutDailyLimitForPlayer(me)
+      local remaining = maxDaily - count
+      if remaining < 0 then remaining = 0 end
+      if self.panels.shoutouts.subtitleText then
+        self.panels.shoutouts.subtitleText:SetText("|cFF888888Give recognition to guild members! You can give " .. tostring(maxDaily) .. " shoutout" .. (maxDaily ~= 1 and "s" or "") .. " per day.|r")
+      end
       if self.panels.shoutouts.usageText then
-        self.panels.shoutouts.usageText:SetText(string.format("Shoutouts remaining today: %d / %d", remaining, SHOUTOUT_MAX_PER_DAY))
+        self.panels.shoutouts.usageText:SetText(string.format("Shoutouts remaining today: %d / %d", remaining, maxDaily))
       end
     end
     self:RefreshShoutoutsPanel()
@@ -25971,7 +27162,7 @@ function LeafVE.UI:RefreshWelcome()
   if not p then return end
   local opts = LeafVE_DB.options
   local soPts  = (opts and opts.shoutoutPoints) or 10
-  local soMax  = (opts and opts.shoutoutMaxDaily) or SHOUTOUT_MAX_PER_DAY
+  local soMax  = LeafVE:GetShoutoutDailyLimitForPlayer(UnitName("player"))
   if p.welcomeWeekendLine then
     p.welcomeWeekendLine:SetText("|cFFFFD700Weekend Bonus|r  (All LP gains are doubled on Saturday and Sunday)")
   end
@@ -25994,10 +27185,10 @@ function LeafVE.UI:RefreshWelcome()
     p.welcomeSODetail2:SetText(string.format("%d shoutouts per day, so spend them wisely!", soMax))
   end
   if p.welcomeInstHeader then
-    p.welcomeInstHeader:SetText("|cFFFFD700Instance Runs|r  (+10 dungeon boss, +25 raid boss | +10 dungeon complete, +25 raid complete)")
+    p.welcomeInstHeader:SetText("|cFFFFD700Instance Runs|r  (+10 dungeon boss, +25 raid boss, +5 per guildie | +10 dungeon complete, +25 raid complete)")
   end
   if p.welcomeInstDetail then
-    p.welcomeInstDetail:SetText("plus a flat completion bonus. Boss and completion points are separate.")
+    p.welcomeInstDetail:SetText("Boss kill points scale with guildies in your group, plus a flat completion bonus.")
   end
   if p.welcomeQuestHeader then
     p.welcomeQuestHeader:SetText("|cFFFFD700Quest Completions|r  (+10 LP, no daily cap)")
@@ -26096,6 +27287,7 @@ LeafVE_eventFrame = CreateFrame("Frame")
 LeafVE_eventFrame:RegisterEvent("ADDON_LOADED")
 LeafVE_eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 LeafVE_eventFrame:RegisterEvent("PLAYER_LOGIN")
+LeafVE_eventFrame:RegisterEvent("PLAYER_LOGOUT")
 LeafVE_eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
 LeafVE_eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
 LeafVE_eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
@@ -26225,6 +27417,18 @@ LeafVE_eventFrame:SetScript("OnEvent", function()
           LeafVE:RequestGuildBankHighValueSync(true)
         end
     end)
+    LeafVE:ScheduleDeferred("work_order_login_alert_1", 12, function()
+      LeafVE:MaybeShowWorkOrderLoginAlert(false)
+    end)
+    LeafVE:ScheduleDeferred("work_order_login_alert_2", 22, function()
+      LeafVE:MaybeShowWorkOrderLoginAlert(false)
+    end)
+    return
+  end
+
+  if event == "PLAYER_LOGOUT" then
+    EnsureDB()
+    LeafVE_DB.lastLogoutAt = Now()
     return
   end
   
@@ -26389,6 +27593,7 @@ LeafVE_updateFrame:SetScript("OnUpdate", function()
   -- converge to the latest wipe version while players remain online.
   if LeafVE_updateTimers.wipeMarkerPoll >= 60 then
     LeafVE_updateTimers.wipeMarkerPoll = 0
+    LeafVE:PurgeStaleWeeklyData()
     if InGuild() then
       LeafVE:ApplyGuildWipeMarkerIfNeeded()
     end
@@ -26696,7 +27901,8 @@ SlashCmdList["LEAFDEBUG"] = function(msg)
       local shoutTs = tonumber(timestamp) or 0
       if (bucket <= 0 or shoutTs >= bucket) and DayKeyFromTS(shoutTs) == today then count = count + 1 end
     end
-    Print(string.format("Shoutouts used today: %d / %d", count, SHOUTOUT_MAX_PER_DAY))
+    local maxDaily = LeafVE:GetShoutoutDailyLimitForPlayer(me)
+    Print(string.format("Shoutouts used today: %d / %d", count, maxDaily))
     
   elseif msg == "quest" then
     local me = ShortName(UnitName("player"))
