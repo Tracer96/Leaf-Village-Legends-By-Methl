@@ -21,15 +21,15 @@ end
 LeafVE = LeafVE or {}
 LeafVE.name = "LeafVillageLegends"
 LeafVE.prefix = "LeafVE"
-LeafVE.version = "14.1"
+LeafVE.version = "14.3"
 LeafVE.guildBankOwner = "Methllyy"
 -- Minimum peer version whose synced data is accepted.  Bump this whenever a
 -- version introduces a breaking data-format change so that older clients
 -- cannot corrupt the shared leaderboard / badge data.
-LeafVE.minCompatVersion = "13.0"
+LeafVE.minCompatVersion = "14.3"
 
 -- The latest published version; used to detect when the running addon is outdated.
-local LATEST_VERSION = "14.1"
+local LATEST_VERSION = "14.3"
 
 local SEP = "\31"
 local SECONDS_PER_DAY = 86400
@@ -127,6 +127,35 @@ local SEASON_REWARD_2 = 5
 local SEASON_REWARD_3 = 3
 local SEASON_REWARD_4 = 2
 local SEASON_REWARD_5 = 1
+
+LeafVE.weeklyRecapNoteText = "These are the Leaf Legends. You could be a Grand Shinobi too. Carve your path to greatness with your peers!"
+LeafVE.weeklyRecapRankMessageTemplates = {
+  [1] = {
+    "%s, you led the village this week. %d bonus Leaf Points are yours, Grand Shinobi.",
+    "%s, the summit is yours this week. Claim your %d bonus Leaf Points and wear the crown proudly.",
+    "%s, you stood above the rest this week. Your %d bonus Leaf Points are waiting for you.",
+  },
+  [2] = {
+    "%s, an elite climb. Second place earns you %d bonus Leaf Points this week.",
+    "%s, you were right on the leader's heels. Enjoy your %d bonus Leaf Points for 2nd place.",
+    "%s, the village noticed your grind. Second place and %d bonus Leaf Points are yours.",
+  },
+  [3] = {
+    "%s, a strong finish. Third place brings you %d bonus Leaf Points this week.",
+    "%s, your path was sharp this week. Third place and %d bonus Leaf Points are well earned.",
+    "%s, you carved out a podium finish. Claim your %d bonus Leaf Points for 3rd place.",
+  },
+  [4] = {
+    "%s, you broke into the legends board. Fourth place earns you %d bonus Leaf Points.",
+    "%s, the top five is no small feat. Enjoy your %d bonus Leaf Points for 4th place.",
+    "%s, you stayed in the hunt all week. Fourth place and %d bonus Leaf Points are yours.",
+  },
+  [5] = {
+    "%s, you claimed the final legends spot this week. %d bonus Leaf Points are yours.",
+    "%s, top five secured. Enjoy your %d bonus Leaf Points for holding the line.",
+    "%s, you earned your place among the Leaf Legends. Claim your %d bonus Leaf Points.",
+  },
+}
 
 -- Guild ranks that can access the Admin tab
 local ADMIN_RANKS = { anbu = true, sannin = true, hokage = true }
@@ -1277,6 +1306,8 @@ local function EnsureDB()
   if not LeafVE_DB.attendance then LeafVE_DB.attendance = {} end
   if not LeafVE_DB.guildJoinDate then LeafVE_DB.guildJoinDate = {} end
   if type(LeafVE_DB.weeklyRecap) ~= "table" then LeafVE_DB.weeklyRecap = {} end
+  if type(LeafVE_DB.weeklyRecap.byWeek) ~= "table" then LeafVE_DB.weeklyRecap.byWeek = {} end
+  if type(LeafVE_DB.weeklyRecap.noticeSeenByPlayer) ~= "table" then LeafVE_DB.weeklyRecap.noticeSeenByPlayer = {} end
   if not LeafVE_DB.loginStreaks then LeafVE_DB.loginStreaks = {} end
   if not LeafVE_DB.persistentRoster then LeafVE_DB.persistentRoster = {} end
   if not LeafVE_DB.instanceTracking then LeafVE_DB.instanceTracking = {} end
@@ -1288,6 +1319,7 @@ local function EnsureDB()
   if LeafVE_DB.workOrderLoginAlertAt == nil then LeafVE_DB.workOrderLoginAlertAt = 0 end
   if not LeafVE_DB.workOrderFinalRewardDaily then LeafVE_DB.workOrderFinalRewardDaily = {} end
   if not LeafVE_DB.workOrderFinalRewardClaims then LeafVE_DB.workOrderFinalRewardClaims = {} end
+  if not LeafVE_DB.workOrderFinalRewardCarry then LeafVE_DB.workOrderFinalRewardCarry = {} end
   if not LeafVE_DB.guildieGroupHours then LeafVE_DB.guildieGroupHours = {} end
   if not LeafVE_DB.lboard then LeafVE_DB.lboard = { alltime = {}, weekly = {}, season = {}, updatedAt = {}, weeklyVersion = {} } end
   -- Ensure sub-tables exist (migration: older versions may not have all sub-tables)
@@ -5319,21 +5351,49 @@ function LeafVE:BroadcastGuildBankSnapshot(force, includeBank)
   return snapshot
 end
 
-function LeafVE:ScheduleGuildBankSnapshotUpdate(includeBank, refreshUI)
+function LeafVE:ScheduleIncomingGuildBankSnapshotMerge(refreshUI)
+  if refreshUI then
+    self.pendingGuildBankRemoteRefreshUI = true
+  end
+
+  self:ScheduleDeferred("guild_bank_remote_merge", 0.2, function()
+    local shouldRefreshUI = LeafVE.pendingGuildBankRemoteRefreshUI and true or false
+    LeafVE.pendingGuildBankRemoteRefreshUI = nil
+
+    local cache = LeafVE:GetGuildBankSnapshot()
+    if type(cache) == "table" then
+      RebuildGuildBankSnapshotTotals(cache)
+    end
+    if shouldRefreshUI and LeafVE.UI and LeafVE.UI.RefreshVisibleGuildBankUI then
+      LeafVE.UI:RefreshVisibleGuildBankUI(true)
+    end
+  end)
+end
+
+function LeafVE:ScheduleGuildBankSnapshotUpdate(includeBank, refreshUI, localOnly)
   if includeBank then
     self.pendingGuildBankIncludeBank = true
   end
   if refreshUI then
     self.pendingGuildBankRefreshUI = true
   end
+  if not localOnly then
+    self.pendingGuildBankBroadcast = true
+  end
 
   self:ScheduleDeferred("guild_bank_snapshot", GUILD_BANK_REFRESH_DEBOUNCE, function()
     local shouldIncludeBank = LeafVE.pendingGuildBankIncludeBank and true or false
     local shouldRefreshUI = LeafVE.pendingGuildBankRefreshUI and true or false
+    local shouldBroadcast = LeafVE.pendingGuildBankBroadcast and true or false
     LeafVE.pendingGuildBankIncludeBank = nil
     LeafVE.pendingGuildBankRefreshUI = nil
+    LeafVE.pendingGuildBankBroadcast = nil
 
-    LeafVE:BroadcastGuildBankSnapshot(true, shouldIncludeBank)
+    if shouldBroadcast then
+      LeafVE:BroadcastGuildBankSnapshot(true, shouldIncludeBank)
+    else
+      LeafVE:CaptureAndCacheGuildBankSnapshot(shouldIncludeBank)
+    end
     if shouldRefreshUI and LeafVE.UI and LeafVE.UI.RefreshVisibleGuildBankUI then
       LeafVE.UI:RefreshVisibleGuildBankUI(true)
     end
@@ -5343,7 +5403,11 @@ end
 function LeafVE:RequestGuildBankSnapshot(force)
   local me = ShortName(UnitName("player"))
   if me and self:IsGuildBankOwner(me) then
-    return self:BroadcastGuildBankSnapshot(force)
+    local includeBank = self:IsGuildBankBankFrameVisible()
+    if force then
+      return self:BroadcastGuildBankSnapshot(true, includeBank)
+    end
+    return self:CaptureAndCacheGuildBankSnapshot(includeBank)
   end
   if not InGuild() then
     return nil
@@ -5954,24 +6018,54 @@ function LeafVE:GetGuildBankRequestSignature()
   return tostring(count) .. ":" .. tostring(totalQuantity) .. ":" .. tostring(latest)
 end
 
+function LeafVE:GetGuildBankReservedRequestMap()
+  local signature = self:GetGuildBankRequestSignature()
+  if self.guildBankReservedRequestCacheKey == signature and type(self.guildBankReservedRequestCache) == "table" then
+    return self.guildBankReservedRequestCache
+  end
+
+  local reservedByItem = {}
+  local weekStart = WeekStartTS(Now())
+  for _, request in pairs(self:GetGuildBankRequestsDB()) do
+    if type(request) == "table"
+      and NormalizeGuildBankRequestStatus(request.status) == "open"
+      and (tonumber(request.createdAt) or 0) >= weekStart then
+      local itemId = tonumber(request.itemId)
+      if itemId and itemId > 0 then
+        reservedByItem[itemId] = (reservedByItem[itemId] or 0) + (tonumber(request.quantity) or 0)
+      end
+    end
+  end
+
+  self.guildBankReservedRequestCacheKey = signature
+  self.guildBankReservedRequestCache = reservedByItem
+  return reservedByItem
+end
+
 function LeafVE:GetGuildBankReservedRequestQuantity(itemId, excludeRequesterName)
   itemId = tonumber(itemId)
   if not itemId then return 0 end
 
-  local reserved = 0
-  local weekStart = WeekStartTS(Now())
+  local reservedMap = self:GetGuildBankReservedRequestMap()
+  local reserved = tonumber(reservedMap[itemId]) or 0
   local excludeName = ShortName(excludeRequesterName)
-  local excludeLower = excludeName and Lower(excludeName) or nil
+  if not excludeName then
+    return reserved
+  end
+
+  local weekStart = WeekStartTS(Now())
+  local excludeLower = Lower(excludeName)
   for _, request in pairs(self:GetGuildBankRequestsDB()) do
     if type(request) == "table"
       and request.itemId == itemId
       and NormalizeGuildBankRequestStatus(request.status) == "open"
-      and (tonumber(request.createdAt) or 0) >= weekStart then
-      local requesterLower = Lower(request.requester or "")
-      if not excludeLower or requesterLower ~= excludeLower then
-        reserved = reserved + (tonumber(request.quantity) or 0)
-      end
+      and (tonumber(request.createdAt) or 0) >= weekStart
+      and Lower(request.requester or "") == excludeLower then
+      reserved = reserved - (tonumber(request.quantity) or 0)
     end
+  end
+  if reserved < 0 then
+    reserved = 0
   end
   return reserved
 end
@@ -8133,11 +8227,13 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
   end
 
   if string.sub(message, 1, 10) == "WORKORDER:" then
+    if not IsSenderCompatible(sender) then return end
     self:HandleIncomingWorkOrderMessage(string.sub(message, 11), sender, nil)
     return
   end
 
   if string.sub(message, 1, 14) == "WORKORDERSYNC:" then
+    if not IsSenderCompatible(sender) then return end
     self:HandleIncomingWorkOrderMessage(string.sub(message, 15), sender, true)
     return
   end
@@ -8239,9 +8335,7 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
       cache.uniqueItems = uniqueItems
       cache.goldCopper = goldCopper
     end
-    if LeafVE.UI and LeafVE.UI.RefreshVisibleGuildBankUI then
-      LeafVE.UI:RefreshVisibleGuildBankUI(true)
-    end
+    self:ScheduleIncomingGuildBankSnapshotMerge(true)
     return
   end
 
@@ -8306,11 +8400,8 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
           end
         end
       end
-      RebuildGuildBankSnapshotTotals(cache)
     end
-    if LeafVE.UI and LeafVE.UI.RefreshVisibleGuildBankUI then
-      LeafVE.UI:RefreshVisibleGuildBankUI(true)
-    end
+    self:ScheduleIncomingGuildBankSnapshotMerge(true)
     return
   end
 
@@ -8359,11 +8450,8 @@ function LeafVE:OnAddonMessage(prefix, message, channel, sender)
           end
         end
       end
-      RebuildGuildBankSnapshotTotals(cache)
     end
-    if LeafVE.UI and LeafVE.UI.RefreshVisibleGuildBankUI then
-      LeafVE.UI:RefreshVisibleGuildBankUI(true)
-    end
+    self:ScheduleIncomingGuildBankSnapshotMerge(true)
     return
   end
 
@@ -9564,6 +9652,167 @@ function LeafVE:GetWeeklyLeaderboardLeadersForWeek(wk)
   return leaders
 end
 
+function LeafVE:GetWeeklyRecapRewards()
+  EnsureDB()
+  return {
+    tonumber(LeafVE_DB.options and LeafVE_DB.options.seasonReward1) or SEASON_REWARD_1,
+    tonumber(LeafVE_DB.options and LeafVE_DB.options.seasonReward2) or SEASON_REWARD_2,
+    tonumber(LeafVE_DB.options and LeafVE_DB.options.seasonReward3) or SEASON_REWARD_3,
+    tonumber(LeafVE_DB.options and LeafVE_DB.options.seasonReward4) or SEASON_REWARD_4,
+    tonumber(LeafVE_DB.options and LeafVE_DB.options.seasonReward5) or SEASON_REWARD_5,
+  }
+end
+
+function GetWeeklyRecapMessageVariantIndex(seedText, variantCount)
+  local count = tonumber(variantCount) or 0
+  if count < 2 then
+    return 1
+  end
+
+  local hash = 0
+  local seed = tostring(seedText or "")
+  for i = 1, string.len(seed) do
+    hash = math.mod((hash * 31) + string.byte(seed, i), 2147483647)
+  end
+  return math.mod(hash, count) + 1
+end
+
+function LeafVE:BuildWeeklyRecapPersonalMessage(entry, weekKey)
+  if type(entry) ~= "table" then
+    return ""
+  end
+
+  local rank = tonumber(entry.rank) or 0
+  local templates = LeafVE.weeklyRecapRankMessageTemplates and LeafVE.weeklyRecapRankMessageTemplates[rank]
+  if type(templates) ~= "table" or table.getn(templates) < 1 then
+    return ""
+  end
+
+  local variantIndex = GetWeeklyRecapMessageVariantIndex(
+    tostring(weekKey or "") .. ":" .. tostring(entry.name or "") .. ":" .. tostring(rank),
+    table.getn(templates)
+  )
+  local template = templates[variantIndex] or templates[1] or ""
+  if template == "" then
+    return ""
+  end
+  return string.format(template, tostring(entry.name or "Shinobi"), tonumber(entry.reward) or 0)
+end
+
+function LeafVE:GetWeeklyRecapEntryForPlayer(snapshot, playerName)
+  playerName = ShortName(playerName)
+  if not playerName or type(snapshot) ~= "table" or type(snapshot.entries) ~= "table" then
+    return nil
+  end
+
+  for i = 1, table.getn(snapshot.entries) do
+    local entry = snapshot.entries[i]
+    if type(entry) == "table" and SamePlayerName(entry.name, playerName) then
+      return entry
+    end
+  end
+  return nil
+end
+
+function LeafVE:BuildWeeklyRecapPopupMessage(playerName, snapshot)
+  playerName = ShortName(playerName)
+  if type(snapshot) ~= "table" or type(snapshot.entries) ~= "table" or table.getn(snapshot.entries) < 1 then
+    return ""
+  end
+
+  local lines = {
+    "|cFF2DD35CLeaf Legends Weekly Recap|r",
+    "Last week's winner: |cFFFFD700" .. tostring(snapshot.name or "Unknown") .. "|r with |cFFFFD700" .. tostring(snapshot.total or 0) .. " LP|r.",
+    "Top rewards:",
+  }
+
+  for i = 1, table.getn(snapshot.entries) do
+    local entry = snapshot.entries[i]
+    if type(entry) == "table" then
+      table.insert(
+        lines,
+        string.format("%d. %s - %d LP - Prize: %d", tonumber(entry.rank) or i, tostring(entry.name or "Unknown"), tonumber(entry.total) or 0, tonumber(entry.reward) or 0)
+      )
+    end
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, tostring(LeafVE.weeklyRecapNoteText or "These are the Leaf Legends."))
+
+  local playerEntry = self:GetWeeklyRecapEntryForPlayer(snapshot, playerName)
+  if playerEntry and Trim(playerEntry.message or "") ~= "" then
+    table.insert(lines, "")
+    table.insert(lines, "|cFFFFD700Your Weekly Message|r")
+    table.insert(lines, tostring(playerEntry.message))
+  end
+
+  return table.concat(lines, "\n")
+end
+
+function LeafVE:BuildWeeklyTopShinobisText(snapshot)
+  if type(snapshot) ~= "table" then
+    return "|cFF888888No data available|r"
+  end
+
+  local rankLabels = {"|cFFFFD7001st|r", "|cFFC0C0C02nd|r", "|cFFCD7F323rd|r", "|cFFFFFFFF4th|r", "|cFFFFFFFF5th|r"}
+
+  local entries = type(snapshot.entries) == "table" and snapshot.entries or nil
+  if not entries or table.getn(entries) < 1 then
+    if snapshot.name and (tonumber(snapshot.total) or 0) > 0 then
+      return string.format("%s %s - |cFFFFD700%d pts|r", rankLabels[1], tostring(snapshot.name), tonumber(snapshot.total) or 0)
+    end
+    return "|cFF888888No data available|r"
+  end
+
+  local lines = {}
+  for i = 1, math.min(5, table.getn(entries)) do
+    local entry = entries[i]
+    if type(entry) == "table" and entry.name and (tonumber(entry.total) or 0) > 0 then
+      table.insert(lines, string.format("%s %s - |cFFFFD700%d pts|r", rankLabels[i] or tostring(i), tostring(entry.name), tonumber(entry.total) or 0))
+    end
+  end
+
+  if table.getn(lines) < 1 then
+    return "|cFF888888No data available|r"
+  end
+  return table.concat(lines, "\n")
+end
+
+function LeafVE:MaybeShowWeeklyRecapPopup(force)
+  EnsureDB()
+  local me = ShortName(UnitName("player"))
+  if not me then
+    return false
+  end
+
+  local currentWeekKey = WeekKey()
+  local previousWeekKey = PreviousWeekKey()
+  local recap = type(LeafVE_DB.weeklyRecap) == "table" and LeafVE_DB.weeklyRecap or {}
+  if type(recap.noticeSeenByPlayer) ~= "table" then
+    recap.noticeSeenByPlayer = {}
+  end
+
+  if not force and tostring(recap.noticeSeenByPlayer[Lower(me)] or "") == currentWeekKey then
+    return false
+  end
+
+  local snapshot = self:GetCachedWeeklyWinnerSnapshot(previousWeekKey)
+  if type(snapshot) ~= "table" or type(snapshot.entries) ~= "table" or table.getn(snapshot.entries) < 1 then
+    snapshot = self:SnapshotWeeklyLeaderboardWinner(previousWeekKey, Now(), true)
+  end
+  if type(snapshot) ~= "table" or type(snapshot.entries) ~= "table" or table.getn(snapshot.entries) < 1 then
+    return false
+  end
+
+  recap.noticeSeenByPlayer[Lower(me)] = currentWeekKey
+  local message = self:BuildWeeklyRecapPopupMessage(me, snapshot)
+  if Trim(message or "") == "" then
+    return false
+  end
+  self:ShowInfoPopup(message)
+  return true
+end
+
 function LeafVE:SnapshotWeeklyLeaderboardWinner(wk, capturedAt, forceReplace)
   EnsureDB()
   wk = tostring(wk or WeekKey())
@@ -9578,7 +9827,10 @@ function LeafVE:SnapshotWeeklyLeaderboardWinner(wk, capturedAt, forceReplace)
   end
 
   local existing = recap.byWeek[wk]
-  if type(existing) == "table" and not forceReplace then
+  if type(existing) == "table"
+    and type(existing.entries) == "table"
+    and table.getn(existing.entries) > 0
+    and not forceReplace then
     local lastWinnerWeek = tonumber(recap.lastWinnerWeek) or 0
     if (tonumber(wk) or 0) >= lastWinnerWeek then
       recap.lastWinner = existing
@@ -9593,6 +9845,23 @@ function LeafVE:SnapshotWeeklyLeaderboardWinner(wk, capturedAt, forceReplace)
     return nil
   end
 
+  local rewards = self:GetWeeklyRecapRewards()
+  local entries = {}
+  for i = 1, math.min(5, table.getn(leaders)) do
+    local leader = leaders[i]
+    local entry = {
+      rank = i,
+      name = leader.name,
+      total = leader.total,
+      L = leader.L or 0,
+      G = leader.G or 0,
+      S = leader.S or 0,
+      reward = tonumber(rewards[i]) or 0,
+    }
+    entry.message = self:BuildWeeklyRecapPersonalMessage(entry, wk)
+    entries[i] = entry
+  end
+
   local snapshot = {
     weekKey = wk,
     name = winner.name,
@@ -9600,6 +9869,8 @@ function LeafVE:SnapshotWeeklyLeaderboardWinner(wk, capturedAt, forceReplace)
     L = winner.L or 0,
     G = winner.G or 0,
     S = winner.S or 0,
+    reward = tonumber(rewards[1]) or 0,
+    entries = entries,
     capturedAt = tonumber(capturedAt) or Now(),
   }
 
@@ -13019,7 +13290,8 @@ function ExtractWorkOrderRecipeName(token)
 end
 
 function ExtractWorkOrderQuality(token)
-  local quality = tonumber(string.match(tostring(token or ""), "=q(%d+)="))
+  local matchedQuality = string.match(tostring(token or ""), "=q(%d+)=")
+  local quality = matchedQuality and tonumber(matchedQuality) or nil
   return quality or 1
 end
 
@@ -13153,6 +13425,132 @@ function FormatWorkOrderTipInputValue(tipCopper)
   return string.gsub(gold, "%.?0+$", "")
 end
 
+function ClampWorkOrderQuantity(value)
+  local quantity = math.floor(tonumber(value) or 1)
+  if quantity < 1 then quantity = 1 end
+  if quantity > 99 then quantity = 99 end
+  return quantity
+end
+
+function GetWorkOrderRequestedQuantity(order)
+  local requestedQuantity = ClampWorkOrderQuantity(order and (order.requestedQuantity or order.quantity) or 1)
+  local activeQuantity = math.floor(tonumber(order and order.quantity) or requestedQuantity)
+  if activeQuantity < 0 then activeQuantity = 0 end
+  if activeQuantity > 99 then activeQuantity = 99 end
+  if requestedQuantity < activeQuantity then
+    requestedQuantity = activeQuantity
+  end
+  return requestedQuantity
+end
+
+function GetWorkOrderCompletedQuantity(order)
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  local completedQuantity = math.floor(tonumber(order and order.completedQuantity) or 0)
+  if completedQuantity < 0 then completedQuantity = 0 end
+  if completedQuantity > requestedQuantity then
+    completedQuantity = requestedQuantity
+  end
+  return completedQuantity
+end
+
+function GetWorkOrderParentId(order)
+  local parentId = Trim(tostring(order and order.parentOrderId or ""))
+  if parentId == "" then
+    return nil
+  end
+  return parentId
+end
+
+function IsWorkOrderPartialClaim(order)
+  return GetWorkOrderParentId(order) ~= nil
+end
+
+function GetWorkOrderFulfilledQuantity(order)
+  local status = NormalizeWorkOrderStatus(order and order.status)
+  local completedQuantity = GetWorkOrderCompletedQuantity(order)
+  if completedQuantity > 0 then
+    return completedQuantity
+  end
+  if status == "completed" or status == "finalized" then
+    local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+    local quantity = ClampWorkOrderQuantity(order and order.quantity or requestedQuantity)
+    if quantity > requestedQuantity then
+      quantity = requestedQuantity
+    end
+    return quantity
+  end
+  return 0
+end
+
+function GetWorkOrderRemainingQuantity(order)
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  local fulfilledQuantity = GetWorkOrderFulfilledQuantity(order)
+  local remainingQuantity = requestedQuantity - fulfilledQuantity
+  if remainingQuantity < 0 then
+    remainingQuantity = 0
+  end
+  return remainingQuantity
+end
+
+function GetWorkOrderCompletionRatio(order)
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  if requestedQuantity < 1 then
+    return 1
+  end
+  local fulfilledQuantity = GetWorkOrderFulfilledQuantity(order)
+  if fulfilledQuantity < 1 then
+    return 1
+  end
+  return math.min(1, fulfilledQuantity / requestedQuantity)
+end
+
+function GetWorkOrderQuantitySummary(order)
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  local quantity = math.floor(tonumber(order and order.quantity) or requestedQuantity)
+  if quantity < 0 then quantity = 0 end
+  if quantity > 99 then quantity = 99 end
+  local status = NormalizeWorkOrderStatus(order and order.status)
+  if IsWorkOrderPartialClaim(order) and requestedQuantity > quantity then
+    return "Qty " .. tostring(quantity) .. " / " .. tostring(requestedQuantity)
+  end
+  local fulfilledQuantity = GetWorkOrderFulfilledQuantity(order)
+  if status == "open" and requestedQuantity > quantity then
+    return "Qty " .. tostring(quantity) .. " remaining"
+  end
+  if (status == "completed" or status == "finalized") and fulfilledQuantity > 0 and requestedQuantity > fulfilledQuantity then
+    return "Qty " .. tostring(fulfilledQuantity) .. " / " .. tostring(requestedQuantity)
+  end
+  return "Qty " .. tostring(quantity)
+end
+
+function GetWorkOrderPartialProgressText(order)
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  local fulfilledQuantity = GetWorkOrderFulfilledQuantity(order)
+  if fulfilledQuantity > 0 and requestedQuantity > fulfilledQuantity then
+    return "Completed " .. tostring(fulfilledQuantity) .. " / " .. tostring(requestedQuantity) .. "  |  " .. tostring(requestedQuantity - fulfilledQuantity) .. " remaining"
+  end
+  return nil
+end
+
+function SplitWorkOrderTipByQuantity(tipCopper, fulfilledQuantity, requestedQuantity)
+  tipCopper = ClampWorkOrderTipCopper(tipCopper)
+  requestedQuantity = ClampWorkOrderQuantity(requestedQuantity)
+  fulfilledQuantity = ClampWorkOrderQuantity(fulfilledQuantity)
+  if fulfilledQuantity > requestedQuantity then
+    fulfilledQuantity = requestedQuantity
+  end
+  if tipCopper < 1 or requestedQuantity < 1 then
+    return 0, 0
+  end
+
+  local deliveredTip = math.floor((tipCopper * fulfilledQuantity) / requestedQuantity)
+  local remainingTip = tipCopper - deliveredTip
+  if remainingTip < 0 then
+    remainingTip = 0
+  end
+  return deliveredTip, remainingTip
+end
+
 function NormalizeWorkOrderMatsMode(value)
   local mode = Lower(Trim(tostring(value or "")))
   if mode == "your" or mode == "yours" or mode == "yourmats" or mode == "crafter" or mode == "craftermats" then
@@ -13191,24 +13589,24 @@ end
 
 function GetWorkOrderRequesterInstructionText(mode, profession)
   if LeafVE and LeafVE:IsGatheringWorkOrderProfession(profession) then
-    return "You have requested gathered materials from guildmates. Adding a tip is a great way to reward the gatherer for their time. Please click Verify once the requested materials are fully delivered so the gatherer receives Leaf Points."
+    return "You have requested gathered materials from guildmates. Adding a tip is a great way to reward the gatherer for their time. Please click Verify once the delivered materials are received so the gatherer receives Leaf Points. Partial deliveries can be verified separately while the remaining quantity stays live."
   end
   if NormalizeWorkOrderMatsMode(mode) == "crafter" then
-    return "You have requested a work order utilizing the crafter's materials. It's common courtesy to add a tip to cover the cost of the materials, or if they already have their own materials, the crafter will communicate that once the order is picked up. Please click Verify once an order is 100% complete to reward the crafter Leaf Points."
+    return "You have requested a work order utilizing the crafter's materials. It's common courtesy to add a tip to cover the cost of the materials, or if they already have their own materials, the crafter will communicate that once the order is picked up. Please click Verify once the delivered items are received to reward the crafter Leaf Points. Partial deliveries can be verified separately while the remaining quantity stays live."
   end
 
-  return "You have requested a work order utilizing your own mats. When it is picked up, you'll need to send the mats to the crafter via mail or trade so they can fulfill your order. Please click Verify once an order is 100% complete to reward the crafter Leaf Points."
+  return "You have requested a work order utilizing your own mats. When it is picked up, you'll need to send the mats to the crafter via mail or trade so they can fulfill your order. Please click Verify once the delivered items are received to reward the crafter Leaf Points. Partial deliveries can be verified separately while the remaining quantity stays live."
 end
 
 function GetWorkOrderFulfillerInstructionText(mode, profession)
   if LeafVE and LeafVE:IsGatheringWorkOrderProfession(profession) then
-    return "You have selected to fulfill a gathering request. Gather the requested materials and deliver them to the requester by trade or mail. Please select Complete once the full order has been delivered so the requester can Verify and reward you Leaf Points."
+    return "You have selected to fulfill a gathering request. Gather the requested materials and deliver them to the requester by trade or mail. You can reserve part of the request if needed, and the remaining quantity will stay live for other guildmates. Please select Complete once you have delivered the quantity you reserved."
   end
   if NormalizeWorkOrderMatsMode(mode) == "crafter" then
-    return "You have selected to fulfill a work order using your own materials. It's common courtesy for the requester to add a tip to cover that cost. If not, communicate the desired outcome with the requester via in-game chat or mail. Please select Complete once you 100% fulfill the order so the requester can Verify and reward you Leaf Points."
+    return "You have selected to fulfill a work order using your own materials. It's common courtesy for the requester to add a tip to cover that cost. If not, communicate the desired outcome with the requester via in-game chat or mail. You can reserve part of the request if needed, and the remaining quantity will stay live for other guildmates. Please select Complete once you have delivered the quantity you reserved."
   end
 
-  return "You have selected to fulfill an order using the requester's materials. If not already arranged, please send an in-game chat or a letter in the mail requesting the materials to complete this order. Please select Complete once you 100% fulfill the order so the requester can Verify and reward you Leaf Points."
+  return "You have selected to fulfill an order using the requester's materials. If not already arranged, please send an in-game chat or a letter in the mail requesting the materials to complete this order. You can reserve part of the request if needed, and the remaining quantity will stay live for other guildmates. Please select Complete once you have delivered the quantity you reserved."
 end
 
 StaticPopupDialogs["LEAFVE_WORKORDER_CONFIRM"] = {
@@ -13231,6 +13629,91 @@ StaticPopupDialogs["LEAFVE_WORKORDER_CONFIRM"] = {
     end
     if type(data) == "table" and type(data.onCancel) == "function" then
       data.onCancel()
+    end
+  end,
+  timeout = 0,
+  whileDead = 1,
+  hideOnEscape = 1,
+}
+
+StaticPopupDialogs["LEAFVE_WORKORDER_QUANTITY"] = {
+  text = "%s",
+  button1 = "Complete",
+  button2 = CANCEL or "Cancel",
+  hasEditBox = 1,
+  maxLetters = 2,
+  OnShow = function(dialog, data)
+    data = data or (dialog and dialog.data)
+    if dialog and dialog.editBox then
+      local maxQuantity = ClampWorkOrderQuantity(type(data) == "table" and data.maxQuantity or 1)
+      local defaultQuantity = ClampWorkOrderQuantity(type(data) == "table" and data.defaultQuantity or maxQuantity)
+      if defaultQuantity > maxQuantity then
+        defaultQuantity = maxQuantity
+      end
+      dialog.editBox:SetText(tostring(defaultQuantity))
+      if dialog.editBox.SetFocus then
+        dialog.editBox:SetFocus()
+      end
+      if dialog.editBox.HighlightText then
+        dialog.editBox:HighlightText()
+      end
+    end
+    if dialog and dialog.button1 then
+      dialog.button1:SetText(type(data) == "table" and (data.confirmLabel or "Complete") or "Complete")
+      dialog.button1:Enable(1)
+    end
+  end,
+  OnAccept = function(dialog, data)
+    local popup = dialog
+    if popup and not popup.editBox and popup.GetParent then
+      popup = popup:GetParent()
+    end
+    if (not popup or not popup.editBox) and this then
+      popup = this.GetParent and this:GetParent() or popup
+    end
+    data = data or (dialog and dialog.data)
+    if not data and this then
+      data = this.data or (this.GetParent and this:GetParent() and this:GetParent().data)
+    end
+    local quantityText = popup and popup.editBox and popup.editBox:GetText() or ""
+    local quantity = math.floor(tonumber(Trim(quantityText or "")) or 0)
+    if type(data) == "table" and type(data.onAccept) == "function" then
+      data.onAccept(quantity)
+    end
+  end,
+  OnCancel = function(dialog, data)
+    data = data or (dialog and dialog.data)
+    if not data and this then
+      data = this.data or (this.GetParent and this:GetParent() and this:GetParent().data)
+    end
+    if type(data) == "table" and type(data.onCancel) == "function" then
+      data.onCancel()
+    end
+  end,
+  EditBoxOnEnterPressed = function(editBox)
+    local dialog = editBox and editBox.GetParent and editBox:GetParent() or nil
+    if dialog and dialog.button1 and dialog.button1.Click then
+      dialog.button1:Click()
+    end
+  end,
+  EditBoxOnEscapePressed = function(editBox)
+    local dialog = editBox and editBox.GetParent and editBox:GetParent() or nil
+    if dialog and dialog.Hide then
+      dialog:Hide()
+    end
+  end,
+  EditBoxOnTextChanged = function(editBox)
+    local dialog = editBox and editBox.GetParent and editBox:GetParent() or nil
+    if not dialog or not dialog.button1 then
+      return
+    end
+    local data = dialog.data
+    local maxQuantity = ClampWorkOrderQuantity(type(data) == "table" and data.maxQuantity or 1)
+    local quantity = math.floor(tonumber(Trim(editBox:GetText() or "")) or 0)
+    if quantity >= 1 and quantity <= maxQuantity then
+      dialog.button1:Enable(1)
+    else
+      dialog.button1:Disable()
     end
   end,
   timeout = 0,
@@ -13267,6 +13750,29 @@ function LeafVE:ShowWorkOrderInstructionPopup(message, confirmLabel, onAccept, o
   if dialog and dialog.button2 then
     dialog.button2.data = dialog.data
     dialog.button2:SetText(CANCEL or "Cancel")
+  end
+end
+
+function LeafVE:ShowWorkOrderQuantityPopup(order, onAccept, onCancel, confirmLabel, promptText)
+  local availableQuantity = ClampWorkOrderQuantity(order and order.quantity or 1)
+  local popupText = promptText or ("How many units do you want to reserve from this order? Enter a quantity between 1 and " .. tostring(availableQuantity) .. ".")
+  popupText = string.gsub(popupText, "%%", "%%%%")
+
+  local dialog = StaticPopup_Show("LEAFVE_WORKORDER_QUANTITY", popupText, nil, {
+    maxQuantity = availableQuantity,
+    defaultQuantity = availableQuantity,
+    confirmLabel = confirmLabel or "Complete",
+    onAccept = onAccept,
+    onCancel = onCancel,
+  })
+  if dialog and dialog.button1 then
+    dialog.button1.data = dialog.data
+  end
+  if dialog and dialog.button2 then
+    dialog.button2.data = dialog.data
+  end
+  if dialog and dialog.editBox then
+    dialog.editBox.data = dialog.data
   end
 end
 
@@ -14455,6 +14961,13 @@ end
 
 function LeafVE:BuildWorkOrderPickupLine(order, actorName)
   local actor = ShortName(actorName) or self:GetStoredWorkOrderFulfiller(order) or "Someone"
+  if IsWorkOrderPartialClaim(order) and GetWorkOrderRequestedQuantity(order) > ClampWorkOrderQuantity(order and order.quantity or 1) then
+    return tostring(actor) ..
+      " reserved " .. tostring(order and order.recipeName or "an order") ..
+      " (" .. tostring(ClampWorkOrderQuantity(order and order.quantity or 1)) .. "/" .. tostring(GetWorkOrderRequestedQuantity(order)) .. ")" ..
+      " for " .. tostring(order and order.requester or "Unknown") ..
+      ". Ready within 48 hours."
+  end
   return tostring(actor) ..
     " picked up " .. tostring(order and order.recipeName or "an order") ..
     " for " .. tostring(order and order.requester or "Unknown") ..
@@ -14463,6 +14976,14 @@ end
 
 function LeafVE:BuildWorkOrderCompletionLine(order, actorName)
   local actor = ShortName(actorName) or self:GetStoredWorkOrderFulfiller(order) or "Someone"
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  local fulfilledQuantity = GetWorkOrderFulfilledQuantity(order)
+  if fulfilledQuantity > 0 and requestedQuantity > fulfilledQuantity then
+    return tostring(actor) ..
+      " completed a partial fill of " .. tostring(order and order.recipeName or "an order") ..
+      " (" .. tostring(fulfilledQuantity) .. "/" .. tostring(requestedQuantity) .. ")" ..
+      " for " .. tostring(order and order.requester or "Unknown") .. "."
+  end
   return tostring(actor) ..
     " completed " .. tostring(order and order.recipeName or "an order") ..
     " for " .. tostring(order and order.requester or "Unknown") .. "."
@@ -14470,9 +14991,21 @@ end
 
 function LeafVE:BuildWorkOrderRevertLine(order, actorName)
   local actor = ShortName(actorName) or ShortName(order and order.requester) or "Someone"
+  if IsWorkOrderPartialClaim(order) then
+    return tostring(actor) ..
+      " returned " .. tostring(order and order.recipeName or "an order") ..
+      " (" .. tostring(ClampWorkOrderQuantity(order and order.quantity or 1)) .. "/" .. tostring(GetWorkOrderRequestedQuantity(order)) .. ")" ..
+      " to the live board."
+  end
   local fulfiller = self:GetStoredWorkOrderFulfiller(order) or "the fulfiller"
+  local requestedQuantity = GetWorkOrderRequestedQuantity(order)
+  local fulfilledQuantity = GetWorkOrderFulfilledQuantity(order)
+  local quantityNote = ""
+  if fulfilledQuantity > 0 and requestedQuantity > fulfilledQuantity then
+    quantityNote = " (" .. tostring(fulfilledQuantity) .. "/" .. tostring(requestedQuantity) .. " was marked complete)"
+  end
   return tostring(actor) ..
-    " sent " .. tostring(order and order.recipeName or "an order") ..
+    " sent " .. tostring(order and order.recipeName or "an order") .. quantityNote ..
     " back to " .. tostring(fulfiller) ..
     ". Ready within 48 hours."
 end
@@ -14507,14 +15040,23 @@ function LeafVE:ApplyWorkOrderFinalReward(order)
     return 0
   end
 
-  local reward = WORK_ORDER_FINAL_REWARD_POINTS
+  local carry = tonumber(LeafVE_DB.workOrderFinalRewardCarry[me]) or 0
+  local rewardFloat = (WORK_ORDER_FINAL_REWARD_POINTS * GetWorkOrderCompletionRatio(order)) + carry
+  local rewardWhole = math.floor(rewardFloat)
+  local reward = rewardWhole
   if reward > remaining then
     reward = remaining
+  end
+  LeafVE_DB.workOrderFinalRewardCarry[me] = rewardFloat - rewardWhole
+  if reward < 1 then
+    return 0
   end
 
   local awarded = self:AddPoints(me, "G", reward, true)
   if not awarded or awarded <= 0 then
-    Print("|cFFFFAA00Work Order reward could not be added because your daily point cap was reached.|r")
+    if reward > 0 then
+      Print("|cFFFFAA00Work Order reward could not be added because your daily point cap was reached.|r")
+    end
     return 0
   end
 
@@ -14523,6 +15065,146 @@ function LeafVE:ApplyWorkOrderFinalReward(order)
   self:BroadcastLeaderboardData()
   Print("|cFF88CCFFWork Order|r Verified by " .. tostring(order.requester or "Unknown") .. ". +" .. tostring(awarded) .. " G awarded.")
   return awarded
+end
+
+function LeafVE:GenerateWorkOrderId(requesterName, createdAt)
+  requesterName = ShortName(requesterName) or "unknown"
+  createdAt = tonumber(createdAt) or Now()
+  self.workOrderSerial = (self.workOrderSerial or 0) + 1
+  return Lower(requesterName) .. "-" .. tostring(createdAt) .. "-" .. tostring(self.workOrderSerial)
+end
+
+function LeafVE:CreateWorkOrderPartialClaim(rootOrder, claimedQuantity, fulfillerName, updatedAt)
+  EnsureDB()
+  if type(rootOrder) ~= "table" then
+    return nil, "Order not found."
+  end
+  if IsWorkOrderPartialClaim(rootOrder) then
+    return nil, "Partial claims cannot be claimed again."
+  end
+
+  local requester = ShortName(rootOrder.requester)
+  local fulfiller = ShortName(fulfillerName)
+  if not requester or not fulfiller then
+    return nil, "Player name could not be determined."
+  end
+
+  local availableQuantity = ClampWorkOrderQuantity(rootOrder.quantity or 1)
+  claimedQuantity = ClampWorkOrderQuantity(claimedQuantity or availableQuantity)
+  if claimedQuantity > availableQuantity then
+    return nil, "Enter a quantity between 1 and " .. tostring(availableQuantity) .. "."
+  end
+
+  updatedAt = tonumber(updatedAt) or Now()
+  local originalRequestedQuantity = GetWorkOrderRequestedQuantity(rootOrder)
+  local claimedTipCopper, remainingTipCopper = SplitWorkOrderTipByQuantity(rootOrder.tipCopper, claimedQuantity, availableQuantity)
+
+  rootOrder.quantity = availableQuantity - claimedQuantity
+  rootOrder.requestedQuantity = originalRequestedQuantity
+  rootOrder.completedQuantity = 0
+  rootOrder.tipCopper = remainingTipCopper
+  rootOrder.updatedAt = updatedAt
+  rootOrder.claimExpiresAt = 0
+  rootOrder.status = rootOrder.quantity > 0 and "open" or "cancelled"
+  self:StoreWorkOrderRecord(rootOrder)
+  self:BroadcastWorkOrder(rootOrder)
+
+  local childUpdatedAt = updatedAt + 1
+  local partialOrder = {
+    id = self:GenerateWorkOrderId(requester, childUpdatedAt),
+    parentOrderId = rootOrder.id,
+    requester = requester,
+    fulfiller = fulfiller,
+    crafter = fulfiller,
+    createdAt = tonumber(rootOrder.createdAt) or childUpdatedAt,
+    updatedAt = childUpdatedAt,
+    claimExpiresAt = childUpdatedAt + (48 * SECONDS_PER_HOUR),
+    completedAt = 0,
+    profession = rootOrder.profession,
+    recipeName = rootOrder.recipeName,
+    itemId = rootOrder.itemId,
+    spellId = rootOrder.spellId,
+    quantity = claimedQuantity,
+    requestedQuantity = originalRequestedQuantity,
+    completedQuantity = 0,
+    tipCopper = claimedTipCopper,
+    matsMode = NormalizeWorkOrderMatsMode(rootOrder.matsMode),
+    icon = rootOrder.icon,
+    status = "pending",
+  }
+
+  local stored = self:StoreWorkOrderRecord(partialOrder)
+  if stored then
+    self:BroadcastWorkOrder(stored)
+  end
+  return stored
+end
+
+function LeafVE:RestoreWorkOrderPartialQuantity(partialOrder, updatedAt)
+  EnsureDB()
+  if not IsWorkOrderPartialClaim(partialOrder) then
+    return nil
+  end
+
+  local rootId = GetWorkOrderParentId(partialOrder)
+  local rootOrder = rootId and LeafVE_GlobalDB.workOrders and LeafVE_GlobalDB.workOrders[rootId] or nil
+  if type(rootOrder) ~= "table" then
+    return nil
+  end
+
+  updatedAt = tonumber(updatedAt) or Now()
+  rootOrder.quantity = ClampWorkOrderQuantity((tonumber(rootOrder.quantity) or 0) + ClampWorkOrderQuantity(partialOrder.quantity or 1))
+  rootOrder.requestedQuantity = math.max(GetWorkOrderRequestedQuantity(rootOrder), GetWorkOrderRequestedQuantity(partialOrder))
+  rootOrder.completedQuantity = 0
+  rootOrder.tipCopper = ClampWorkOrderTipCopper((tonumber(rootOrder.tipCopper) or 0) + ClampWorkOrderTipCopper(partialOrder.tipCopper))
+  rootOrder.updatedAt = updatedAt
+  rootOrder.status = "open"
+  rootOrder.claimExpiresAt = 0
+  self:StoreWorkOrderRecord(rootOrder)
+  self:BroadcastWorkOrder(rootOrder)
+  return rootOrder
+end
+
+function LeafVE:CreateWorkOrderFollowup(order, remainingQuantity, remainingTipCopper, createdAt)
+  if type(order) ~= "table" then
+    return nil
+  end
+
+  remainingQuantity = ClampWorkOrderQuantity(remainingQuantity)
+  remainingTipCopper = ClampWorkOrderTipCopper(remainingTipCopper)
+  createdAt = tonumber(createdAt) or Now()
+  local requester = ShortName(order.requester)
+  if not requester then
+    return nil
+  end
+
+  local followup = {
+    id = self:GenerateWorkOrderId(requester, createdAt),
+    requester = requester,
+    fulfiller = nil,
+    crafter = nil,
+    createdAt = createdAt,
+    updatedAt = createdAt,
+    claimExpiresAt = 0,
+    completedAt = 0,
+    profession = order.profession,
+    recipeName = order.recipeName,
+    itemId = order.itemId,
+    spellId = order.spellId,
+    quantity = remainingQuantity,
+    requestedQuantity = remainingQuantity,
+    completedQuantity = 0,
+    tipCopper = remainingTipCopper,
+    matsMode = NormalizeWorkOrderMatsMode(order.matsMode),
+    icon = order.icon,
+    status = "open",
+  }
+
+  local stored = self:StoreWorkOrderRecord(followup)
+  if stored then
+    self:BroadcastWorkOrder(stored)
+  end
+  return stored
 end
 
 function CreateWorkOrderReputationEntry(playerName)
@@ -14880,23 +15562,26 @@ function LeafVE:GetWorkOrderReputationSnapshot()
           crafterEntry.verifyDelaySamples = crafterEntry.verifyDelaySamples + 1
         end
 
-        local crafterMatsBonus = GetWorkOrderReputationCrafterMatsBonus(order)
-        local speedBonus = completedAt > 0 and GetWorkOrderReputationSpeedBonus(turnaroundSeconds) or 0
-        local promptVerifyBonus = GetWorkOrderReputationPromptVerifyBonus(order, verifiedAt)
-        local requesterBaseTotal = WORK_ORDER_REPUTATION_REQUESTER_REP + promptVerifyBonus
-        local crafterBaseTotal = WORK_ORDER_REPUTATION_CRAFTER_REP + crafterMatsBonus + speedBonus
-        local requesterRepGain = RoundWorkOrderReputationValue(requesterBaseTotal * pairFactor)
-        local crafterRepGain = RoundWorkOrderReputationValue(crafterBaseTotal * pairFactor)
+        local completionRatio = GetWorkOrderCompletionRatio(order)
+        local crafterMatsBonus = GetWorkOrderReputationCrafterMatsBonus(order) * completionRatio
+        local speedBonus = (completedAt > 0 and GetWorkOrderReputationSpeedBonus(turnaroundSeconds) or 0) * completionRatio
+        local promptVerifyBonus = GetWorkOrderReputationPromptVerifyBonus(order, verifiedAt) * completionRatio
+        local requesterBaseRep = WORK_ORDER_REPUTATION_REQUESTER_REP * completionRatio
+        local crafterBaseRep = WORK_ORDER_REPUTATION_CRAFTER_REP * completionRatio
+        local requesterBaseTotal = requesterBaseRep + promptVerifyBonus
+        local crafterBaseTotal = crafterBaseRep + crafterMatsBonus + speedBonus
+        local requesterRepGain = requesterBaseTotal * pairFactor
+        local crafterRepGain = crafterBaseTotal * pairFactor
 
         requesterEntry.requesterRep = requesterEntry.requesterRep + requesterRepGain
         requesterEntry.totalRep = requesterEntry.totalRep + requesterRepGain
         requesterEntry.ordersVerified = requesterEntry.ordersVerified + 1
-        requesterEntry.breakdown.baseRequesterRep = (tonumber(requesterEntry.breakdown.baseRequesterRep) or 0) + WORK_ORDER_REPUTATION_REQUESTER_REP
+        requesterEntry.breakdown.baseRequesterRep = (tonumber(requesterEntry.breakdown.baseRequesterRep) or 0) + requesterBaseRep
         requesterEntry.breakdown.promptVerifyBonus = (tonumber(requesterEntry.breakdown.promptVerifyBonus) or 0) + promptVerifyBonus
         if promptVerifyBonus > 0 then
           requesterEntry.promptVerifies24h = (tonumber(requesterEntry.promptVerifies24h) or 0) + 1
         end
-        if requesterRepGain < requesterBaseTotal then
+        if requesterRepGain + 0.0001 < requesterBaseTotal then
           requesterEntry.breakdown.pairReduction = (tonumber(requesterEntry.breakdown.pairReduction) or 0) + (requesterBaseTotal - requesterRepGain)
           requesterEntry.breakdown.pairScaledOrders = (tonumber(requesterEntry.breakdown.pairScaledOrders) or 0) + 1
         end
@@ -14904,18 +15589,18 @@ function LeafVE:GetWorkOrderReputationSnapshot()
         crafterEntry.crafterRep = crafterEntry.crafterRep + crafterRepGain
         crafterEntry.totalRep = crafterEntry.totalRep + crafterRepGain
         crafterEntry.ordersCompleted = crafterEntry.ordersCompleted + 1
-        crafterEntry.breakdown.baseCrafterRep = (tonumber(crafterEntry.breakdown.baseCrafterRep) or 0) + WORK_ORDER_REPUTATION_CRAFTER_REP
+        crafterEntry.breakdown.baseCrafterRep = (tonumber(crafterEntry.breakdown.baseCrafterRep) or 0) + crafterBaseRep
         crafterEntry.breakdown.crafterMatsBonus = (tonumber(crafterEntry.breakdown.crafterMatsBonus) or 0) + crafterMatsBonus
         crafterEntry.breakdown.fastCraftBonus = (tonumber(crafterEntry.breakdown.fastCraftBonus) or 0) + speedBonus
         if crafterMatsBonus > 0 then
           crafterEntry.crafterMatsOrders = (tonumber(crafterEntry.crafterMatsOrders) or 0) + 1
         end
-        if speedBonus >= WORK_ORDER_REPUTATION_FAST_COMPLETE_12H_BONUS then
+        if speedBonus >= (WORK_ORDER_REPUTATION_FAST_COMPLETE_12H_BONUS * completionRatio) and completionRatio > 0 then
           crafterEntry.fastCrafts12h = (tonumber(crafterEntry.fastCrafts12h) or 0) + 1
         elseif speedBonus > 0 then
           crafterEntry.fastCrafts24h = (tonumber(crafterEntry.fastCrafts24h) or 0) + 1
         end
-        if crafterRepGain < crafterBaseTotal then
+        if crafterRepGain + 0.0001 < crafterBaseTotal then
           crafterEntry.breakdown.pairReduction = (tonumber(crafterEntry.breakdown.pairReduction) or 0) + (crafterBaseTotal - crafterRepGain)
           crafterEntry.breakdown.pairScaledOrders = (tonumber(crafterEntry.breakdown.pairScaledOrders) or 0) + 1
         end
@@ -14968,7 +15653,19 @@ function LeafVE:GetWorkOrderReputationSnapshot()
       entry.avgVerifyDelayHours = 0
     end
 
+    entry.totalRep = RoundWorkOrderReputationValue(entry.totalRep)
+    entry.crafterRep = RoundWorkOrderReputationValue(entry.crafterRep)
+    entry.requesterRep = RoundWorkOrderReputationValue(entry.requesterRep)
+    entry.breakdown.baseCrafterRep = RoundWorkOrderReputationValue(entry.breakdown.baseCrafterRep)
+    entry.breakdown.baseRequesterRep = RoundWorkOrderReputationValue(entry.breakdown.baseRequesterRep)
+    entry.breakdown.crafterMatsBonus = RoundWorkOrderReputationValue(entry.breakdown.crafterMatsBonus)
+    entry.breakdown.fastCraftBonus = RoundWorkOrderReputationValue(entry.breakdown.fastCraftBonus)
+    entry.breakdown.promptVerifyBonus = RoundWorkOrderReputationValue(entry.breakdown.promptVerifyBonus)
+    entry.breakdown.pairReduction = RoundWorkOrderReputationValue(entry.breakdown.pairReduction)
+
     for professionName, professionRep in pairs(entry.professionRep or {}) do
+      entry.professionRep[professionName] = RoundWorkOrderReputationValue(professionRep)
+      professionRep = entry.professionRep[professionName]
       professionRep = tonumber(professionRep) or 0
       table.insert(entry.professionRanked, {
         name = professionName,
@@ -14999,6 +15696,11 @@ function LeafVE:GetWorkOrderReputationSnapshot()
     end)
     while table.getn(entry.recentHistory) > 10 do
       table.remove(entry.recentHistory)
+    end
+    for i = 1, table.getn(entry.recentHistory) do
+      if entry.recentHistory[i] then
+        entry.recentHistory[i].repGain = RoundWorkOrderReputationValue(entry.recentHistory[i].repGain)
+      end
     end
 
     entry.tierInfo = self:GetWorkOrderReputationTierInfo(entry.totalRep)
@@ -15163,9 +15865,9 @@ function LeafVE:GetLiveWorkOrders()
   local now = Now()
   local orders = {}
   for _, order in pairs(LeafVE_GlobalDB.workOrders or {}) do
-    if type(order) == "table" then
+    if type(order) == "table" and self:IsValidWorkOrderRecord(order) then
       local status = self:GetEffectiveWorkOrderStatus(order, now)
-      if status == "open" or status == "pending" then
+      if (status == "open" and (tonumber(order.quantity) or 0) > 0) or status == "pending" then
         table.insert(orders, order)
       end
     end
@@ -15206,6 +15908,9 @@ function LeafVE:CanPlayerFulfillWorkOrder(playerName, order)
     return false
   end
   if self:GetEffectiveWorkOrderStatus(order) ~= "open" then
+    return false
+  end
+  if (tonumber(order.quantity) or 0) < 1 then
     return false
   end
   if order.requester and Lower(order.requester) == Lower(playerName) then
@@ -15350,7 +16055,7 @@ function LeafVE:MaybeShowWorkOrderLoginAlert(force)
   return true
 end
 
-function LeafVE:ClaimWorkOrder(orderId)
+function LeafVE:ClaimWorkOrder(orderId, claimedQuantity)
   EnsureDB()
   local me = ShortName(UnitName("player"))
   if not me then
@@ -15375,16 +16080,13 @@ function LeafVE:ClaimWorkOrder(orderId)
     updatedAt = priorUpdatedAt + 1
   end
 
-  order.fulfiller = me
-  order.crafter = me
-  order.status = "pending"
-  order.updatedAt = updatedAt
-  order.claimExpiresAt = updatedAt + (48 * SECONDS_PER_HOUR)
-  self:StoreWorkOrderRecord(order)
-  self:BroadcastWorkOrder(order)
-  local pickupLine = self:BuildWorkOrderPickupLine(order, me)
+  local claimedOrder, claimErr = self:CreateWorkOrderPartialClaim(order, claimedQuantity or order.quantity, me, updatedAt)
+  if not claimedOrder then
+    return nil, claimErr or "Unable to claim the order."
+  end
+  local pickupLine = self:BuildWorkOrderPickupLine(claimedOrder, me)
   PrintWorkOrderMessage("|cFF88CCFFWork Order|r " .. pickupLine)
-  return order
+  return claimedOrder
 end
 
 function LeafVE:ReleaseWorkOrder(orderId)
@@ -15412,13 +16114,26 @@ function LeafVE:ReleaseWorkOrder(orderId)
     updatedAt = priorUpdatedAt + 1
   end
 
-  order.status = "open"
-  order.fulfiller = nil
-  order.crafter = nil
-  order.updatedAt = updatedAt
-  order.claimExpiresAt = 0
-  self:StoreWorkOrderRecord(order)
-  self:BroadcastWorkOrder(order)
+  if IsWorkOrderPartialClaim(order) then
+    self:RestoreWorkOrderPartialQuantity(order, updatedAt)
+    order.status = "cancelled"
+    order.updatedAt = updatedAt + 1
+    order.claimExpiresAt = 0
+    order.completedAt = 0
+    order.completedQuantity = 0
+    self:StoreWorkOrderRecord(order)
+    self:BroadcastWorkOrder(order)
+  else
+    order.status = "open"
+    order.fulfiller = nil
+    order.crafter = nil
+    order.requestedQuantity = ClampWorkOrderQuantity(order.quantity or GetWorkOrderRequestedQuantity(order))
+    order.completedQuantity = 0
+    order.updatedAt = updatedAt
+    order.claimExpiresAt = 0
+    self:StoreWorkOrderRecord(order)
+    self:BroadcastWorkOrder(order)
+  end
   PrintWorkOrderMessage(
     "|cFF88CCFFWork Order|r " .. tostring(order.recipeName or "An order") ..
     " is back to waiting for a crafter."
@@ -15426,7 +16141,7 @@ function LeafVE:ReleaseWorkOrder(orderId)
   return order
 end
 
-function LeafVE:CompleteWorkOrder(orderId)
+function LeafVE:CompleteWorkOrder(orderId, completedQuantity)
   EnsureDB()
   local me = ShortName(UnitName("player"))
   if not me then
@@ -15452,6 +16167,7 @@ function LeafVE:CompleteWorkOrder(orderId)
   end
 
   order.status = "completed"
+  order.completedQuantity = ClampWorkOrderQuantity(order.quantity or completedQuantity or 1)
   order.updatedAt = updatedAt
   order.completedAt = updatedAt
   order.claimExpiresAt = 0
@@ -15487,6 +16203,7 @@ function LeafVE:FinalizeWorkOrder(orderId)
   end
 
   order.status = "finalized"
+  order.completedQuantity = ClampWorkOrderQuantity(order.quantity or GetWorkOrderFulfilledQuantity(order))
   order.updatedAt = updatedAt
   order.claimExpiresAt = 0
   self:StoreWorkOrderRecord(order)
@@ -15523,9 +16240,25 @@ function LeafVE:RevertCompletedWorkOrder(orderId)
     updatedAt = priorUpdatedAt + 1
   end
 
+  if IsWorkOrderPartialClaim(order) then
+    self:RestoreWorkOrderPartialQuantity(order, updatedAt)
+    order.status = "cancelled"
+    order.updatedAt = updatedAt + 1
+    order.completedAt = 0
+    order.claimExpiresAt = 0
+    order.completedQuantity = 0
+    self:StoreWorkOrderRecord(order)
+    self:BroadcastWorkOrder(order)
+    PrintWorkOrderMessage("|cFF88CCFFWork Order|r " .. self:BuildWorkOrderRevertLine(order, me))
+    return order
+  end
+
   order.status = "pending"
   order.fulfiller = fulfiller
   order.crafter = fulfiller
+  order.quantity = GetWorkOrderRequestedQuantity(order)
+  order.requestedQuantity = order.quantity
+  order.completedQuantity = 0
   order.updatedAt = updatedAt
   order.completedAt = 0
   order.claimExpiresAt = updatedAt + (48 * SECONDS_PER_HOUR)
@@ -15559,14 +16292,28 @@ function LeafVE:ReassignWorkOrder(orderId)
     updatedAt = priorUpdatedAt + 1
   end
 
-  order.status = "open"
-  order.fulfiller = nil
-  order.crafter = nil
-  order.updatedAt = updatedAt
-  order.completedAt = 0
-  order.claimExpiresAt = 0
-  self:StoreWorkOrderRecord(order)
-  self:BroadcastWorkOrder(order)
+  if IsWorkOrderPartialClaim(order) then
+    self:RestoreWorkOrderPartialQuantity(order, updatedAt)
+    order.status = "cancelled"
+    order.updatedAt = updatedAt + 1
+    order.completedAt = 0
+    order.claimExpiresAt = 0
+    order.completedQuantity = 0
+    self:StoreWorkOrderRecord(order)
+    self:BroadcastWorkOrder(order)
+  else
+    order.status = "open"
+    order.fulfiller = nil
+    order.crafter = nil
+    order.quantity = ClampWorkOrderQuantity(order.quantity or GetWorkOrderRequestedQuantity(order))
+    order.requestedQuantity = order.quantity
+    order.completedQuantity = 0
+    order.updatedAt = updatedAt
+    order.completedAt = 0
+    order.claimExpiresAt = 0
+    self:StoreWorkOrderRecord(order)
+    self:BroadcastWorkOrder(order)
+  end
   PrintWorkOrderMessage(
     "|cFF88CCFFWork Order|r " .. tostring(order.recipeName or "An order") ..
     " is back to waiting for a crafter."
@@ -15778,12 +16525,49 @@ function LeafVE:FindWorkOrderCatalogRecipe(profession, recipeName, itemId, spell
   return nil
 end
 
+function LeafVE:IsValidWorkOrderRecord(order)
+  if type(order) ~= "table" then
+    return false
+  end
+  if Trim(tostring(order.id or "")) == "" then
+    return false
+  end
+
+  local requester = ShortName(order.requester)
+  if not requester or Trim(tostring(requester or "")) == "" then
+    return false
+  end
+
+  if not CanonicalWorkOrderProfession(order.profession) then
+    return false
+  end
+
+  if Trim(tostring(order.recipeName or "")) == "" then
+    return false
+  end
+
+  return true
+end
+
+function LeafVE:PurgeInvalidWorkOrders()
+  EnsureDB()
+  for orderId, order in pairs(LeafVE_GlobalDB.workOrders or {}) do
+    if not self:IsValidWorkOrderRecord(order) then
+      LeafVE_GlobalDB.workOrders[orderId] = nil
+    end
+  end
+end
+
 function LeafVE:StoreWorkOrderRecord(order)
   EnsureDB()
   if type(order) ~= "table" or not order.id then return nil, false end
 
   local requester = ShortName(order.requester)
-  if not requester then return nil, false end
+  if not requester or Trim(tostring(requester or "")) == "" then return nil, false end
+  local profession = CanonicalWorkOrderProfession(order.profession)
+  if not profession then return nil, false end
+  local recipeName = Trim(tostring(order.recipeName or ""))
+  if recipeName == "" then return nil, false end
 
   local status = NormalizeWorkOrderStatus(order.status)
   local fulfiller = ShortName(order.fulfiller)
@@ -15799,9 +16583,13 @@ function LeafVE:StoreWorkOrderRecord(order)
   elseif status ~= "pending" then
     claimExpiresAt = 0
   end
+  local rawQuantity = math.floor(tonumber(order.quantity) or 1)
+  if rawQuantity < 0 then rawQuantity = 0 end
+  if rawQuantity > 99 then rawQuantity = 99 end
 
   local record = {
     id = tostring(order.id),
+    parentOrderId = GetWorkOrderParentId(order),
     requester = requester,
     crafter = fulfiller,
     fulfiller = fulfiller,
@@ -15809,20 +16597,37 @@ function LeafVE:StoreWorkOrderRecord(order)
     updatedAt = tonumber(order.updatedAt) or tonumber(order.createdAt) or Now(),
     claimExpiresAt = status == "pending" and claimExpiresAt or 0,
     completedAt = tonumber(order.completedAt) or 0,
-    profession = tostring(order.profession or ""),
-    recipeName = Trim(tostring(order.recipeName or "")),
+    profession = profession,
+    recipeName = recipeName,
     itemId = tonumber(order.itemId),
     spellId = tonumber(order.spellId),
-    quantity = tonumber(order.quantity) or 1,
+    quantity = rawQuantity,
+    requestedQuantity = ClampWorkOrderQuantity(order.requestedQuantity or order.quantity),
+    completedQuantity = math.floor(tonumber(order.completedQuantity) or 0),
     tipCopper = ClampWorkOrderTipCopper(order.tipCopper),
     matsMode = NormalizeWorkOrderMatsMode(order.matsMode),
     icon = NormalizeIconPath(order.icon),
     status = status,
   }
-  if record.quantity < 1 then record.quantity = 1 end
-  if record.quantity > 99 then record.quantity = 99 end
-  if record.recipeName == "" then return nil, false end
-
+  if record.requestedQuantity < record.quantity then
+    record.requestedQuantity = record.quantity
+  end
+  if record.quantity < 1 and (status == "pending" or status == "completed" or status == "finalized" or IsWorkOrderPartialClaim(order)) then
+    record.quantity = 1
+  end
+  if record.completedQuantity < 0 then
+    record.completedQuantity = 0
+  end
+  if status == "completed" or status == "finalized" then
+    if record.completedQuantity < 1 then
+      record.completedQuantity = math.min(record.quantity, record.requestedQuantity)
+    end
+  else
+    record.completedQuantity = 0
+  end
+  if record.completedQuantity > record.requestedQuantity then
+    record.completedQuantity = record.requestedQuantity
+  end
   if not record.icon then
     local catalogRecipe = self:FindWorkOrderCatalogRecipe(record.profession, record.recipeName, record.itemId, record.spellId)
     if catalogRecipe then
@@ -15856,6 +16661,12 @@ function LeafVE:StoreWorkOrderRecord(order)
   elseif existing and (existing.status or "open") ~= record.status then
     changed = true
   elseif existing and tonumber(existing.quantity or 1) ~= record.quantity then
+    changed = true
+  elseif existing and GetWorkOrderRequestedQuantity(existing) ~= record.requestedQuantity then
+    changed = true
+  elseif existing and GetWorkOrderCompletedQuantity(existing) ~= record.completedQuantity then
+    changed = true
+  elseif existing and GetWorkOrderParentId(existing) ~= record.parentOrderId then
     changed = true
   elseif existing and ClampWorkOrderTipCopper(existing.tipCopper) ~= record.tipCopper then
     changed = true
@@ -15916,9 +16727,10 @@ function LeafVE:GetWorkOrdersForRequester(requesterName, preferredCrafter)
   for _, order in pairs(LeafVE_GlobalDB.workOrders or {}) do
     local status = self:GetEffectiveWorkOrderStatus(order, now)
     if type(order) == "table"
+      and self:IsValidWorkOrderRecord(order)
       and order.requester
       and Lower(order.requester) == Lower(requesterName)
-      and (status == "open" or status == "pending" or status == "completed") then
+      and (((status == "open") and (tonumber(order.quantity) or 0) > 0) or status == "pending" or status == "completed") then
       table.insert(orders, order)
     end
   end
@@ -15981,11 +16793,18 @@ function LeafVE:CancelWorkOrder(orderId)
     updatedAt = priorUpdatedAt + 1
   end
 
+  if IsWorkOrderPartialClaim(order) then
+    self:RestoreWorkOrderPartialQuantity(order, updatedAt)
+    order.updatedAt = updatedAt + 1
+  else
+    order.updatedAt = updatedAt
+  end
   order.status = "cancelled"
   order.fulfiller = nil
   order.crafter = nil
-  order.updatedAt = updatedAt
+  order.completedAt = 0
   order.claimExpiresAt = 0
+  order.completedQuantity = 0
   self:StoreWorkOrderRecord(order)
   self:BroadcastWorkOrder(order)
   return order
@@ -15998,6 +16817,7 @@ function LeafVE:BroadcastWorkOrder(order, messageType)
 
   local payload = table.concat({
     EncodeTalentField(order.id),
+    EncodeTalentField(GetWorkOrderParentId(order) or ""),
     EncodeTalentField(order.requester),
     EncodeTalentField(order.fulfiller or order.crafter or ""),
     tostring(order.createdAt or Now()),
@@ -16013,6 +16833,8 @@ function LeafVE:BroadcastWorkOrder(order, messageType)
     tostring(ClampWorkOrderTipCopper(order.tipCopper)),
     EncodeTalentField(NormalizeWorkOrderMatsMode(order.matsMode)),
     tostring(tonumber(order.completedAt) or 0),
+    tostring(GetWorkOrderRequestedQuantity(order)),
+    tostring(GetWorkOrderCompletedQuantity(order)),
   }, SEP)
   SendAddonMessage("LeafVE", messageType .. payload, "GUILD")
 end
@@ -16028,7 +16850,7 @@ function LeafVE:BroadcastWorkOrderSnapshot(force)
 
   EnsureDB()
   for _, order in pairs(LeafVE_GlobalDB.workOrders or {}) do
-    if type(order) == "table" then
+    if type(order) == "table" and self:IsValidWorkOrderRecord(order) then
       local effectiveStatus = self:GetEffectiveWorkOrderStatus(order, now)
       local updatedAt = tonumber(order.updatedAt or order.createdAt or 0) or 0
       if effectiveStatus == "open" or effectiveStatus == "pending" or updatedAt >= (now - (7 * SECONDS_PER_DAY)) then
@@ -16065,10 +16887,9 @@ function LeafVE:SubmitWorkOrder(crafterName, recipe, quantity, tipCopper, matsMo
   tipCopper = ClampWorkOrderTipCopper(tipCopper)
   matsMode = NormalizeWorkOrderMatsMode(matsMode)
 
-  self.workOrderSerial = (self.workOrderSerial or 0) + 1
   local createdAt = Now()
   local order = {
-    id = Lower(requester) .. "-" .. tostring(createdAt) .. "-" .. tostring(self.workOrderSerial),
+    id = self:GenerateWorkOrderId(requester, createdAt),
     requester = requester,
     fulfiller = nil,
     crafter = nil,
@@ -16079,7 +16900,9 @@ function LeafVE:SubmitWorkOrder(crafterName, recipe, quantity, tipCopper, matsMo
     recipeName = recipe.name,
     itemId = recipe.itemId,
     spellId = recipe.spellId,
-    quantity = quantity,
+    quantity = ClampWorkOrderQuantity(quantity),
+    requestedQuantity = ClampWorkOrderQuantity(quantity),
+    completedQuantity = 0,
     tipCopper = tipCopper,
     matsMode = matsMode,
     icon = recipe.icon,
@@ -16101,9 +16924,32 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
   if fieldCount < 10 then return end
 
   local order
-  if fieldCount >= 16 then
+  if fieldCount >= 19 then
     order = {
       id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = DecodeTalentField(fields[2] or ""),
+      requester = ShortName(DecodeTalentField(fields[3] or "")),
+      fulfiller = ShortName(DecodeTalentField(fields[4] or "")),
+      createdAt = tonumber(fields[5]) or Now(),
+      updatedAt = tonumber(fields[6]) or tonumber(fields[5]) or Now(),
+      claimExpiresAt = tonumber(fields[7]) or 0,
+      profession = DecodeTalentField(fields[8] or ""),
+      recipeName = DecodeTalentField(fields[9] or ""),
+      itemId = tonumber(fields[10]),
+      spellId = tonumber(fields[11]),
+      quantity = tonumber(fields[12]) or 1,
+      icon = NormalizeIconPath(DecodeTalentField(fields[13] or "")),
+      status = DecodeTalentField(fields[14] or "open"),
+      tipCopper = ClampWorkOrderTipCopper(fields[15]),
+      matsMode = NormalizeWorkOrderMatsMode(DecodeTalentField(fields[16] or "requester")),
+      completedAt = tonumber(fields[17]) or 0,
+      requestedQuantity = tonumber(fields[18]) or tonumber(fields[12]) or 1,
+      completedQuantity = tonumber(fields[19]) or 0,
+    }
+  elseif fieldCount >= 18 then
+    order = {
+      id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = "",
       requester = ShortName(DecodeTalentField(fields[2] or "")),
       fulfiller = ShortName(DecodeTalentField(fields[3] or "")),
       createdAt = tonumber(fields[4]) or Now(),
@@ -16119,10 +16965,35 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
       tipCopper = ClampWorkOrderTipCopper(fields[14]),
       matsMode = NormalizeWorkOrderMatsMode(DecodeTalentField(fields[15] or "requester")),
       completedAt = tonumber(fields[16]) or 0,
+      requestedQuantity = tonumber(fields[17]) or tonumber(fields[11]) or 1,
+      completedQuantity = tonumber(fields[18]) or 0,
+    }
+  elseif fieldCount >= 16 then
+    order = {
+      id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = "",
+      requester = ShortName(DecodeTalentField(fields[2] or "")),
+      fulfiller = ShortName(DecodeTalentField(fields[3] or "")),
+      createdAt = tonumber(fields[4]) or Now(),
+      updatedAt = tonumber(fields[5]) or tonumber(fields[4]) or Now(),
+      claimExpiresAt = tonumber(fields[6]) or 0,
+      profession = DecodeTalentField(fields[7] or ""),
+      recipeName = DecodeTalentField(fields[8] or ""),
+      itemId = tonumber(fields[9]),
+      spellId = tonumber(fields[10]),
+      quantity = tonumber(fields[11]) or 1,
+      icon = NormalizeIconPath(DecodeTalentField(fields[12] or "")),
+      status = DecodeTalentField(fields[13] or "open"),
+      tipCopper = ClampWorkOrderTipCopper(fields[14]),
+      matsMode = NormalizeWorkOrderMatsMode(DecodeTalentField(fields[15] or "requester")),
+      completedAt = tonumber(fields[16]) or 0,
+      requestedQuantity = tonumber(fields[11]) or 1,
+      completedQuantity = 0,
     }
   elseif fieldCount >= 15 then
     order = {
       id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = "",
       requester = ShortName(DecodeTalentField(fields[2] or "")),
       fulfiller = ShortName(DecodeTalentField(fields[3] or "")),
       createdAt = tonumber(fields[4]) or Now(),
@@ -16138,10 +17009,13 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
       tipCopper = ClampWorkOrderTipCopper(fields[14]),
       matsMode = NormalizeWorkOrderMatsMode(DecodeTalentField(fields[15] or "requester")),
       completedAt = 0,
+      requestedQuantity = tonumber(fields[11]) or 1,
+      completedQuantity = 0,
     }
   elseif fieldCount >= 14 then
     order = {
       id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = "",
       requester = ShortName(DecodeTalentField(fields[2] or "")),
       fulfiller = ShortName(DecodeTalentField(fields[3] or "")),
       createdAt = tonumber(fields[4]) or Now(),
@@ -16157,10 +17031,13 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
       tipCopper = ClampWorkOrderTipCopper(fields[14]),
       matsMode = "requester",
       completedAt = 0,
+      requestedQuantity = tonumber(fields[11]) or 1,
+      completedQuantity = 0,
     }
   elseif fieldCount >= 12 then
     order = {
       id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = "",
       requester = ShortName(DecodeTalentField(fields[2] or "")),
       fulfiller = nil,
       crafter = ShortName(DecodeTalentField(fields[3] or "")),
@@ -16176,10 +17053,13 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
       tipCopper = 0,
       matsMode = "requester",
       completedAt = 0,
+      requestedQuantity = tonumber(fields[10]) or 1,
+      completedQuantity = 0,
     }
   else
     order = {
       id = DecodeTalentField(fields[1] or ""),
+      parentOrderId = "",
       requester = ShortName(DecodeTalentField(fields[2] or "")),
       fulfiller = nil,
       crafter = ShortName(DecodeTalentField(fields[3] or "")),
@@ -16195,6 +17075,8 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
       tipCopper = 0,
       matsMode = "requester",
       completedAt = 0,
+      requestedQuantity = tonumber(fields[9]) or 1,
+      completedQuantity = 0,
     }
   end
   if not order.status or order.status == "" then
@@ -16214,6 +17096,11 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
     local requesterKey = Lower(order.requester or "")
     local fulfillerKey = Lower(order.fulfiller or order.crafter or "")
     local status = NormalizeWorkOrderStatus(order.status)
+    local partialRootUpdate = false
+    if not GetWorkOrderParentId(order) and previous then
+      partialRootUpdate = ((tonumber(previous.quantity) or 0) ~= (tonumber(order.quantity) or 0))
+        or (ClampWorkOrderTipCopper(previous.tipCopper) ~= ClampWorkOrderTipCopper(order.tipCopper))
+    end
     if status == "open" or status == "cancelled" or status == "finalized" then
       local releaseByFulfiller = false
       if status == "open"
@@ -16222,7 +17109,7 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
         and senderKey == Lower(previousFulfiller) then
         releaseByFulfiller = true
       end
-      if senderKey ~= requesterKey and not releaseByFulfiller then
+      if senderKey ~= requesterKey and not releaseByFulfiller and not partialRootUpdate then
         return
       end
     elseif status == "pending" or status == "completed" then
@@ -16282,10 +17169,7 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
     and (previousStatus ~= "pending" or Lower(previousFulfiller or "") ~= Lower(currentFulfiller))
     and not senderIsMe then
     PrintWorkOrderMessage(
-      "|cFF88CCFFWork Order|r " .. tostring(currentFulfiller) ..
-      " picked up " .. tostring(stored.recipeName or "an order") ..
-      " for " .. tostring(stored.requester or "Unknown") ..
-      ". Ready within 48 hours."
+      "|cFF88CCFFWork Order|r " .. self:BuildWorkOrderPickupLine(stored, currentFulfiller)
     )
   end
 
@@ -16308,9 +17192,7 @@ function LeafVE:HandleIncomingWorkOrderMessage(payload, sender, isRelay)
     and previousStatus ~= "completed"
     and not senderIsMe then
     PrintWorkOrderMessage(
-      "|cFF88CCFFWork Order|r " .. tostring(currentFulfiller) ..
-      " completed " .. tostring(stored.recipeName or "an order") ..
-      " for " .. tostring(stored.requester or "Unknown") .. "."
+      "|cFF88CCFFWork Order|r " .. self:BuildWorkOrderCompletionLine(stored, currentFulfiller)
     )
   end
 
@@ -17274,6 +18156,25 @@ function CreateWorkOrderOrderButton(parent)
       if popup.ordersFeedbackText then
         popup.ordersFeedbackText:SetText("|cFF88FF88Reassigned:|r " .. tostring(changed.recipeName or "Work Order"))
       end
+    elseif row.secondaryActionType == "partial_fulfill" then
+      LeafVE:ShowWorkOrderQuantityPopup(order, function(selectedQuantity)
+        local claimedOrder
+        local claimErr
+        claimedOrder, claimErr = LeafVE:ClaimWorkOrder(order.id, selectedQuantity)
+        if not claimedOrder then
+          if popup.ordersFeedbackText then
+            popup.ordersFeedbackText:SetText("|cFFFF6666" .. tostring(claimErr or "Unable to claim partial fulfillment.") .. "|r")
+          end
+          return
+        end
+        if popup.ordersFeedbackText then
+          popup.ordersFeedbackText:SetText("|cFF88FF88Partial claimed:|r " .. tostring(claimedOrder.recipeName or "Work Order") .. " (" .. tostring(claimedOrder.quantity or 1) .. "/" .. tostring(GetWorkOrderRequestedQuantity(claimedOrder)) .. ")")
+        end
+        if LeafVE and LeafVE.UI and LeafVE.UI.cardCurrentPlayer then
+          LeafVE.UI:RefreshWorkOrderPopup(LeafVE.UI.cardCurrentPlayer)
+        end
+      end, nil, "Reserve", "How many units can you reserve from this request right now? The remaining quantity will stay live for other guildmates.")
+      return
     else
       return
     end
@@ -17289,7 +18190,7 @@ function CreateWorkOrderOrderButton(parent)
     this:SetBackdropColor(0.13, 0.13, 0.16, 0.98)
     GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
     GameTooltip:ClearLines()
-    if this.order.itemId then
+    if tonumber(this.order.itemId) and tonumber(this.order.itemId) > 0 then
       GameTooltip:SetHyperlink("item:" .. tostring(this.order.itemId))
       GameTooltip:AddLine(" ")
     else
@@ -17298,12 +18199,18 @@ function CreateWorkOrderOrderButton(parent)
     local now = Now()
     local status = LeafVE:GetEffectiveWorkOrderStatus(this.order, now)
     local fulfiller = LeafVE:GetStoredWorkOrderFulfiller(this.order)
+    local requestedQuantity = GetWorkOrderRequestedQuantity(this.order)
+    local fulfilledQuantity = GetWorkOrderFulfilledQuantity(this.order)
     GameTooltip:AddLine("Requester: " .. tostring(this.order.requester or "Unknown"), 0.75, 0.95, 0.75)
     if fulfiller then
       GameTooltip:AddLine("Fulfiller: " .. tostring(fulfiller), 0.75, 0.95, 0.75)
     end
     GameTooltip:AddLine("Profession: " .. tostring(this.order.profession or "Unknown"), 0.85, 0.85, 0.85)
     GameTooltip:AddLine("Quantity: " .. tostring(this.order.quantity or 1), 0.85, 0.85, 0.85)
+    if fulfilledQuantity > 0 and requestedQuantity > fulfilledQuantity then
+      GameTooltip:AddLine("Completed: " .. tostring(fulfilledQuantity) .. " / " .. tostring(requestedQuantity), 0.85, 0.85, 0.85)
+      GameTooltip:AddLine("Remaining after Verify: " .. tostring(requestedQuantity - fulfilledQuantity), 0.85, 0.85, 0.85)
+    end
     GameTooltip:AddLine("Materials: " .. GetWorkOrderMatsLine(this.order.matsMode, this.order.requester, this.order.profession), 0.85, 0.85, 0.85)
     GameTooltip:AddLine("Tip: " .. FormatWorkOrderTipText(this.order.tipCopper), 0.85, 0.85, 0.85)
     if status == "pending" and tonumber(this.order.claimExpiresAt or 0) > now then
@@ -19472,7 +20379,7 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
     popup.ordersTitle:SetText("|cFFFFD700Live Orders|r")
   end
   if popup.ordersHint then
-    popup.ordersHint:SetText("|cFFAAAAAACrafted and profession-based requests are fulfilled by matching designations.\nFarming requests can be picked up by anyone, and pending orders show who claimed them and how much time is left.|r")
+    popup.ordersHint:SetText("|cFFAAAAAACrafted and profession-based requests are fulfilled by matching designations.\nFarming requests can be picked up by anyone, and you can use |cFFFFD700Partial|r to reserve only part of a request while the rest stays live.|r")
   end
 
   local me = ShortName(UnitName("player"))
@@ -19537,7 +20444,7 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
       btn.detailText:SetText(
         "Requester: " .. tostring(order.requester or "Unknown") ..
         "  |  " .. tostring(order.profession or "Unknown") ..
-        "  |  Qty " .. tostring(order.quantity or 1) ..
+        "  |  " .. GetWorkOrderQuantitySummary(order) ..
         "\n" .. matsLine
       )
       SetWorkOrderRowTipDisplay(btn, order.tipCopper)
@@ -19549,12 +20456,19 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
         if me and fulfiller and Lower(fulfiller) == Lower(me) then
           btn.actionType = "complete"
           btn.secondaryActionType = "release"
-          btn.statusText:SetText("|cFFFFFF99Pending by you.|r " .. tostring(timerText) .. " left.")
+          if IsWorkOrderPartialClaim(order) then
+            btn.statusText:SetText("|cFFFFFF99Pending by you.|r Reserved " .. tostring(order.quantity or 1) .. " for this request. " .. tostring(timerText) .. " left.")
+          else
+            btn.statusText:SetText("|cFFFFFF99Pending by you.|r " .. tostring(timerText) .. " left.")
+          end
         else
           btn.statusText:SetText("|cFFFFFF99Pending:|r " .. tostring(fulfiller or "Unknown") .. "  |  " .. tostring(timerText) .. " left")
         end
-      elseif me and LeafVE:CanPlayerFulfillWorkOrder(me, order) then
+      elseif me and not IsWorkOrderPartialClaim(order) and LeafVE:CanPlayerFulfillWorkOrder(me, order) then
         btn.actionType = "fulfill"
+        if (tonumber(order.quantity) or 0) > 1 then
+          btn.secondaryActionType = "partial_fulfill"
+        end
         if requiresDesignation then
           btn.statusText:SetText("|cFF88FF88Eligible to fulfill.|r Your designation matches this order.")
         else
@@ -19593,6 +20507,10 @@ function LeafVE.UI:RefreshWorkOrderLiveView(playerName, popup)
       end
       if btn.secondaryActionType == "release" then
         btn.secondaryActionBtn:SetText("Release")
+        btn.secondaryActionBtn:Show()
+        btn.secondaryActionBtn:Enable()
+      elseif btn.secondaryActionType == "partial_fulfill" then
+        btn.secondaryActionBtn:SetText("Partial")
         btn.secondaryActionBtn:Show()
         btn.secondaryActionBtn:Enable()
       else
@@ -19661,7 +20579,7 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
     popup.ordersTitle:SetText("|cFFFFD700My Orders|r")
   end
   if popup.ordersHint then
-    popup.ordersHint:SetText("|cFFAAAAAACancel open requests here, reassign pending ones if needed, and use |cFFFFD700Verify|r or |cFFFFD700Revert|r once a crafter marks an order complete.|r")
+    popup.ordersHint:SetText("|cFFAAAAAACancel open requests here, reassign pending ones if needed, and use |cFFFFD700Verify|r or |cFFFFD700Revert|r once a crafter marks an order complete. Partial fills stay separate so the remaining quantity can keep moving on the live board.|r")
   end
 
   local me = ShortName(UnitName("player"))
@@ -19725,12 +20643,16 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
       btn.detailText:SetText(
         "Requester: " .. tostring(order.requester or "Unknown") ..
         "  |  " .. tostring(order.profession or "Unknown") ..
-        "  |  Qty " .. tostring(order.quantity or 1) ..
+        "  |  " .. GetWorkOrderQuantitySummary(order) ..
         "\n" .. matsLine
       )
       SetWorkOrderRowTipDisplay(btn, order.tipCopper)
       if status == "pending" then
-        btn.statusText:SetText("|cFFFFFF99Pending:|r " .. tostring(fulfiller or "Unknown") .. "  |  " .. tostring(timerText) .. " left. Reassign for a different crafter.")
+        if IsWorkOrderPartialClaim(order) then
+          btn.statusText:SetText("|cFFFFFF99Pending partial:|r " .. tostring(fulfiller or "Unknown") .. " reserved " .. tostring(order.quantity or 1) .. ". " .. tostring(timerText) .. " left. Reassign to return it to the live board.")
+        else
+          btn.statusText:SetText("|cFFFFFF99Pending:|r " .. tostring(fulfiller or "Unknown") .. "  |  " .. tostring(timerText) .. " left. Reassign for a different crafter.")
+        end
         btn.actionType = "cancel"
         btn.actionBtn:SetText("Cancel")
         btn.actionBtn:Show()
@@ -19740,7 +20662,11 @@ function LeafVE.UI:RefreshWorkOrderOrdersView(playerName, popup)
         btn.secondaryActionBtn:Show()
         btn.secondaryActionBtn:Enable()
       elseif status == "completed" then
-        btn.statusText:SetText("|cFF88FF88Completed:|r " .. tostring(fulfiller or "Unknown") .. " marked it done. Verify when received, or Revert for more work.")
+        if IsWorkOrderPartialClaim(order) then
+          btn.statusText:SetText("|cFF88FF88Completed:|r " .. tostring(fulfiller or "Unknown") .. " delivered this partial fill. Verify when received, or Revert to return it to the live board.")
+        else
+          btn.statusText:SetText("|cFF88FF88Completed:|r " .. tostring(fulfiller or "Unknown") .. " marked it done. Verify when received, or Revert for more work.")
+        end
         btn.actionType = "final"
         btn.actionBtn:SetText("Verify")
         btn.actionBtn:Show()
@@ -22754,10 +23680,10 @@ function BuildMyPanel(panel)
   divider:SetPoint("TOPLEFT", alltimeStats, "BOTTOMLEFT", 0, -20)
   divider:SetText("|cFFFFD700▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬|r")
   
-  -- Last Week's Winner (styled like other stats)
+  -- Last Week's Top Shinobis (styled like other stats)
   local lastWeekLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   lastWeekLabel:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -15)
-  lastWeekLabel:SetText("|cFF2DD35CLast Week's Winner|r")
+  lastWeekLabel:SetText("|cFF2DD35CLast Week's Top Shinobis|r")
   
   local lastWeekWinner = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   lastWeekWinner:SetPoint("TOPLEFT", lastWeekLabel, "BOTTOMLEFT", 0, -5)
@@ -22804,7 +23730,7 @@ function BuildMyPanel(panel)
 
   -- Current Weekly Standings (top 5)
   local weekStandingsLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  weekStandingsLabel:SetPoint("TOPLEFT", weekCountdown, "BOTTOMLEFT", 0, -15)
+  weekStandingsLabel:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 250, -15)
   weekStandingsLabel:SetText("|cFF2DD35CCurrent Weekly Standings|r")
 
   local weekTopEntries = {}
@@ -22819,6 +23745,10 @@ function BuildMyPanel(panel)
     prevTopAnchor = entry
   end
   panel.weekTopEntries = weekTopEntries
+  weekCountdownLabel:ClearAllPoints()
+  weekCountdownLabel:SetPoint("TOPLEFT", prevTopAnchor, "BOTTOMLEFT", 0, -15)
+  weekCountdown:ClearAllPoints()
+  weekCountdown:SetPoint("TOPLEFT", weekCountdownLabel, "BOTTOMLEFT", 0, -5)
 
 local legend = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   legend:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 12, 12)
@@ -26817,19 +27747,14 @@ function LeafVE.UI:Refresh()
       ))
     end
   
-    -- Calculate Last Week's Winner
+    -- Calculate Last Week's Top Shinobis
     if self.panels.me.lastWeekWinner then
       local previousWeekKey = PreviousWeekKey()
       local cachedWinner = LeafVE:GetCachedWeeklyWinnerSnapshot(previousWeekKey)
       if not cachedWinner then
         cachedWinner = LeafVE:SnapshotWeeklyLeaderboardWinner(previousWeekKey)
       end
-
-      if cachedWinner and cachedWinner.name and (tonumber(cachedWinner.total) or 0) > 0 then
-        self.panels.me.lastWeekWinner:SetText(string.format("%s with |cFFFFD700%d points|r", cachedWinner.name, cachedWinner.total))
-      else
-        self.panels.me.lastWeekWinner:SetText("|cFF888888No data available|r")
-      end
+      self.panels.me.lastWeekWinner:SetText(LeafVE:BuildWeeklyTopShinobisText(cachedWinner))
     end
     
     -- Calculate All-Time Leader (union of local alltime and synced lboard.alltime)
@@ -27370,6 +28295,7 @@ LeafVE_eventFrame:SetScript("OnEvent", function()
     end
     LeafVE:CheckDailyLogin()
     LeafVE:PurgeStaleWeeklyData()
+    LeafVE:PurgeInvalidWorkOrders()
     local me = ShortName(UnitName("player"))
     local myAlltime = me and LeafVE_DB.alltime and LeafVE_DB.alltime[me]
     if myAlltime and IsPointEntryInCurrentBucket(myAlltime) then
@@ -27416,6 +28342,9 @@ LeafVE_eventFrame:SetScript("OnEvent", function()
           LeafVE:RequestGuildBankCategoryOverrideSync(true)
           LeafVE:RequestGuildBankHighValueSync(true)
         end
+    end)
+    LeafVE:ScheduleDeferred("weekly_recap_popup", 9, function()
+      LeafVE:MaybeShowWeeklyRecapPopup(false)
     end)
     LeafVE:ScheduleDeferred("work_order_login_alert_1", 12, function()
       LeafVE:MaybeShowWorkOrderLoginAlert(false)
@@ -27507,7 +28436,7 @@ LeafVE_eventFrame:SetScript("OnEvent", function()
   if event == "BAG_UPDATE" then
     local me = ShortName(UnitName("player"))
     if me and LeafVE:IsGuildBankOwner(me) then
-      LeafVE:ScheduleGuildBankSnapshotUpdate(false, true)
+      LeafVE:ScheduleGuildBankSnapshotUpdate(LeafVE:IsGuildBankBankFrameVisible(), true)
     end
     return
   end
@@ -27515,7 +28444,7 @@ LeafVE_eventFrame:SetScript("OnEvent", function()
   if event == "PLAYER_MONEY" then
     local me = ShortName(UnitName("player"))
     if me and LeafVE:IsGuildBankOwner(me) then
-      LeafVE:ScheduleGuildBankSnapshotUpdate(false, true)
+      LeafVE:ScheduleGuildBankSnapshotUpdate(LeafVE:IsGuildBankBankFrameVisible(), true)
     end
     return
   end
@@ -27609,8 +28538,7 @@ LeafVE_updateFrame:SetScript("OnUpdate", function()
       LeafVE.guildBankBankFrameWasVisible = bankVisible
       LeafVE:ApplyGuildBankOwnerBankMode(bankVisible)
       if bankVisible then
-        LeafVE.lastGuildBankBroadcastAt = 0
-        LeafVE:ScheduleGuildBankSnapshotUpdate(true, true)
+        LeafVE:ScheduleGuildBankSnapshotUpdate(true, true, true)
       elseif LeafVE.UI and LeafVE.UI.RefreshVisibleGuildBankUI then
         LeafVE.UI:RefreshVisibleGuildBankUI(true)
       end
@@ -27659,6 +28587,14 @@ SlashCmdList["SHOUTSYNC"] = function()
   LeafVE.lastShoutSyncRespondAt = 0  -- bypass cooldown for manual broadcast
   LeafVE:BroadcastShoutoutHistory()
   Print("Broadcasting shoutout history to guild...")
+end
+
+SLASH_LEAFRECAP1 = "/leafrecap"
+SLASH_LEAFRECAP2 = "/lverecap"
+SlashCmdList["LEAFRECAP"] = function()
+  if not LeafVE:MaybeShowWeeklyRecapPopup(true) then
+    Print("No weekly recap is available yet.")
+  end
 end
 
 SLASH_LEAFVE1 = "/lve"
